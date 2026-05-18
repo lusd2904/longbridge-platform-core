@@ -1,0 +1,283 @@
+x-backend-env: &backend-env
+  DB_HOST: ${DOCKER_DB_HOST:-host.docker.internal}
+  DB_READ_HOST: ${DOCKER_DB_READ_HOST:-host.docker.internal}
+  REDIS_HOST: ${DOCKER_REDIS_HOST:-sub2api-redis}
+  SKSHARE_BASE_URL: ${DOCKER_SKSHARE_BASE_URL:-http://host.docker.internal:18081}
+  REF_SKSHARE_BASE_URL: ${DOCKER_SKSHARE_BASE_URL:-http://host.docker.internal:18081}
+  LONGBRIDGE_AI_PROVIDER: ${LONGBRIDGE_AI_PROVIDER:-nvidia}
+  LONGBRIDGE_AI_FALLBACK_PROVIDER: ${LONGBRIDGE_AI_FALLBACK_PROVIDER:-}
+  LONGBRIDGE_AI_BASE_URL: ${LONGBRIDGE_AI_BASE_URL:-http://sub2api:8080/v1}
+  LONGBRIDGE_AI_URL: ${LONGBRIDGE_AI_URL:-http://sub2api:8080/v1/chat/completions}
+  LONGBRIDGE_AI_API_STYLE: ${LONGBRIDGE_AI_API_STYLE:-openai-chat-completions}
+  LONGBRIDGE_AI_API_KEY: ${LONGBRIDGE_AI_API_KEY:-}
+  LONGBRIDGE_AI_MODEL: ${LONGBRIDGE_AI_MODEL:-gpt-5.5}
+  LONGBRIDGE_AI_MODEL_SCAN_PULSE: ${LONGBRIDGE_AI_MODEL_SCAN_PULSE:-gpt-5.4}
+  LONGBRIDGE_AI_MODEL_SCAN_FAST: ${LONGBRIDGE_AI_MODEL_SCAN_FAST:-gpt-5.4}
+  LONGBRIDGE_AI_MODEL_SCAN_RISK: ${LONGBRIDGE_AI_MODEL_SCAN_RISK:-gpt-5.4}
+  LONGBRIDGE_AI_MODEL_SCAN_FINAL: ${LONGBRIDGE_AI_MODEL_SCAN_FINAL:-gpt-5.5}
+  LONGBRIDGE_AI_MODEL_TREND_BATCH: ${LONGBRIDGE_AI_MODEL_TREND_BATCH:-gpt-5.4}
+  LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF: ${LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF:-gpt-5.4}
+  LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY: ${LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY:-gpt-5.5}
+  LONGBRIDGE_AI_MODEL_VISION: ${LONGBRIDGE_AI_MODEL_VISION:-gpt-5.4}
+  LONGBRIDGE_AI_REASONING_EFFORT: ${LONGBRIDGE_AI_REASONING_EFFORT:-medium}
+  LONGBRIDGE_AI_SCAN_REASONING_EFFORT: ${LONGBRIDGE_AI_SCAN_REASONING_EFFORT:-high}
+  LONGBRIDGE_RUNTIME: cli
+  LONGBRIDGE_CLI_BIN: longbridge
+  LONGBRIDGE_REGION: cn
+  LONGPORT_REGION: cn
+  REF_AGNO_SIDECAR_URL: ${REF_AGNO_SIDECAR_URL:-http://host.docker.internal:3200}
+
+x-backend-service: &backend-service
+  image: refactor-v2-platform:local
+  env_file:
+    - .env
+  environment:
+    <<: *backend-env
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - ${HOME}/.longbridge:/root/.longbridge:ro
+  networks:
+    - refactor-v2
+    - sub2api-network
+
+services:
+  user-center:
+    <<: *backend-service
+    build:
+      context: .
+    container_name: refactor-v2-user
+    command: ["scripts/docker_service_entrypoint.sh", "apps/platform/user-center/src"]
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8101"
+      REF_USER_CENTER_PORT: "8101"
+    ports:
+      - "${REF_USER_CENTER_PORT:-8101}:8101"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8101/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  market-service:
+    <<: *backend-service
+    container_name: refactor-v2-market
+    command: ["scripts/docker_service_entrypoint.sh", "apps/market/market-service/src"]
+    depends_on:
+      user-center:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8102"
+      REF_MARKET_SERVICE_PORT: "8102"
+    ports:
+      - "${REF_MARKET_SERVICE_PORT:-8102}:8102"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8102/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  analysis-service:
+    <<: *backend-service
+    container_name: refactor-v2-analysis
+    command: ["scripts/docker_service_entrypoint.sh", "apps/intelligence/analysis-service/src"]
+    depends_on:
+      market-service:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8103"
+      REF_ANALYSIS_SERVICE_PORT: "8103"
+    ports:
+      - "${REF_ANALYSIS_SERVICE_PORT:-8103}:8103"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8103/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  strategy-service:
+    <<: *backend-service
+    container_name: refactor-v2-strategy
+    command: ["scripts/docker_service_entrypoint.sh", "apps/intelligence/strategy-service/src"]
+    depends_on:
+      analysis-service:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8104"
+      REF_STRATEGY_SERVICE_PORT: "8104"
+    ports:
+      - "${REF_STRATEGY_SERVICE_PORT:-8104}:8104"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8104/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  trade-service:
+    <<: *backend-service
+    container_name: refactor-v2-trade
+    command: ["scripts/docker_service_entrypoint.sh", "apps/trading/trade-service/src"]
+    depends_on:
+      user-center:
+        condition: service_started
+      market-service:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8105"
+      REF_TRADE_SERVICE_PORT: "8105"
+    ports:
+      - "${REF_TRADE_SERVICE_PORT:-8105}:8105"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8105/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  sentiment-service:
+    <<: *backend-service
+    container_name: refactor-v2-sentiment
+    command: ["scripts/docker_service_entrypoint.sh", "apps/market/sentiment-service/src"]
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8106"
+      REF_SENTIMENT_SERVICE_PORT: "8106"
+    ports:
+      - "${REF_SENTIMENT_SERVICE_PORT:-8106}:8106"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8106/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  scheduler-service:
+    <<: *backend-service
+    container_name: refactor-v2-scheduler
+    command: ["scripts/docker_service_entrypoint.sh", "apps/operations/scheduler-service/src"]
+    depends_on:
+      user-center:
+        condition: service_started
+      market-service:
+        condition: service_started
+      analysis-service:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8107"
+      REF_SCHEDULER_SERVICE_PORT: "8107"
+      REF_ANALYSIS_SERVICE_URL: http://analysis-service:8103
+    ports:
+      - "${REF_SCHEDULER_SERVICE_PORT:-8107}:8107"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8107/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  risk-service:
+    <<: *backend-service
+    container_name: refactor-v2-risk
+    command: ["scripts/docker_service_entrypoint.sh", "apps/governance/risk-service/src"]
+    depends_on:
+      user-center:
+        condition: service_started
+      trade-service:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "8108"
+      REF_RISK_SERVICE_PORT: "8108"
+    ports:
+      - "${REF_RISK_SERVICE_PORT:-8108}:8108"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8108/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  api-gateway:
+    <<: *backend-service
+    container_name: refactor-v2-gateway
+    command: ["scripts/docker_service_entrypoint.sh", "apps/platform/api-gateway/src"]
+    depends_on:
+      user-center:
+        condition: service_started
+      market-service:
+        condition: service_started
+      analysis-service:
+        condition: service_started
+      strategy-service:
+        condition: service_started
+      trade-service:
+        condition: service_started
+      sentiment-service:
+        condition: service_started
+      scheduler-service:
+        condition: service_started
+      risk-service:
+        condition: service_started
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "5101"
+      REF_GATEWAY_PORT: "5101"
+      REF_USER_CENTER_URL: http://user-center:8101
+      REF_MARKET_SERVICE_URL: http://market-service:8102
+      REF_ANALYSIS_SERVICE_URL: http://analysis-service:8103
+      REF_STRATEGY_SERVICE_URL: http://strategy-service:8104
+      REF_TRADE_SERVICE_URL: http://trade-service:8105
+      REF_SENTIMENT_SERVICE_URL: http://sentiment-service:8106
+      REF_SCHEDULER_SERVICE_URL: http://scheduler-service:8107
+      REF_RISK_SERVICE_URL: http://risk-service:8108
+    ports:
+      - "${REF_GATEWAY_PORT:-5101}:5101"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5101/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  web-portal:
+    build:
+      context: .
+      dockerfile: apps/frontend/web-portal/Dockerfile
+    image: refactor-v2-web-portal:local
+    container_name: refactor-v2-web
+    depends_on:
+      api-gateway:
+        condition: service_started
+      user-center:
+        condition: service_started
+      market-service:
+        condition: service_started
+      analysis-service:
+        condition: service_started
+    ports:
+      - "${REF_WEB_PORTAL_PORT:-3100}:3100"
+    networks:
+      - refactor-v2
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3100/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  refactor-v2:
+    name: refactor-v2
+  sub2api-network:
+    external: true
+    name: deploy_sub2api-network

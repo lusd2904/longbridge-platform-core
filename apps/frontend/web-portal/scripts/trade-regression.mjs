@@ -1,0 +1,100 @@
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { resolveBaseUrl } = require('../../../../scripts/base_url_helper.cjs')
+
+const BASE = resolveBaseUrl('TRADE_REGRESSION_BASE')
+const USERNAME = process.env.TRADE_REGRESSION_USERNAME || process.env.API_TEST_USERNAME || 'admin'
+const PASSWORD = process.env.TRADE_REGRESSION_PASSWORD || process.env.API_TEST_PASSWORD || 'admin123'
+const SYMBOL = process.env.TRADE_REGRESSION_SYMBOL || 'AAPL.US'
+
+async function request(path, { method = 'GET', token = '', body } = {}) {
+  const response = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
+  })
+
+  const contentType = response.headers.get('content-type') || ''
+  const payload = contentType.includes('application/json')
+    ? await response.json()
+    : await response.text()
+
+  return { status: response.status, payload }
+}
+
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message)
+  }
+}
+
+async function main() {
+  const login = await request('/svc/user/api/v1/auth/login', {
+    method: 'POST',
+    body: { username: USERNAME, password: PASSWORD }
+  })
+  assert(login.status === 200, `登录失败: ${login.status}`)
+
+  const token = login.payload?.data?.token || ''
+  assert(token, '未获取到登录令牌')
+
+  const presetAccountId = Number(process.env.TRADE_REGRESSION_ACCOUNT_ID || 0)
+  let accountId = presetAccountId
+
+  if (!accountId) {
+    const accounts = await request('/svc/trade/api/v1/trade/accounts', { token })
+    assert(accounts.status === 200, `获取账户失败: ${accounts.status}；可通过 TRADE_REGRESSION_ACCOUNT_ID 指定账户`)
+    const accountRows = Array.isArray(accounts.payload?.data) ? accounts.payload.data : Array.isArray(accounts.payload) ? accounts.payload : []
+    accountId = Number(accountRows[0]?.id || 0)
+  }
+
+  assert(accountId > 0, '没有可用交易账户用于回归测试')
+
+  const health = await request('/svc/trade/health', { token })
+  assert(health.status === 200, `健康检查失败: ${health.status}`)
+  assert(health.payload?.longbridge, 'trade-service /health 未暴露 longbridge 观测信息')
+
+  const submit = await request('/svc/trade/api/v1/trade/orders/submit', {
+    method: 'POST',
+    token,
+    body: {
+      symbol: SYMBOL,
+      action: 'BUY',
+      quantity: 1,
+      account_id: accountId,
+      price: null,
+      order_type: 'MARKET',
+      time_in_force: 'DAY'
+    }
+  })
+
+  assert(submit.status !== 502, `下单仍返回 502: ${JSON.stringify(submit.payload)}`)
+  assert(submit.status === 422, `预期风控拒绝 422，实际 ${submit.status}`)
+  assert(submit.payload?.data?.referencePriceSource, '下单错误返回缺少参考价来源')
+
+  const report = {
+    generatedAt: new Date().toISOString(),
+    base: BASE,
+    symbol: SYMBOL,
+    accountId,
+    health: {
+      status: health.payload?.status,
+      longbridge: health.payload?.longbridge
+    },
+    submit: {
+      status: submit.status,
+      payload: submit.payload
+    }
+  }
+
+  console.log(JSON.stringify(report, null, 2))
+}
+
+main().catch((error) => {
+  console.error(error?.stack || error?.message || String(error))
+  process.exit(1)
+})

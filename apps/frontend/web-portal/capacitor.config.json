@@ -1,0 +1,9 @@
+{
+  "appId": "com.refactorv2.portal",
+  "appName": "Refactor V2",
+  "webDir": "dist",
+  "server": {
+    "cleartext": true,
+    "androidScheme": "http"
+  }
+}

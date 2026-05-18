@@ -1,0 +1,9 @@
+FROM refactor-v2-platform:local
+
+WORKDIR /app
+
+RUN curl -sSL https://open.longbridge.cn/longbridge/longbridge-terminal/install | sh
+
+COPY . .
+
+CMD ["scripts/docker_service_entrypoint.sh", "apps/market/market-service/src"]

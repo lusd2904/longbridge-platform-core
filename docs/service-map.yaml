@@ -1,0 +1,124 @@
+project: refactor-v2
+legacy_root: /Users/lusd/Documents/New project/LongbridgeTrade
+principles:
+  - keep_legacy_as_backup
+  - migrate_by_domain
+  - use_parallel_ports
+  - reserve_sentiment_boundary_first
+
+services:
+  - code: web-portal
+    port: 3100
+    status: live
+    responsibility:
+      - unified user interface
+      - route orchestration
+      - charts and analysis views
+    legacy_sources:
+      - web/src
+
+  - code: api-gateway
+    port: 5101
+    status: live
+    responsibility:
+      - auth aggregation
+      - service routing
+      - unified response envelope
+    legacy_sources:
+      - backend-server/app.py
+      - backend-server/src/api
+      - services/api-gateway
+
+  - code: user-center
+    port: 8101
+    status: live
+    responsibility:
+      - login
+      - profile
+      - watchlist
+      - user preferences
+    legacy_sources:
+      - backend-server/src/api/user_routes.py
+      - backend-server/src/core/platform/PlatformAccessService.py
+
+  - code: market-service
+    port: 8102
+    status: live
+    responsibility:
+      - market universe
+      - price history
+      - indicator snapshots
+      - market scan datasets
+    legacy_sources:
+      - backend-server/src/core/analysis/HistoricalMarketDataService.py
+      - backend-server/src/core/analysis/IndicatorSnapshotService.py
+      - services/data-service/src/main.py
+
+  - code: analysis-service
+    port: 8103
+    status: live
+    responsibility:
+      - ai analysis
+      - trend batch scans
+      - conclusion generation
+    legacy_sources:
+      - backend-server/src/api/ai_routes.py
+      - backend-server/src/core/analysis/DailySymbolTrendScanService.py
+      - services/ai-service/src/main.py
+
+  - code: strategy-service
+    port: 8104
+    status: live
+    responsibility:
+      - strategy config
+      - risk rule coordination
+      - backtest orchestration
+    legacy_sources:
+      - backend-server/src/strategy
+      - web/src/views/Strategy.vue
+      - web/src/views/Backtest.vue
+
+  - code: trade-service
+    port: 8105
+    status: live
+    responsibility:
+      - order execution
+      - position query
+      - order projection
+    legacy_sources:
+      - legacy_trade_service/main.py
+
+  - code: sentiment-service
+    port: 8106
+    status: placeholder
+    responsibility:
+      - sentiment ingestion
+      - sentiment scoring
+      - event extraction
+      - symbol sentiment summary
+    legacy_sources:
+      - AI_ANALYSIS_DESIGN.md
+
+  - code: scheduler
+    port: 8107
+    status: live
+    responsibility:
+      - daily jobs
+      - async workflow orchestration
+      - recovery and replay
+    legacy_sources:
+      - backend-server/src/core/analysis
+      - scripts/backend
+
+  - code: risk-service
+    port: 8108
+    status: live
+    responsibility:
+      - risk overview
+      - protection order management
+      - notification center
+      - user risk limits
+    legacy_sources:
+      - backend-server/src/api/data_routes.py
+      - web/src/views/RiskManagement.vue
+      - web/src/views/Notifications.vue

@@ -1,0 +1,41 @@
+// 主题变量 - 科技感玻璃拟态设计
+$primary-color: #409eff;
+$success-color: #67c23a;
+$warning-color: #e6a23c;
+$danger-color: #f56c6c;
+$info-color: #909399;
+
+// 科技感玻璃拟态颜色
+$glass-bg: rgba(255, 255, 255, 0.08);
+$glass-bg-hover: rgba(255, 255, 255, 0.12);
+$glass-border: rgba(255, 255, 255, 0.15);
+$glass-border-hover: rgba(255, 255, 255, 0.2);
+$glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+$glass-shadow-hover: 0 12px 40px 0 rgba(0, 0, 0, 0.15);
+$glass-blur: blur(10px);
+
+// 文字颜色
+$text-primary: #303133;
+$text-regular: #606266;
+$text-secondary: #909399;
+$text-placeholder: #c0c4cc;
+
+// 边框颜色
+$border-base: #dcdfe6;
+$border-light: #e4e7ed;
+$border-lighter: #ebeef5;
+$border-extra-light: #f2f6fc;
+
+// 背景颜色
+$bg-base: #f5f7fa;
+$bg-light: #fafafa;
+
+// 布局
+$sidebar-width: 220px;
+$sidebar-collapsed-width: 64px;
+$header-height: 60px;
+
+// 响应式断点
+$mobile: 768px;
+$tablet: 992px;
+$desktop: 1200px;

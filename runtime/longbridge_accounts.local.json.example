@@ -1,0 +1,24 @@
+{
+  "accounts": [
+    {
+      "id": 10001,
+      "name": "home-longbridge-1",
+      "broker_name": "长桥证券外部账户1",
+      "account_id": "",
+      "user_id": 1,
+      "app_key": "replace-with-app-key",
+      "app_secret": "replace-with-app-secret",
+      "access_token": "replace-with-access-token"
+    },
+    {
+      "id": 10002,
+      "name": "home-longbridge-2",
+      "broker_name": "长桥证券外部账户2",
+      "account_id": "",
+      "user_id": 1,
+      "app_key": "replace-with-app-key",
+      "app_secret": "replace-with-app-secret",
+      "access_token": "replace-with-access-token"
+    }
+  ]
+}

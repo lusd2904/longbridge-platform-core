@@ -1,0 +1,16 @@
+.git
+.env
+.pytest_cache
+.runtime
+.omx
+logs
+output
+runtime
+apps/frontend/web-portal/node_modules
+apps/frontend/web-portal/dist
+!apps/frontend/web-portal/dist
+!apps/frontend/web-portal/dist/**
+apps/frontend/web-portal/ios/DerivedData
+apps/frontend/web-portal/android/app/build
+__pycache__
+*.pyc
