@@ -725,6 +725,48 @@ def _build_watchlist_review_accepted_result(
     return payload
 
 
+def _build_watchlist_review_skipped_result(
+    *,
+    run_id: str,
+    scene: str,
+    normalized_session: str,
+    trigger_source: str,
+    dry_run: bool,
+    user_id: int,
+) -> dict:
+    payload = _build_watchlist_review_result(
+        run_id=run_id,
+        scene=scene,
+        status="skipped",
+        summary="自选股 Agent 复核已跳过：当前时段没有开启扫描的自选标的。",
+        signals=[],
+        risk_flags=[],
+        review_advice=[
+            "先在自选股票池添加标的，并开启开盘前或收盘后扫描。",
+            "本次没有调用 AI，也没有执行任何交易操作。",
+        ],
+        evidence=[
+            {
+                "type": "watchlist-review-skipped",
+                "reason": "empty-watchlist",
+                "session": normalized_session,
+                "triggerSource": trigger_source,
+                "dryRun": dry_run,
+                "userId": user_id,
+                "targetsCount": 0,
+            }
+        ],
+        confidence=100,
+        source="analysis-service-skip",
+    )
+    payload["accepted"] = False
+    payload["async"] = False
+    payload["skipped"] = True
+    payload["reason"] = "no_targets"
+    payload["targetsCount"] = 0
+    return payload
+
+
 def _execute_watchlist_review(
     *,
     db_run_id: Optional[int],
@@ -1689,6 +1731,16 @@ async def watchlist_review(
         "triggerSource": trigger_source,
         "dryRun": dry_run,
     }
+
+    if not targets:
+        return _build_watchlist_review_skipped_result(
+            run_id=run_id,
+            scene=scene,
+            normalized_session=normalized_session,
+            trigger_source=trigger_source,
+            dry_run=dry_run,
+            user_id=user_id,
+        )
 
     db_run_id = _create_watchlist_run(
         scene=scene,

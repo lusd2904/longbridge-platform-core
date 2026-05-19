@@ -340,6 +340,7 @@ const taskStateLabel = (state) => ({
   idle: '空闲',
   running: '运行中',
   success: '正常',
+  skipped: '已跳过',
   failed: '失败',
   paused: '已暂停'
 }[String(state || 'idle').toLowerCase()] || '未知')
@@ -528,6 +529,7 @@ const agentRunStatusLabel = (status) => ({
   success: '成功',
   succeeded: '成功',
   completed: '成功',
+  skipped: '已跳过',
   failed: '失败',
   error: '失败',
   degraded: '降级',
@@ -541,6 +543,7 @@ const agentRunStatusTone = (status) => {
   if (['success', 'succeeded', 'completed', 'acknowledged'].includes(normalized)) return 'success'
   if (['failed', 'error'].includes(normalized)) return 'danger'
   if (['running'].includes(normalized)) return 'accent'
+  if (['skipped'].includes(normalized)) return 'muted'
   return 'muted'
 }
 const formatAgentRunTimestamp = (run) => formatDateTime(run?.displayAt || run?.completedAt || run?.updatedAt || run?.createdAt)

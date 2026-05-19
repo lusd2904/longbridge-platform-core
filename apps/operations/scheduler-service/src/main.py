@@ -274,25 +274,7 @@ def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
             if int(row.get("id") or 0) > 0
         ]
 
-    fallback = DbUtil.fetch_one(
-        """
-        SELECT id, username, role
-        FROM users
-        WHERE COALESCE(status, 'active') NOT IN ('disabled', 'locked')
-        ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END, id ASC
-        LIMIT 1
-        """
-    ) or {}
-    fallback_id = int(fallback.get("id") or 0)
-    if fallback_id <= 0:
-        return []
-    return [{
-        "userId": fallback_id,
-        "username": fallback.get("username") or f"user-{fallback_id}",
-        "role": fallback.get("role") or "user",
-        "targetCount": 0,
-        "reason": "empty-watchlist-fallback",
-    }]
+    return []
 
 
 def _request_watchlist_review_for_user(session_name: str, user: Dict[str, Any]) -> Dict[str, Any]:
@@ -345,6 +327,12 @@ def _is_watchlist_review_failure(result_payload: Dict[str, Any]) -> bool:
     return False
 
 
+def _is_watchlist_review_skipped(result_payload: Dict[str, Any]) -> bool:
+    result_status = str(result_payload.get("status") or "").strip().lower()
+    reason = str(result_payload.get("reason") or "").strip().lower()
+    return bool(result_payload.get("skipped")) or result_status == "skipped" or reason in {"no_targets", "empty-watchlist"}
+
+
 def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
     now = datetime.now()
     job_name = f"watchlist_{session_name}_review"
@@ -352,10 +340,12 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
 
     users = _list_watchlist_review_users(session_name)
     if not users:
-        message = "没有可执行自选股复核的 active 用户"
-        _write_job_status(job_name, "success", message, last_run_date=now.date(), last_run_at=now)
+        message = f"自选股 {session_name} 复核已跳过：没有开启本时段扫描的自选标的"
+        _write_job_status(job_name, "skipped", message, last_run_date=now.date(), last_run_at=now)
         return {
             "success": True,
+            "skipped": True,
+            "reason": "empty-watchlist",
             "summary": message,
             "session": session_name,
             "userCount": 0,
@@ -364,18 +354,27 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
 
     results: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
     for user in users:
         user_id = int(user.get("userId") or 0)
         try:
             result = _request_watchlist_review_for_user(session_name, user)
             result_payload = result.get("data") if isinstance(result.get("data"), dict) else result
             result_status = str(result_payload.get("status") or "").strip().lower() if isinstance(result_payload, dict) else ""
-            if isinstance(result_payload, dict) and _is_watchlist_review_failure(result_payload):
-                failures.append({
-                    "userId": user_id,
-                    "message": _analysis_summary(result, session_name),
-                    "status": result_status or "failed",
-                })
+            if isinstance(result_payload, dict):
+                if _is_watchlist_review_skipped(result_payload):
+                    skipped.append({
+                        "userId": user_id,
+                        "message": _analysis_summary(result, session_name),
+                        "status": result_status or "skipped",
+                        "reason": result_payload.get("reason") or "no_targets",
+                    })
+                elif _is_watchlist_review_failure(result_payload):
+                    failures.append({
+                        "userId": user_id,
+                        "message": _analysis_summary(result, session_name),
+                        "status": result_status or "failed",
+                    })
             results.append({
                 "userId": user_id,
                 "username": user.get("username"),
@@ -393,10 +392,16 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
                 "error": str(exc)[:500],
             })
 
-    success_count = max(0, len(users) - len(failures))
-    status = "failed" if failures and success_count == 0 else "success"
+    skipped_count = len(skipped)
+    success_count = max(0, len(users) - len(failures) - skipped_count)
+    if failures and success_count == 0 and skipped_count == 0:
+        status = "failed"
+    elif skipped_count and success_count == 0 and not failures:
+        status = "skipped"
+    else:
+        status = "success"
     summary = (
-        f"自选股 {session_name} 复核已提交，用户 {len(users)} 个，成功 {success_count} 个，失败 {len(failures)} 个；后台生成 AI 建议，不执行交易"
+        f"自选股 {session_name} 复核已提交，用户 {len(users)} 个，成功 {success_count} 个，跳过 {skipped_count} 个，失败 {len(failures)} 个；后台生成 AI 建议，不执行交易"
     )
     _write_job_status(
         job_name,
@@ -411,7 +416,9 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
         "session": session_name,
         "userCount": len(users),
         "successCount": success_count,
+        "skippedCount": skipped_count,
         "failureCount": len(failures),
+        "skipped": skipped,
         "failures": failures,
         "results": results,
     }

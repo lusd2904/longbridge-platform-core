@@ -185,4 +185,48 @@ describe('SchedulerCenter agent run routing', () => {
       reviewNote: ''
     })
   })
+
+  it('renders skipped scheduler and agent states without unknown labels', async () => {
+    routeState.query = {}
+    getPlatformTasksMock.mockResolvedValueOnce({
+      data: [
+        {
+          taskKey: 'watchlist_pre_open_review',
+          taskName: '自选股盘前复核',
+          category: 'analysis',
+          scheduleType: 'daily',
+          enabled: true,
+          status: {
+            state: 'skipped',
+            lastRunAt: '2026-05-20 08:45:00',
+            message: '自选股 pre_open 复核已跳过：没有开启本时段扫描的自选标的'
+          }
+        }
+      ]
+    })
+    getAgentRunsMock.mockResolvedValueOnce({
+      data: {
+        runs: [
+          {
+            runId: 'run-skipped',
+            scene: 'watchlist_pre_open_review',
+            status: 'skipped',
+            resultSummary: {
+              summary: '自选股 Agent 复核已跳过：当前时段没有开启扫描的自选标的。'
+            }
+          }
+        ]
+      }
+    })
+
+    const { default: SchedulerCenter } = await import('../../src/views/system/SchedulerCenter.vue')
+    const wrapper = shallowMount(SchedulerCenter, mountOptions)
+
+    await flushPromises()
+
+    expect(wrapper.vm.taskStateLabel('skipped')).toBe('已跳过')
+    expect(wrapper.vm.agentRunStatusLabel('skipped')).toBe('已跳过')
+    expect(wrapper.vm.agentRunStatusTone('skipped')).toBe('muted')
+    expect(wrapper.text()).toContain('状态: 已跳过')
+  })
 })
