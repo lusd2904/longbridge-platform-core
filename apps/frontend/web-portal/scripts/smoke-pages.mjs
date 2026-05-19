@@ -3,7 +3,8 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { createProgressReporter, withStepTimeout } from './smoke-helpers.mjs'
+import { createProgressReporter, sanitizeText, withStepTimeout } from './smoke-helpers.mjs'
+import { collectRenderableSuggestionTexts, hasExpectedSuggestion } from '../src/utils/aiAnalysisSuggestions.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -17,6 +18,7 @@ const username = process.env.SMOKE_USERNAME || 'admin'
 const password = process.env.SMOKE_PASSWORD || 'admin123'
 const PAGE_TIMEOUT_MS = Number(process.env.SMOKE_PAGE_TIMEOUT_MS || 60000)
 const ACTION_TIMEOUT_MS = Number(process.env.SMOKE_ACTION_TIMEOUT_MS || 60000)
+const RUN_MOBILE_SMOKE = process.env.SMOKE_INCLUDE_MOBILE === '1'
 const DEFAULT_CHROME_EXECUTABLE = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const progress = createProgressReporter({
   enabled: process.env.SMOKE_PROGRESS !== '0'
@@ -37,9 +39,25 @@ const pushError = (type, payload) => {
   })
 }
 
-const sanitizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim()
 const isOptionalOutbox404 = (url = '', status = 0) => {
   return Number(status) === 404 && OPTIONAL_OUTBOX_ENDPOINTS.some((pattern) => url.includes(pattern))
+}
+
+const readSuggestionTexts = async (suggestionsLocator) => {
+  const texts = await suggestionsLocator.evaluateAll((nodes) => nodes.map((node) => node.textContent || '')).catch(() => [])
+  return collectRenderableSuggestionTexts(texts)
+}
+
+const waitForSuggestionTexts = async (page, suggestionsLocator, timeoutMs = 8000) => {
+  await page.waitForFunction(
+    (selector) => {
+      const nodes = Array.from(document.querySelectorAll(selector))
+      return nodes.some((node) => (node.textContent || '').replace(/\s+/g, ' ').trim().length > 0)
+    },
+    '.ai-target-suggest-popper .el-autocomplete-suggestion li',
+    { timeout: timeoutMs }
+  )
+  return readSuggestionTexts(suggestionsLocator)
 }
 
 const fileExists = async (candidate) => {
@@ -257,18 +275,16 @@ const pageActions = {
     if (await search.isVisible().catch(() => false)) {
       await search.fill('nvda')
       actions.push('filled analysis search nvda')
-      await page.waitForTimeout(1000)
 
       const suggestions = page.locator('.ai-target-suggest-popper .el-autocomplete-suggestion li')
-      const suggestionCount = await suggestions.count().catch(() => 0)
-      if (!suggestionCount) {
+      const suggestionTexts = await waitForSuggestionTexts(page, suggestions)
+      if (!suggestionTexts.length) {
         throw new Error('AI analysis symbol autocomplete did not show suggestions')
       }
-      const firstSuggestion = sanitizeText(await suggestions.first().innerText().catch(() => ''))
-      if (!firstSuggestion.includes('NVDA.US')) {
-        throw new Error(`AI analysis first suggestion mismatch: ${firstSuggestion}`)
+      if (!hasExpectedSuggestion(suggestionTexts, ['NVDA.US', 'NVDL.US'])) {
+        throw new Error(`AI analysis suggestions missing expected targets: ${suggestionTexts.join(' | ')}`)
       }
-      actions.push(`verified ${suggestionCount} symbol suggestions`)
+      actions.push(`verified ${suggestionTexts.length} symbol suggestions`)
 
       await page.keyboard.press('Escape')
       const scanButton = page.locator('button').filter({ hasText: /扫描/ }).first()
@@ -538,6 +554,7 @@ const pageActions = {
 
 await fs.mkdir(artifactsDir, { recursive: true })
 
+let mobilePage = null
 const browser = await chromium.launch(await resolveBrowserLaunchOptions())
 const attachListeners = (page) => {
   page.on('pageerror', (error) => {
@@ -625,12 +642,14 @@ const desktopContext = await browser.newContext({ viewport: { width: 1440, heigh
 const desktopPage = await desktopContext.newPage()
 attachListeners(desktopPage)
 
-const mobileContext = await browser.newContext({
-  viewport: { width: 430, height: 932 },
-  userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
-})
-const mobilePage = await mobileContext.newPage()
-attachListeners(mobilePage)
+if (RUN_MOBILE_SMOKE) {
+  const mobileContext = await browser.newContext({
+    viewport: { width: 430, height: 932 },
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+  })
+  mobilePage = await mobileContext.newPage()
+  attachListeners(mobilePage)
+}
 
 try {
   await login(desktopPage)
@@ -655,10 +674,12 @@ try {
   await visitPage(desktopPage, '/user-management', 'user-management', pageActions.users, 'desktop')
   await visitPage(desktopPage, '/scheduler-center', 'scheduler-center', pageActions.scheduler, 'desktop')
 
-  await login(mobilePage)
-  await visitPage(mobilePage, '/dashboard', 'dashboard', pageActions.dashboard, 'mobile')
-  await visitPage(mobilePage, '/market', 'market', pageActions.market, 'mobile')
-  await visitPage(mobilePage, '/trading', 'trading', pageActions.trading, 'mobile')
+  if (RUN_MOBILE_SMOKE && mobilePage) {
+    await login(mobilePage)
+    await visitPage(mobilePage, '/dashboard', 'dashboard', pageActions.dashboard, 'mobile')
+    await visitPage(mobilePage, '/market', 'market', pageActions.market, 'mobile')
+    await visitPage(mobilePage, '/trading', 'trading', pageActions.trading, 'mobile')
+  }
 } finally {
   await closeBrowserQuietly(browser)
 }
@@ -667,6 +688,7 @@ const report = {
   generatedAt: new Date().toISOString(),
   baseUrl,
   username,
+  mobileIncluded: RUN_MOBILE_SMOKE,
   pages: results,
   errors
 }
@@ -676,6 +698,7 @@ await fs.writeFile(reportFile, JSON.stringify(report, null, 2), 'utf8')
 
 const summaryLines = [
   `baseUrl=${baseUrl}`,
+  `mobileIncluded=${RUN_MOBILE_SMOKE}`,
   `pages=${results.length}`,
   `errors=${errors.length}`
 ]

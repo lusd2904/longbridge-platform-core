@@ -1308,27 +1308,87 @@ export const getDashboardSummary = async (accountId, options = {}) => {
 
 export const getAssetTrend = (params = {}) => serviceGet('user', '/api/v1/users/asset-trend', params)
 export const getDashboardMarketInsights = async () => {
-  const res = await serviceGet('market', '/api/v1/market/insights')
-  const items = Array.isArray(res?.data) ? res.data : []
-  return {
-    ...res,
-    data: items.map(normalizeMarketInsight),
-    meta: res?.meta && typeof res.meta === 'object' ? res.meta : {}
+  if (getDashboardMarketInsights.cache && Date.now() < getDashboardMarketInsights.expiresAt) {
+    return getDashboardMarketInsights.cache
   }
+  if (getDashboardMarketInsights.pending) {
+    return getDashboardMarketInsights.pending
+  }
+  getDashboardMarketInsights.pending = (async () => {
+    const res = await serviceGet('market', '/api/v1/market/insights')
+    const items = Array.isArray(res?.data) ? res.data : []
+    const payload = {
+      ...res,
+      data: items.map(normalizeMarketInsight),
+      meta: res?.meta && typeof res.meta === 'object' ? res.meta : {}
+    }
+    getDashboardMarketInsights.cache = payload
+    getDashboardMarketInsights.expiresAt = Date.now() + 30_000
+    return payload
+  })().finally(() => {
+    getDashboardMarketInsights.pending = null
+  })
+  return getDashboardMarketInsights.pending
 }
+getDashboardMarketInsights.cache = null
+getDashboardMarketInsights.expiresAt = 0
+getDashboardMarketInsights.pending = null
+
+const marketInsightCache = new Map()
+const marketInsightPending = new Map()
+const marketInsightCacheKey = (prefix, params = {}) => `${prefix}:${JSON.stringify(params || {})}`
+
 export const getMarketInsightHistory = async (params = {}) => {
-  const res = await serviceGet('market', '/api/v1/market/insights/history', params)
-  const items = Array.isArray(res?.data) ? res.data : []
-  return { ...res, data: items.map(normalizeMarketInsight) }
+  const key = marketInsightCacheKey('history', params)
+  const cached = marketInsightCache.get(key)
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.payload
+  }
+  if (marketInsightPending.has(key)) {
+    return marketInsightPending.get(key)
+  }
+  const pending = (async () => {
+    const res = await serviceGet('market', '/api/v1/market/insights/history', params)
+    const items = Array.isArray(res?.data) ? res.data : []
+    const payload = { ...res, data: items.map(normalizeMarketInsight) }
+    marketInsightCache.set(key, {
+      payload,
+      expiresAt: Date.now() + 30_000
+    })
+    return payload
+  })().finally(() => {
+    marketInsightPending.delete(key)
+  })
+  marketInsightPending.set(key, pending)
+  return pending
 }
 export const getMarketInsightsAtTime = async (params = {}) => {
-  const res = await serviceGet('market', '/api/v1/market/insights', params)
-  const items = Array.isArray(res?.data) ? res.data : []
-  return {
-    ...res,
-    data: items.map(normalizeMarketInsight),
-    meta: res?.meta && typeof res.meta === 'object' ? res.meta : {}
+  const key = marketInsightCacheKey('at-time', params)
+  const cached = marketInsightCache.get(key)
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.payload
   }
+  if (marketInsightPending.has(key)) {
+    return marketInsightPending.get(key)
+  }
+  const pending = (async () => {
+    const res = await serviceGet('market', '/api/v1/market/insights', params)
+    const items = Array.isArray(res?.data) ? res.data : []
+    const payload = {
+      ...res,
+      data: items.map(normalizeMarketInsight),
+      meta: res?.meta && typeof res.meta === 'object' ? res.meta : {}
+    }
+    marketInsightCache.set(key, {
+      payload,
+      expiresAt: Date.now() + 30_000
+    })
+    return payload
+  })().finally(() => {
+    marketInsightPending.delete(key)
+  })
+  marketInsightPending.set(key, pending)
+  return pending
 }
 export const getPositionDistribution = async () => successPayload([])
 export const getMarketOverview = () => getMarketScans()

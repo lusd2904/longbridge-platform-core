@@ -13,8 +13,14 @@ function normalizeBaseUrl(rawValue, options = {}) {
     ? fallback
     : String(rawValue).trim()
 
-  let normalized = sourceValue.replace(/^(https?):(?!\/\/)/i, '$1://')
-  normalized = normalized.replace(/^(https?)\/\/+/i, '$1://')
+  if (/^https?:\/{0,1}(?!\/)/i.test(sourceValue) || /^https?\/\/+/i.test(sourceValue)) {
+    throw formatBaseUrlError(`must include "://" after the protocol, received "${sourceValue}"`, {
+      envVarName,
+      example
+    })
+  }
+
+  const normalized = sourceValue
 
   let parsed
   try {

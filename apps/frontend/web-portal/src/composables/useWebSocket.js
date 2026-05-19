@@ -249,6 +249,109 @@ function shouldReplaceQuote(previousQuote = {}, nextTimestamp = '', source = 'pu
   return nextTimestampMs >= previousSnapshotTimestamp
 }
 
+function normalizeQuoteRowForState(row = {}, previousQuote = {}, options = {}) {
+  const source = String(options?.source || 'push').trim().toLowerCase()
+  const isPushSource = source === 'push'
+  const eventTimestamp = options?.receivedAt || options?.timestamp || ''
+  const timestamp = resolveRowTimestamp(row, eventTimestamp) || new Date().toISOString()
+  if (!shouldReplaceQuote(previousQuote, timestamp, source)) {
+    return null
+  }
+  const lastPrice = resolveFirstQuoteNumber(
+    [row.last_price, row.last_done, row.price],
+    resolveFirstQuoteNumber([previousQuote.last_price, previousQuote.price], 0)
+  )
+  const prevClose = resolvePrevClose(row, previousQuote)
+  const changePercent = resolveChangePercent(row, previousQuote, lastPrice, prevClose)
+  const quoteMode = isPushSource ? 'push' : 'snapshot'
+
+  return {
+    ...previousQuote,
+    ...row,
+    last_price: lastPrice,
+    price: lastPrice,
+    prev_close: prevClose,
+    prevClose: prevClose,
+    change_percent: changePercent,
+    changePercent,
+    change: resolveFirstQuoteNumber(
+      [row.change, row.change_value, previousQuote.change],
+      Number.isFinite(prevClose) && prevClose !== 0 ? lastPrice - prevClose : null
+    ),
+    volume: Number(resolveFirstQuoteNumber([row.volume, previousQuote.volume], 0)),
+    open: resolveFirstQuoteNumber([row.open, previousQuote.open], 0),
+    high: resolveFirstQuoteNumber([row.high, previousQuote.high], 0),
+    low: resolveFirstQuoteNumber([row.low, previousQuote.low], 0),
+    timestamp,
+    quoteMode,
+    quote_mode: quoteMode,
+    quoteSource: isPushSource ? 'longbridge-push' : 'quote-snapshot',
+    quote_source: isPushSource ? 'longbridge-push' : 'quote-snapshot',
+    isRealtime: isPushSource,
+    receivedAt: isPushSource ? timestamp : (previousQuote.receivedAt || timestamp),
+    pushReceivedAt: isPushSource ? timestamp : (previousQuote.pushReceivedAt || null),
+    snapshotAt: isPushSource ? (previousQuote.snapshotAt || null) : timestamp,
+    updatedAt: timestamp,
+    pre_market_price: resolveFirstQuoteNumber([row.pre_market_price, previousQuote.pre_market_price], 0),
+    post_market_price: resolveFirstQuoteNumber([row.post_market_price, previousQuote.post_market_price], 0),
+    after_hours_price: resolveFirstQuoteNumber([row.after_hours_price, previousQuote.after_hours_price], 0),
+    session: row.session ?? row.trade_session ?? previousQuote.session ?? ''
+  }
+}
+
+function createBatchedQuoteApplier(quotesRef, options = {}) {
+  const flushMs = Math.max(0, Number(options.flushMs ?? 120))
+  let queuedItems = []
+  let flushTimer = null
+
+  const flush = () => {
+    flushTimer = null
+    if (!queuedItems.length) {
+      return
+    }
+
+    const items = queuedItems
+    queuedItems = []
+    const nextQuotes = { ...quotesRef.value }
+    let changed = false
+
+    items.forEach(({ row, meta }) => {
+      const symbol = normalizeSymbol(row?.symbol)
+      if (!symbol) {
+        return
+      }
+      const normalized = normalizeQuoteRowForState(row, nextQuotes[symbol] || {}, meta)
+      if (!normalized) {
+        return
+      }
+      nextQuotes[symbol] = normalized
+      changed = true
+    })
+
+    if (changed) {
+      quotesRef.value = nextQuotes
+    }
+  }
+
+  return (rows = [], meta = {}) => {
+    const incomingRows = Array.isArray(rows) ? rows : []
+    if (!incomingRows.length) {
+      return
+    }
+
+    if (flushMs <= 0 || String(meta?.source || '').toLowerCase() === 'snapshot') {
+      queuedItems.push(...incomingRows.map((row) => ({ row, meta })))
+      flush()
+      return
+    }
+
+    queuedItems.push(...incomingRows.map((row) => ({ row, meta })))
+    if (!flushTimer) {
+      flushTimer = window.setTimeout(flush, flushMs)
+    }
+  }
+}
+
 export function useWebSocket(url, options = {}) {
   const {
     autoConnect = true,
@@ -473,59 +576,7 @@ export function useStockQuotes(symbols, options = {}) {
   const quotes = ref({})
   const { userId = null, url = '' } = options
   const wsUrl = resolveWebSocketUrl(url)
-
-  const applyQuoteRows = (rows = [], options = {}) => {
-    const source = String(options?.source || 'push').trim().toLowerCase()
-    const isPushSource = source === 'push'
-    const eventTimestamp = options?.receivedAt || options?.timestamp || ''
-    rows.forEach((row) => {
-      const symbol = String(row?.symbol || '').trim().toUpperCase()
-      if (!symbol) {
-        return
-      }
-      const previousQuote = quotes.value[symbol] || {}
-      const timestamp = resolveRowTimestamp(row, eventTimestamp) || new Date().toISOString()
-      if (!shouldReplaceQuote(previousQuote, timestamp, source)) {
-        return
-      }
-      const lastPrice = resolveFirstQuoteNumber(
-        [row.last_price, row.last_done, row.price],
-        resolveFirstQuoteNumber([previousQuote.last_price, previousQuote.price], 0)
-      )
-      const prevClose = resolvePrevClose(row, previousQuote)
-      const changePercent = resolveChangePercent(row, previousQuote, lastPrice, prevClose)
-      quotes.value[symbol] = {
-        ...previousQuote,
-        ...row,
-        last_price: lastPrice,
-        price: lastPrice,
-        change_percent: changePercent,
-        prev_close: prevClose,
-        change: resolveFirstQuoteNumber(
-          [row.change, row.change_value, previousQuote.change],
-          Number.isFinite(prevClose) && prevClose !== 0 ? lastPrice - prevClose : null
-        ),
-        volume: Number(resolveFirstQuoteNumber([row.volume, previousQuote.volume], 0)),
-        open: resolveFirstQuoteNumber([row.open, previousQuote.open], 0),
-        high: resolveFirstQuoteNumber([row.high, previousQuote.high], 0),
-        low: resolveFirstQuoteNumber([row.low, previousQuote.low], 0),
-        timestamp,
-        quoteMode: isPushSource ? 'push' : 'snapshot',
-        quote_mode: isPushSource ? 'push' : 'snapshot',
-        quoteSource: isPushSource ? 'longbridge-push' : 'quote-snapshot',
-        quote_source: isPushSource ? 'longbridge-push' : 'quote-snapshot',
-        isRealtime: isPushSource,
-        receivedAt: isPushSource ? timestamp : (previousQuote.receivedAt || timestamp),
-        pushReceivedAt: isPushSource ? timestamp : (previousQuote.pushReceivedAt || null),
-        snapshotAt: isPushSource ? (previousQuote.snapshotAt || null) : timestamp,
-        updatedAt: timestamp,
-        pre_market_price: resolveFirstQuoteNumber([row.pre_market_price, previousQuote.pre_market_price], 0),
-        post_market_price: resolveFirstQuoteNumber([row.post_market_price, previousQuote.post_market_price], 0),
-        after_hours_price: resolveFirstQuoteNumber([row.after_hours_price, previousQuote.after_hours_price], 0),
-        session: row.session ?? previousQuote.session ?? ''
-      }
-    })
-  }
+  const applyQuoteRows = createBatchedQuoteApplier(quotes, { flushMs: options.quoteFlushMs ?? 120 })
 
   const {
     subscribe,
@@ -611,56 +662,7 @@ export function useLongbridgeMarketStream(symbols, options = {}) {
   const brokers = ref({})
   const trades = ref({})
   const latestEvents = ref([])
-
-  const applyQuoteRows = (rows = [], options = {}) => {
-    const source = String(options?.source || 'push').trim().toLowerCase()
-    const eventTimestamp = options?.receivedAt || options?.timestamp || ''
-    rows.forEach((row) => {
-      const symbol = normalizeSymbol(row?.symbol)
-      if (!symbol) {
-        return
-      }
-      const previousQuote = quotes.value[symbol] || {}
-      const timestamp = resolveRowTimestamp(row, eventTimestamp) || new Date().toISOString()
-      if (!shouldReplaceQuote(previousQuote, timestamp, source)) {
-        return
-      }
-      const lastPrice = resolveFirstQuoteNumber(
-        [row.last_price, row.last_done, row.price],
-        resolveFirstQuoteNumber([previousQuote.last_price, previousQuote.price], 0)
-      )
-      const prevClose = resolvePrevClose(row, previousQuote)
-      const changePercent = resolveChangePercent(row, previousQuote, lastPrice, prevClose)
-      quotes.value[symbol] = {
-        ...previousQuote,
-        ...row,
-        last_price: lastPrice,
-        price: lastPrice,
-        prev_close: prevClose,
-        prevClose: prevClose,
-        change_percent: changePercent,
-        change: resolveFirstQuoteNumber(
-          [row.change, row.change_value, previousQuote.change],
-          Number.isFinite(prevClose) && prevClose !== 0 ? lastPrice - prevClose : null
-        ),
-        volume: Number(resolveFirstQuoteNumber([row.volume, previousQuote.volume], 0)),
-        open: resolveFirstQuoteNumber([row.open, previousQuote.open], 0),
-        high: resolveFirstQuoteNumber([row.high, previousQuote.high], 0),
-        low: resolveFirstQuoteNumber([row.low, previousQuote.low], 0),
-        session: row.session ?? row.trade_session ?? previousQuote.session ?? '',
-        receivedAt: source === 'push' ? timestamp : (previousQuote.receivedAt || timestamp),
-        pushReceivedAt: source === 'push' ? timestamp : (previousQuote.pushReceivedAt || null),
-        snapshotAt: source === 'push' ? (previousQuote.snapshotAt || null) : timestamp,
-        updatedAt: timestamp,
-        quoteMode: source === 'push' ? 'push' : 'snapshot',
-        quote_mode: source === 'push' ? 'push' : 'snapshot',
-        quoteSource: source === 'push' ? 'longbridge-push' : 'quote-snapshot',
-        quote_source: source === 'push' ? 'longbridge-push' : 'quote-snapshot',
-        isRealtime: source === 'push',
-        timestamp
-      }
-    })
-  }
+  const applyQuoteRows = createBatchedQuoteApplier(quotes, { flushMs: options.quoteFlushMs ?? 120 })
 
   const applyDepthSnapshot = (payload = {}, symbolHint = '') => {
     const symbol = normalizeSymbol(symbolHint || resolvePayloadSymbol({}, payload))

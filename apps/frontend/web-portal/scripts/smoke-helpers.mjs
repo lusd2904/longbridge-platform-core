@@ -3,6 +3,8 @@ const normalizeTimeout = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+export const sanitizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim()
+
 export const withStepTimeout = async (task, options = {}) => {
   const label = options.label || 'smoke-step'
   const timeoutMs = normalizeTimeout(options.timeoutMs, 30000)

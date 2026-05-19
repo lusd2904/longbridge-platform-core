@@ -36,6 +36,8 @@ apps/runtime/
 *.pid
 
 # Build and cache outputs
+.venv/
+venv/
 node_modules/
 **/node_modules/
 dist/

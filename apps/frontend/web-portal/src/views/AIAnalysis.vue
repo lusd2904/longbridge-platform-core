@@ -425,6 +425,12 @@ import { analyzePositions, getAIModels, getLatestTrendScans } from '../api/analy
 import { getPlatformMarketScans, getStockPool } from '../api/market.js'
 import { getBrokerAccounts, getDefaultBrokerAccount, getPositionsSnapshot } from '../api/trade.js'
 import { formatCurrency as formatCurrencyValue, formatDecimal, formatPercent as formatPercentValue } from '../utils/formatters.js'
+import {
+  filterLocalSuggestionMatches,
+  mergeSuggestionSources,
+  normalizeSuggestionEntry,
+  rankSuggestionMatches
+} from '../utils/aiAnalysisSuggestions.js'
 import { request } from '../utils/requestPure.js'
 import MobileSegmentControl from '../components/common/MobileSegmentControl.vue'
 import { useAdaptiveLayout } from '../composables/useAdaptiveLayout.js'
@@ -800,27 +806,30 @@ const loadMarketScans = async () => {
 
 const normalizeSuggestion = (item = {}) => {
   const target = normalizeTarget(item, item.source || 'pool')
-  return {
-    ...target,
-    value: `${target.symbol} ${target.name}`,
-    label: `${target.symbol} ${target.name}`
-  }
+  return normalizeSuggestionEntry(target)
+}
+
+const getLocalTargetSuggestions = (keyword = '') => {
+  const trimmed = keyword.trim()
+  const localMatches = filterLocalSuggestionMatches(targets.value, trimmed)
+  const manualTarget = buildManualTarget(trimmed)
+  const manualMatches = manualTarget ? [normalizeSuggestion(manualTarget)] : []
+  return rankSuggestionMatches(
+    mergeSuggestionSources(manualMatches, localMatches),
+    trimmed
+  ).slice(0, 8)
 }
 
 const fetchTargetSuggestions = async (keyword = '') => {
   const trimmed = keyword.trim()
-  const manualTarget = buildManualTarget(trimmed)
-  const localMatches = targets.value
-    .filter((target) => {
-      if (!trimmed) return true
-      const normalized = trimmed.toLowerCase()
-      return target.symbol.toLowerCase().includes(normalized) || target.name.toLowerCase().includes(normalized)
-    })
-    .slice(0, 8)
-    .map(normalizeSuggestion)
+  const localSuggestions = getLocalTargetSuggestions(trimmed)
 
-  if (localMatches.length && trimmed.length < 2) {
-    return localMatches
+  if (!trimmed) {
+    return localSuggestions
+  }
+
+  if (localSuggestions.length && trimmed.length < 2) {
+    return localSuggestions
   }
 
   try {
@@ -831,31 +840,25 @@ const fetchTargetSuggestions = async (keyword = '') => {
       search: trimmed
     })
     const remoteMatches = (res?.data || []).map((item) => normalizeSuggestion({ ...item, source: 'pool' }))
-    const manualMatches = manualTarget ? [normalizeSuggestion(manualTarget)] : []
-    const merged = [...manualMatches, ...localMatches, ...remoteMatches]
-    const seen = new Set()
-    return merged.filter((item) => {
-      if (!item.symbol || seen.has(item.symbol)) return false
-      seen.add(item.symbol)
-      return true
-    }).slice(0, 8)
+    return rankSuggestionMatches(
+      mergeSuggestionSources(localSuggestions, remoteMatches),
+      trimmed
+    ).slice(0, 8)
   } catch (error) {
     console.error('加载标的快捷搜索失败:', error)
-    const fallbackMatches = manualTarget ? [...localMatches, normalizeSuggestion(manualTarget)] : localMatches
-    const seen = new Set()
-    return fallbackMatches.filter((item) => {
-      if (!item.symbol || seen.has(item.symbol)) return false
-      seen.add(item.symbol)
-      return true
-    }).slice(0, 8)
+    return localSuggestions
   }
 }
 
 const queryTargetSuggestions = async (query, callback) => {
   const keyword = String(query || '').trim()
   lastSuggestionKeyword.value = keyword
+  const immediateSuggestions = getLocalTargetSuggestions(keyword)
+  targetSuggestions.value = immediateSuggestions
+  callback(immediateSuggestions)
+
   const suggestions = await fetchTargetSuggestions(keyword)
-  if (lastSuggestionKeyword.value !== keyword) {
+  if (lastSuggestionKeyword.value !== keyword || pageUnmounted.value) {
     return
   }
   targetSuggestions.value = suggestions

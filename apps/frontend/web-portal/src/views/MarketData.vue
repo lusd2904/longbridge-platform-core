@@ -292,6 +292,7 @@ const totalQuotes = ref(0)
 const selectedRows = ref([])
 let searchTimer = null
 let marketDataRequestId = 0
+let insightRequestId = 0
 
 const marketMobileSections = computed(() => ([
   { value: 'pulse', label: '脉冲', note: currentMarketInsight.value?.generatedAt || '市场节奏' },
@@ -657,21 +658,31 @@ const formatInsightOption = (item = {}) => {
 }
 
 const loadMarketInsights = async ({ resetSelection = false } = {}) => {
+  const requestId = insightRequestId + 1
+  insightRequestId = requestId
+  const market = selectedMarket.value
+  const requestedGeneratedAt = selectedInsightTime.value
   const historyRes = await getMarketInsightHistory({
-    market: selectedMarket.value,
+    market,
     limit: 24
   })
+  if (requestId !== insightRequestId || market !== selectedMarket.value) {
+    return
+  }
   insightHistory.value = Array.isArray(historyRes?.data) ? historyRes.data : []
 
-  if (resetSelection || !insightHistory.value.some((item) => item.generatedAt === selectedInsightTime.value)) {
+  if (resetSelection || !insightHistory.value.some((item) => item.generatedAt === requestedGeneratedAt)) {
     selectedInsightTime.value = insightHistory.value[0]?.generatedAt || ''
   }
 
   const insightRes = await getMarketInsightsAtTime(
     selectedInsightTime.value
-      ? { market: selectedMarket.value, generated_at: selectedInsightTime.value }
-      : { market: selectedMarket.value }
+      ? { market, generated_at: selectedInsightTime.value }
+      : { market }
   )
+  if (requestId !== insightRequestId || market !== selectedMarket.value) {
+    return
+  }
   marketInsights.value = Array.isArray(insightRes?.data) ? insightRes.data : []
   marketInsightMeta.value = insightRes?.meta && typeof insightRes.meta === 'object' ? insightRes.meta : {}
 }
@@ -732,6 +743,7 @@ const changeMarket = () => {
   selectedInsightTime.value = ''
   marketInsights.value = []
   insightHistory.value = []
+  insightRequestId += 1
   loadMarketData()
   loadMarketInsightsSilently({ resetSelection: true })
 }
