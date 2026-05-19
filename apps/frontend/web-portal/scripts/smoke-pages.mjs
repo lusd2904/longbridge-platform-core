@@ -172,6 +172,18 @@ const clickFirstButtonByText = async (page, text, options = {}) => {
   return safeClick(page, page.locator('button').filter({ hasText: text }).first(), options)
 }
 
+const clickSegmentByText = async (page, text, options = {}) => {
+  const label = typeof text === 'string' ? new RegExp(`^\\s*${text}\\s*$`) : text
+  const target = page.locator([
+    '.el-radio-button',
+    '.el-segmented__item',
+    '.segment-button',
+    'label',
+    'button'
+  ].join(',')).filter({ hasText: label }).first()
+  return safeClick(page, target, options)
+}
+
 const clickTabByText = async (page, text, options = {}) => {
   return safeClick(page, page.locator('.el-tabs__item').filter({ hasText: text }).first(), options)
 }
@@ -314,15 +326,15 @@ const pageActions = {
   market: {
     blocking: async (page) => {
       const actions = []
-      if (await clickByRole(page, 'radio', 'A股')) {
+      if (await clickSegmentByText(page, 'A股')) {
         actions.push('switched market CN')
         await waitForStable(page, { minimumMs: 240, quietWindowMs: 220, timeoutMs: 2400 })
       }
-      if (await clickByRole(page, 'radio', '港股')) {
+      if (await clickSegmentByText(page, '港股')) {
         actions.push('switched market HK')
         await waitForStable(page, { minimumMs: 240, quietWindowMs: 220, timeoutMs: 2400 })
       }
-      if (await clickByRole(page, 'radio', '美股')) {
+      if (await clickSegmentByText(page, '美股')) {
         actions.push('switched market US')
         await waitForStable(page, { minimumMs: 240, quietWindowMs: 220, timeoutMs: 2400 })
       }
@@ -502,7 +514,7 @@ const pageActions = {
   },
   kline: async (page) => {
     const actions = []
-    if (await clickByRole(page, 'radio', '周K')) {
+    if (await clickSegmentByText(page, '周K')) {
       actions.push('switched weekly kline')
       await waitForStable(page, 1800)
     }
@@ -563,7 +575,7 @@ const pageActions = {
       actions.push('refreshed risk overview')
       await waitForStable(page, 1500)
     }
-    if (await clickByRole(page, 'radio', '高风险')) {
+    if (await clickSegmentByText(page, '高风险')) {
       actions.push('filtered high risk events')
       await waitForStable(page, 600)
     }
@@ -577,15 +589,15 @@ const pageActions = {
   },
   financeNews: async (page) => {
     const actions = []
-    if (await clickByRole(page, 'radio', '美股')) {
+    if (await clickSegmentByText(page, '美股')) {
       actions.push('selected news US')
       await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
-    if (await clickByRole(page, 'radio', 'A股')) {
+    if (await clickSegmentByText(page, 'A股')) {
       actions.push('selected news CN')
       await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
-    if (await clickByRole(page, 'radio', '港股')) {
+    if (await clickSegmentByText(page, '港股')) {
       actions.push('selected news HK')
       await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
@@ -609,15 +621,15 @@ const pageActions = {
       actions.push('refreshed notifications')
       await waitForStable(page, { minimumMs: 220, quietWindowMs: 180, timeoutMs: 1400 })
     }
-    if (await clickByRole(page, 'radio', '交易')) {
+    if (await clickSegmentByText(page, '交易')) {
       actions.push('filtered trade notifications')
       await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
-    if (await clickByRole(page, 'radio', '风控')) {
+    if (await clickSegmentByText(page, '风控')) {
       actions.push('filtered risk notifications')
       await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
-    if (await clickByRole(page, 'radio', '系统')) {
+    if (await clickSegmentByText(page, '系统')) {
       actions.push('filtered system notifications')
       await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
