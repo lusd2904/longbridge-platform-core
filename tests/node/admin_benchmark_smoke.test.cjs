@@ -24,6 +24,7 @@ test('buildSuite includes slow-page read-only benchmark endpoints', () => {
 
   assert.deepEqual(ids.filter((id) => [
     'market-stock-pool',
+    'market-stock-pool-search',
     'market-insights',
     'market-insights-history',
     'market-history-compare',
@@ -44,6 +45,7 @@ test('buildSuite includes slow-page read-only benchmark endpoints', () => {
     'positions-projection'
   ].includes(id)), [
     'market-stock-pool',
+    'market-stock-pool-search',
     'market-insights',
     'market-insights-history',
     'market-history-compare',

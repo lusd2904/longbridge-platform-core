@@ -356,6 +356,26 @@ function buildSuite(token, authInfo, brokerAccounts = null) {
       })
     },
     {
+      id: 'market-stock-pool-search',
+      label: 'Market Stock Pool Search',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/stock-pool',
+      headers: makeAuthHeaders(token),
+      query: {
+        market: 'all',
+        search: 'NVDL',
+        page: 1,
+        page_size: context.stockPoolPageSize
+      },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+        filteredTotal: payload?.stats?.filtered_total ?? payload?.total ?? null,
+        firstSymbol: Array.isArray(payload?.data) && payload.data[0]
+          ? payload.data[0].symbol || null
+          : null
+      })
+    },
+    {
       id: 'market-insights',
       label: 'Market Insights',
       method: 'GET',
