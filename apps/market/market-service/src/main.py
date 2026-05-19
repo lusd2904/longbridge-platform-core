@@ -91,6 +91,7 @@ PORT = service_port("REF_MARKET_SERVICE_PORT", 8102)
 _TRADING_SESSION_CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
 _TRADING_SESSION_TTL_SECONDS = 90
 _LIVE_MARKET_CACHE_TTL_SECONDS = 6
+_LIVE_MARKET_STALE_SECONDS = 45
 _SYMBOL_OVERVIEW_CACHE_TTL_SECONDS = 10
 _HISTORY_COVERAGE_START_DATE = date(2024, 1, 1)
 _HISTORY_COVERAGE_STATUSES = {"complete", "partial", "missing"}
@@ -1114,13 +1115,27 @@ def _serialize_live(payload: Any, *, data_source: str = "longbridge-live", extra
     return body
 
 
-def _live_cache_get(cache_key: Tuple[Any, ...]) -> Optional[Dict[str, Any]]:
+def _mark_live_payload_stale(payload: Dict[str, Any]) -> Dict[str, Any]:
+    marked = copy.deepcopy(payload)
+    data = marked.get("data")
+    if isinstance(data, dict):
+        source = str(data.get("dataSource") or "longbridge-live")
+        data["dataSource"] = source if source.endswith("-stale") else f"{source}-stale"
+        data["stale"] = True
+    return marked
+
+
+def _live_cache_get(cache_key: Tuple[Any, ...], *, allow_stale: bool = False) -> Optional[Dict[str, Any]]:
     now = time.time()
     with _LIVE_MARKET_CACHE_LOCK:
         cached = _LIVE_MARKET_CACHE.get(cache_key)
         if not cached:
             return None
-        if float(cached.get("expires_at") or 0) <= now:
+        expires_at = float(cached.get("expires_at") or 0)
+        stale_until = float(cached.get("stale_until") or 0)
+        if expires_at <= now:
+            if allow_stale and stale_until > now:
+                return _mark_live_payload_stale(cached.get("payload") or {})
             _LIVE_MARKET_CACHE.pop(cache_key, None)
             return None
         return copy.deepcopy(cached.get("payload"))
@@ -1140,9 +1155,14 @@ def _live_cache_set(cache_key: Tuple[Any, ...], payload: Dict[str, Any], ttl_sec
                 _LIVE_MARKET_CACHE.pop(key, None)
         _LIVE_MARKET_CACHE[cache_key] = {
             "expires_at": now + max(1, int(ttl_seconds or 1)),
+            "stale_until": now + max(1, int(ttl_seconds or 1)) + _LIVE_MARKET_STALE_SECONDS,
             "payload": cached_payload,
         }
     return copy.deepcopy(cached_payload)
+
+
+async def _run_live_pull(loader):
+    return await asyncio.to_thread(loader)
 
 
 def _cached_content_payload(
@@ -2066,12 +2086,12 @@ async def longbridge_quotes(
 ):
     normalized_symbols = _require_symbols(symbols, symbol)
     cache_key = ("longbridge-quotes", int(session["user_id"]), tuple(normalized_symbols))
-    cached_payload = _live_cache_get(cache_key)
+    cached_payload = _live_cache_get(cache_key, allow_stale=True)
     if cached_payload:
         return cached_payload
 
     ctx = _with_quote_context(int(session["user_id"]))
-    payload = ctx.quote(normalized_symbols)
+    payload = await _run_live_pull(lambda: ctx.quote(normalized_symbols))
     response = {"success": True, "data": _serialize_live(payload)}
     return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
 
@@ -2106,12 +2126,12 @@ async def longbridge_warrant_quotes(
 async def longbridge_depth(symbol: str, session: dict = Depends(get_current_session)):
     normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
     cache_key = ("longbridge-depth", int(session["user_id"]), normalized_symbol)
-    cached_payload = _live_cache_get(cache_key)
+    cached_payload = _live_cache_get(cache_key, allow_stale=True)
     if cached_payload:
         return cached_payload
 
     ctx = _with_quote_context(int(session["user_id"]))
-    payload = ctx.depth(normalized_symbol)
+    payload = await _run_live_pull(lambda: ctx.depth(normalized_symbol))
     response = {"success": True, "data": _serialize_live(payload)}
     return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
 
@@ -2139,12 +2159,12 @@ async def longbridge_trades(
     normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
     safe_count = max(1, min(int(count or 50), 1000))
     cache_key = ("longbridge-trades", int(session["user_id"]), normalized_symbol, safe_count)
-    cached_payload = _live_cache_get(cache_key)
+    cached_payload = _live_cache_get(cache_key, allow_stale=True)
     if cached_payload:
         return cached_payload
 
     ctx = _with_quote_context(int(session["user_id"]))
-    payload = ctx.trades(normalized_symbol, safe_count)
+    payload = await _run_live_pull(lambda: ctx.trades(normalized_symbol, safe_count))
     response = {"success": True, "data": _serialize_live(payload)}
     return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
 

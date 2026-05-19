@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from apps.market import longbridge_cli_runtime as runtime
+
+
+def test_auth_status_is_cached_and_returned_as_copy(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, timeout=None, require_paper_account=True):
+        calls.append((tuple(args), timeout, require_paper_account))
+        return {
+            "account": {
+                "account_channel": runtime.PAPER_ACCOUNT_CHANNEL,
+                "account_no": f"{runtime.PAPER_ACCOUNT_NO_PREFIX}123",
+            }
+        }
+
+    monkeypatch.setattr(runtime, "run_longbridge_cli", fake_run)
+    with runtime._AUTH_STATUS_CACHE_LOCK:
+        runtime._AUTH_STATUS_CACHE["expires_at"] = 0.0
+        runtime._AUTH_STATUS_CACHE["payload"] = None
+
+    first = runtime.auth_status()
+    first["account"] = {"account_channel": "mutated"}
+    second = runtime.auth_status()
+
+    assert calls == [(("auth", "status"), 15, False)]
+    assert second["account"]["account_channel"] == runtime.PAPER_ACCOUNT_CHANNEL
+
+
+def test_ensure_paper_trading_reuses_cached_auth_status(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, timeout=None, require_paper_account=True):
+        calls.append(args)
+        return {
+            "account": {
+                "account_channel": runtime.PAPER_ACCOUNT_CHANNEL,
+                "account_no": f"{runtime.PAPER_ACCOUNT_NO_PREFIX}123",
+            }
+        }
+
+    monkeypatch.setattr(runtime, "run_longbridge_cli", fake_run)
+    with runtime._AUTH_STATUS_CACHE_LOCK:
+        runtime._AUTH_STATUS_CACHE["expires_at"] = 0.0
+        runtime._AUTH_STATUS_CACHE["payload"] = None
+
+    runtime.ensure_paper_trading()
+    runtime.ensure_paper_trading()
+
+    assert calls == [["auth", "status"]]

@@ -77,8 +77,8 @@
       <el-table
         v-if="!isPhoneLayout && viewMode === 'list'"
         :data="positions"
+        :empty-text="loading ? '持仓加载中' : '当前账户暂无持仓'"
         style="width: 100%"
-        v-loading="loading"
         @row-click="showPositionDetail"
       >
         <el-table-column prop="symbol" label="代码" width="120">
@@ -139,7 +139,10 @@
         </div>
       </div>
 
-      <div v-else-if="activeMobileSection === 'holdings'" class="mobile-position-list" v-loading="loading">
+      <div v-else-if="activeMobileSection === 'holdings'" class="mobile-position-list">
+        <div v-if="loading && !positions.length" class="positions-inline-status">
+          持仓加载中
+        </div>
         <article
           v-for="row in positions"
           :key="row.symbol"
@@ -414,7 +417,7 @@ const positionReadModelUpdatedPrefix = computed(() => positionReadModelSummary.v
 const positionReadModelTags = computed(() => positionReadModelSummary.value.tags || [])
 const positionsHeroChips = computed(() => ([
   { text: selectedAccountName.value || '未选择账户', tone: selectedAccount.value ? 'success' : 'warning' },
-  { text: `自动刷新 ${AUTO_REFRESH_INTERVAL / 1000} 秒`, tone: 'info' },
+  { text: loading.value ? '持仓同步中' : `自动刷新 ${AUTO_REFRESH_INTERVAL / 1000} 秒`, tone: loading.value ? 'warning' : 'info' },
   { text: quotesConnected.value ? '行情在线' : '持仓快照', tone: quotesConnected.value ? 'success' : 'info' }
 ]))
 const positionsHeroMetrics = computed(() => ([
@@ -852,6 +855,18 @@ onUnmounted(() => {
 
 .positions-table {
   border-radius: 10px;
+}
+
+.positions-inline-status {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .card-header {

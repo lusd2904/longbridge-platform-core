@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import threading
+import time
+import copy
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -26,6 +28,9 @@ class CliConfig:
 PAPER_ACCOUNT_CHANNEL = "lb_papertrading"
 PAPER_ACCOUNT_NO_PREFIX = "LBPT"
 LOGGER = logging.getLogger(__name__)
+_AUTH_STATUS_CACHE_TTL_SECONDS = max(1, int(os.getenv("LONGBRIDGE_CLI_AUTH_CACHE_TTL_SECONDS", "60") or "60"))
+_AUTH_STATUS_CACHE_LOCK = threading.RLock()
+_AUTH_STATUS_CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
 
 
 def use_cli_runtime() -> bool:
@@ -113,8 +118,17 @@ def run_longbridge_cli(
 
 
 def auth_status() -> Dict[str, Any]:
-    payload = run_longbridge_cli(["auth", "status"], timeout=15, require_paper_account=False)
-    return payload if isinstance(payload, dict) else {}
+    now = time.time()
+    with _AUTH_STATUS_CACHE_LOCK:
+        cached_payload = _AUTH_STATUS_CACHE.get("payload")
+        if isinstance(cached_payload, dict) and float(_AUTH_STATUS_CACHE.get("expires_at") or 0.0) > now:
+            return copy.deepcopy(cached_payload)
+
+        payload = run_longbridge_cli(["auth", "status"], timeout=15, require_paper_account=False)
+        normalized_payload = payload if isinstance(payload, dict) else {}
+        _AUTH_STATUS_CACHE["payload"] = copy.deepcopy(normalized_payload)
+        _AUTH_STATUS_CACHE["expires_at"] = time.time() + _AUTH_STATUS_CACHE_TTL_SECONDS
+        return copy.deepcopy(normalized_payload)
 
 
 def account_channel() -> str:
