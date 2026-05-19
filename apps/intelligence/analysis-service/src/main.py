@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -593,9 +594,8 @@ def _create_watchlist_run(
         scene=scene,
         trigger_source=trigger_source,
         user_id=user_id,
-        status="running",
+        status="queued",
         input_summary=request_payload or {"targetsCount": len(targets)},
-        started_at=datetime.now(),
     )
 
 
@@ -632,6 +632,30 @@ def _record_watchlist_step(
     )
 
 
+def _mark_watchlist_run_running(
+    *,
+    db_run_id: Optional[int],
+    request_payload: Optional[dict] = None,
+) -> bool:
+    if db_run_id is None:
+        return True
+    claimed = _call_agent_run_service(
+        ("claim_run",),
+        run_id=db_run_id,
+        input_summary=request_payload,
+        started_at=datetime.now(),
+    )
+    if claimed is not None:
+        return bool(claimed)
+    _call_agent_run_service(
+        ("mark_run_running", "start_run", "save_run", "upsert_run"),
+        run_id=db_run_id,
+        input_summary=request_payload,
+        started_at=datetime.now(),
+    )
+    return True
+
+
 def _finish_watchlist_run(
     *,
     db_run_id: Optional[int],
@@ -659,6 +683,155 @@ def _finish_watchlist_run(
         trace_ref=str(result.get("runId") or "") if isinstance(result, dict) else None,
         finished_at=datetime.now(),
     )
+
+
+def _build_watchlist_review_accepted_result(
+    *,
+    run_id: str,
+    db_run_id: Optional[int],
+    scene: str,
+    normalized_session: str,
+    trigger_source: str,
+    dry_run: bool,
+    targets_count: int,
+) -> dict:
+    payload = _build_watchlist_review_result(
+        run_id=run_id,
+        scene=scene,
+        status="queued",
+        summary="自选股 Agent 复核已提交，后台生成结构化信号、风险和建议；仅生成 AI 建议，不执行交易。",
+        signals=[],
+        risk_flags=[],
+        review_advice=[
+            "复核任务已进入后台队列。",
+            "请在任务中心查看最新 Agent 复核结果。",
+        ],
+        evidence=[
+            {
+                "type": "agent-run-queued",
+                "session": normalized_session,
+                "triggerSource": trigger_source,
+                "dryRun": dry_run,
+                "targetsCount": targets_count,
+            }
+        ],
+        confidence=0,
+        source="analysis-service-async",
+    )
+    payload["accepted"] = True
+    payload["async"] = True
+    if db_run_id is not None:
+        payload["agentRunId"] = db_run_id
+    return payload
+
+
+def _execute_watchlist_review(
+    *,
+    db_run_id: Optional[int],
+    run_id: str,
+    scene: str,
+    sidecar_payload: dict,
+) -> None:
+    if not _mark_watchlist_run_running(db_run_id=db_run_id, request_payload=sidecar_payload):
+        return
+    sidecar_response, sidecar_error = _call_agno_watchlist_sidecar(sidecar_payload)
+    if sidecar_response is not None:
+        result = _normalize_watchlist_sidecar_result(
+            sidecar_response,
+            run_id=run_id,
+            scene=scene,
+        )
+    else:
+        degraded_status = "failed" if sidecar_error and sidecar_error.get("code") == "sidecar_http_error" else "degraded"
+        summary = (
+            "Agno watchlist review 暂时不可用，已返回降级结果。"
+            if degraded_status == "degraded"
+            else "Agno watchlist review 调用失败，未生成有效结论。"
+        )
+        result = _build_watchlist_review_result(
+            run_id=run_id,
+            scene=scene,
+            status=degraded_status,
+            summary=summary,
+            signals=[],
+            risk_flags=[],
+            review_advice=[
+                "稍后重试 Agno sidecar。",
+                "当前结果仅表示执行链路状态，不代表任何交易或操作建议。",
+            ],
+            evidence=[
+                {
+                    "type": "sidecar",
+                    "baseUrl": AGNO_SIDECAR_BASE_URL,
+                    "requestedSession": sidecar_payload.get("session"),
+                    "triggerSource": sidecar_payload.get("triggerSource"),
+                    "dryRun": sidecar_payload.get("dryRun"),
+                    "targetsCount": len(sidecar_payload.get("targets") or []),
+                }
+            ],
+            confidence=0,
+            source="analysis-service-fallback",
+            degraded=True,
+            error=sidecar_error,
+        )
+
+    _record_watchlist_step(
+        db_run_id=db_run_id,
+        external_run_id=run_id,
+        scene=scene,
+        status=str(result.get("status") or "degraded"),
+        request_payload=sidecar_payload,
+        response_payload=result,
+        error=result.get("error") if isinstance(result.get("error"), dict) else None,
+    )
+    _finish_watchlist_run(
+        db_run_id=db_run_id,
+        status=str(result.get("status") or "degraded"),
+        result=result,
+        error=result.get("error") if isinstance(result.get("error"), dict) else None,
+    )
+
+
+def _start_watchlist_review_worker(
+    *,
+    db_run_id: Optional[int],
+    run_id: str,
+    scene: str,
+    sidecar_payload: dict,
+) -> None:
+    def _worker() -> None:
+        try:
+            _execute_watchlist_review(
+                db_run_id=db_run_id,
+                run_id=run_id,
+                scene=scene,
+                sidecar_payload=sidecar_payload,
+            )
+        except Exception as exc:
+            error_payload = {
+                "code": "watchlist_review_worker_failed",
+                "message": str(exc)[:1000],
+            }
+            _record_watchlist_step(
+                db_run_id=db_run_id,
+                external_run_id=run_id,
+                scene=scene,
+                status="failed",
+                request_payload=sidecar_payload,
+                error=error_payload,
+            )
+            _finish_watchlist_run(
+                db_run_id=db_run_id,
+                status="failed",
+                error=error_payload,
+            )
+
+    thread = threading.Thread(
+        target=_worker,
+        name=f"watchlist-review-{db_run_id or run_id}",
+        daemon=True,
+    )
+    thread.start()
 
 
 def _parse_symbols(raw_values: Optional[List[str]], merged: Optional[str] = None) -> List[str]:
@@ -1525,65 +1698,21 @@ async def watchlist_review(
         request_payload=sidecar_payload,
     )
 
-    sidecar_response, sidecar_error = _call_agno_watchlist_sidecar(sidecar_payload)
-    if sidecar_response is not None:
-        result = _normalize_watchlist_sidecar_result(
-            sidecar_response,
-            run_id=run_id,
-            scene=scene,
-        )
-    else:
-        degraded_status = "failed" if sidecar_error and sidecar_error.get("code") == "sidecar_http_error" else "degraded"
-        summary = (
-            "Agno watchlist review 暂时不可用，已返回降级结果。"
-            if degraded_status == "degraded"
-            else "Agno watchlist review 调用失败，未生成有效结论。"
-        )
-        result = _build_watchlist_review_result(
-            run_id=run_id,
-            scene=scene,
-            status=degraded_status,
-            summary=summary,
-            signals=[],
-            risk_flags=[],
-            review_advice=[
-                "稍后重试 Agno sidecar。",
-                "当前结果仅表示执行链路状态，不代表任何交易或操作建议。",
-            ],
-            evidence=[
-                {
-                    "type": "sidecar",
-                    "baseUrl": AGNO_SIDECAR_BASE_URL,
-                    "requestedSession": normalized_session,
-                    "triggerSource": trigger_source,
-                    "dryRun": dry_run,
-                    "targetsCount": len(targets),
-                }
-            ],
-            confidence=0,
-            source="analysis-service-fallback",
-            degraded=True,
-            error=sidecar_error,
-        )
-
-    _record_watchlist_step(
+    _start_watchlist_review_worker(
         db_run_id=db_run_id,
-        external_run_id=run_id,
+        run_id=run_id,
         scene=scene,
-        status=str(result.get("status") or "degraded"),
-        request_payload=sidecar_payload,
-        response_payload=result,
-        error=result.get("error") if isinstance(result.get("error"), dict) else None,
+        sidecar_payload=sidecar_payload,
     )
-    _finish_watchlist_run(
+    return _build_watchlist_review_accepted_result(
+        run_id=run_id,
         db_run_id=db_run_id,
-        status=str(result.get("status") or "degraded"),
-        result=result,
-        error=result.get("error") if isinstance(result.get("error"), dict) else None,
+        scene=scene,
+        normalized_session=normalized_session,
+        trigger_source=trigger_source,
+        dry_run=dry_run,
+        targets_count=len(targets),
     )
-    if db_run_id is not None:
-        result["agentRunId"] = db_run_id
-    return result
 
 
 @app.get("/api/v1/analysis/agent/runs")

@@ -213,6 +213,38 @@ class AgentRunService:
         return cls.get_run(int(run_id), use_primary=True)
 
     @classmethod
+    def claim_run(
+        cls,
+        run_id: int,
+        *,
+        input_summary: Optional[Any] = None,
+        trace_ref: Optional[str] = None,
+        started_at: Optional[Any] = None,
+    ) -> bool:
+        cls.ensure_schema()
+        safe_started_at = cls._coerce_datetime(started_at) or datetime.now()
+        affected = DbUtil.execute_sql(
+            f"""
+            UPDATE {cls.RUNS_TABLE}
+            SET status = %s,
+                input_summary = COALESCE(%s, input_summary),
+                trace_ref = COALESCE(%s, trace_ref),
+                started_at = COALESCE(started_at, %s),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE run_id = %s AND status = %s
+            """,
+            (
+                "running",
+                cls._serialize_summary(input_summary, cls.MAX_SUMMARY_LENGTH),
+                cls._clean_text(trace_ref, cls.MAX_TRACE_REF_LENGTH),
+                safe_started_at,
+                int(run_id),
+                "queued",
+            ),
+        )
+        return int(affected or 0) > 0
+
+    @classmethod
     def complete_run(
         cls,
         run_id: int,

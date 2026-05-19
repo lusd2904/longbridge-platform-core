@@ -336,6 +336,15 @@ def _request_watchlist_review_for_user(session_name: str, user: Dict[str, Any]) 
     return result if isinstance(result, dict) else {"success": True, "data": result}
 
 
+def _is_watchlist_review_failure(result_payload: Dict[str, Any]) -> bool:
+    result_status = str(result_payload.get("status") or "").strip().lower()
+    if bool(result_payload.get("degraded")):
+        return True
+    if result_status in {"failed", "degraded", "error"}:
+        return True
+    return False
+
+
 def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
     now = datetime.now()
     job_name = f"watchlist_{session_name}_review"
@@ -361,8 +370,7 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
             result = _request_watchlist_review_for_user(session_name, user)
             result_payload = result.get("data") if isinstance(result.get("data"), dict) else result
             result_status = str(result_payload.get("status") or "").strip().lower() if isinstance(result_payload, dict) else ""
-            degraded = bool(result_payload.get("degraded")) if isinstance(result_payload, dict) else False
-            if result_status in {"failed", "degraded", "error"} or degraded:
+            if isinstance(result_payload, dict) and _is_watchlist_review_failure(result_payload):
                 failures.append({
                     "userId": user_id,
                     "message": _analysis_summary(result, session_name),
@@ -388,7 +396,7 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
     success_count = max(0, len(users) - len(failures))
     status = "failed" if failures and success_count == 0 else "success"
     summary = (
-        f"自选股 {session_name} 复核完成，用户 {len(users)} 个，成功 {success_count} 个，失败 {len(failures)} 个；仅生成 AI 建议，不执行交易"
+        f"自选股 {session_name} 复核已提交，用户 {len(users)} 个，成功 {success_count} 个，失败 {len(failures)} 个；后台生成 AI 建议，不执行交易"
     )
     _write_job_status(
         job_name,
