@@ -173,8 +173,8 @@
             <strong>{{ activeAgentRun.adviceCount ?? '--' }}</strong>
           </div>
           <div class="agent-stat-card">
-            <span>人工复核</span>
-            <strong>{{ activeAgentRun.acknowledged ? '已记录' : '未记录' }}</strong>
+            <span>人工处理</span>
+            <strong>{{ agentRunReviewStateLabel(activeAgentRun) }}</strong>
           </div>
         </div>
 
@@ -203,15 +203,72 @@
           </div>
         </div>
 
-        <div class="agent-drawer-actions">
-          <el-button
-            class="ack-button"
-            :loading="acknowledgingRunId === activeAgentRun.id"
-            :disabled="!activeAgentRun.id || activeAgentRun.acknowledged"
-            @click="acknowledgeAgentRunById(activeAgentRun.id, activeAgentRun.scene)"
+        <div class="agent-review-control">
+          <div class="section-label">人工处理</div>
+          <div class="review-action-options">
+            <button
+              v-for="action in AGENT_REVIEW_ACTIONS"
+              :key="action.key"
+              type="button"
+              class="review-action-option"
+              :class="[{ active: reviewActionForm.action === action.key }, `is-${action.key}`]"
+              @click="reviewActionForm.action = action.key"
+            >
+              {{ action.label }}
+            </button>
+          </div>
+          <el-select
+            v-model="reviewActionForm.newStatus"
+            clearable
+            placeholder="不调整运行状态"
+            class="review-status-select"
           >
-            {{ activeAgentRun.acknowledged ? '已复核' : '标记已复核' }}
-          </el-button>
+            <el-option
+              v-for="status in AGENT_REVIEW_STATUS_OPTIONS"
+              :key="status.value"
+              :label="status.label"
+              :value="status.value"
+            />
+          </el-select>
+          <el-input
+            v-model="reviewActionForm.reason"
+            maxlength="300"
+            show-word-limit
+            placeholder="处理理由（可选）"
+          />
+          <el-input
+            v-model="reviewActionForm.reviewNote"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            placeholder="记录本次人工复核意见（可选）"
+          />
+          <div class="agent-drawer-actions">
+            <el-button
+              class="review-action-button"
+              :class="`is-${reviewActionForm.action}`"
+              :loading="isReviewActionLoading(activeAgentRun.id, reviewActionForm.action)"
+              :disabled="!activeAgentRun.id || isReviewActionDisabled(activeAgentRun, reviewActionForm.action)"
+              @click="submitAgentRunReviewAction(activeAgentRun.id, activeAgentRun.scene)"
+            >
+              {{ agentReviewSubmitLabel(activeAgentRun) }}
+            </el-button>
+            <el-button
+              class="review-action-button is-reset"
+              :disabled="isReviewActionBusy(activeAgentRun.id)"
+              @click="resetReviewActionForm()"
+            >
+              重置
+            </el-button>
+            <el-button
+              class="review-action-button"
+              :disabled="isReviewActionBusy(activeAgentRun.id)"
+              @click="agentRunDrawerVisible = false"
+            >
+              关闭
+            </el-button>
+          </div>
         </div>
       </div>
       <div v-else class="agent-drawer-empty">
@@ -240,7 +297,15 @@ const agentRunDetailLoading = ref(false)
 const activeAgentRun = ref(null)
 const activeAgentTaskLabel = ref('')
 const acknowledgingRunId = ref('')
+const acknowledgingAction = ref('')
 const routeQueryHydrated = ref(false)
+const createReviewActionForm = () => ({
+  action: 'acknowledged',
+  newStatus: '',
+  reason: '',
+  reviewNote: ''
+})
+const reviewActionForm = ref(createReviewActionForm())
 
 const AGENT_REVIEW_TASK_SCENES = {
   watchlist_pre_open_review: 'watchlist_pre_open_review',
@@ -250,6 +315,16 @@ const AGENT_REVIEW_SCENE_LABELS = {
   watchlist_pre_open_review: '自选股盘前复核',
   watchlist_post_close_review: '自选股盘后复核'
 }
+const AGENT_REVIEW_ACTIONS = [
+  { key: 'acknowledged', label: '已复核', doneLabel: '已复核', message: '已记录人工复核' },
+  { key: 'needs_review', label: '需继续复核', doneLabel: '需继续复核', message: '已标记为需继续复核' },
+  { key: 'dismissed', label: '忽略', doneLabel: '已忽略', message: '已忽略该复核结果' }
+]
+const AGENT_REVIEW_STATUS_OPTIONS = [
+  { value: 'succeeded', label: '运行成功' },
+  { value: 'failed', label: '运行失败' },
+  { value: 'cancelled', label: '已取消' }
+]
 const AGENT_REVIEW_TASK_KEYS = new Set(Object.keys(AGENT_REVIEW_TASK_SCENES))
 
 const scheduleLabel = (type) => ({ interval: '循环', daily: '每日', manual: '手动' }[type] || '未设置')
@@ -377,8 +452,17 @@ const toArray = (value) => {
   }
   return [value]
 }
-const hasAgentOverrideAcknowledged = (overrides = []) => {
-  return overrides.some((item) => String(item?.action || item?.type || '').toLowerCase() === 'acknowledged')
+const normalizeOverrideAction = (value) => String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_')
+const latestAgentOverrideAction = (overrides = []) => {
+  const normalized = toArray(overrides)
+    .map((item) => ({
+      ...item,
+      action: normalizeOverrideAction(item?.action || item?.type),
+      createdAt: firstDefinedValue(item?.createdAt, item?.created_at, '')
+    }))
+    .filter((item) => item.action)
+
+  return normalized[normalized.length - 1]?.action || ''
 }
 const normalizeAgentRun = (run = {}) => {
   const resultPayload = firstDefinedValue(run.resultSummary, run.result_summary, run.result, run.outputSummary, run.output_summary, {})
@@ -388,6 +472,7 @@ const normalizeAgentRun = (run = {}) => {
   const adviceCountValue = firstDefinedValue(run.adviceCount, run.advice_count, run.reviewAdviceCount, run.review_advice_count)
   const adviceCount = adviceCountValue !== null ? Number(adviceCountValue) : reviewAdvice.length
   const displayAt = firstDefinedValue(run.completedAt, run.completed_at, run.updatedAt, run.updated_at, run.createdAt, run.created_at)
+  const reviewAction = latestAgentOverrideAction(overrides)
 
   return {
     ...run,
@@ -407,8 +492,37 @@ const normalizeAgentRun = (run = {}) => {
     updatedAt: firstDefinedValue(run.updatedAt, run.updated_at),
     completedAt: firstDefinedValue(run.completedAt, run.completed_at),
     displayAt,
-    acknowledged: hasAgentOverrideAcknowledged(overrides)
+    reviewAction,
+    acknowledged: reviewAction === 'acknowledged'
   }
+}
+const agentReviewActionLabel = (action) => ({
+  acknowledged: '已复核',
+  needs_review: '需继续复核',
+  dismissed: '已忽略'
+}[normalizeOverrideAction(action)] || '未处理')
+const agentRunReviewStateLabel = (run) => agentReviewActionLabel(run?.reviewAction)
+const agentReviewActionButtonLabel = (run, action) => (
+  normalizeOverrideAction(run?.reviewAction) === action.key ? action.doneLabel : action.label
+)
+const agentReviewSubmitLabel = (run) => (
+  agentReviewActionButtonLabel(
+    run,
+    AGENT_REVIEW_ACTIONS.find((item) => item.key === reviewActionForm.value.action) || AGENT_REVIEW_ACTIONS[0]
+  )
+)
+const isReviewActionLoading = (runId, action = '') => Boolean(
+  runId &&
+  acknowledgingRunId.value === runId &&
+  (!action || acknowledgingAction.value === action)
+)
+const isReviewActionBusy = (runId) => Boolean(runId && acknowledgingRunId.value === runId)
+const isReviewActionDisabled = (run, action) => {
+  if (!run?.id || isReviewActionBusy(run.id)) return true
+  return normalizeOverrideAction(run.reviewAction) === action
+}
+const resetReviewActionForm = () => {
+  reviewActionForm.value = createReviewActionForm()
 }
 const agentRunStatusLabel = (status) => ({
   success: '成功',
@@ -595,6 +709,7 @@ const openAgentRunResult = async (task) => {
   try {
     const res = await getAgentRun(summaryRun.id)
     activeAgentRun.value = normalizeAgentRun(res?.data || {})
+    resetReviewActionForm()
   } catch (error) {
     console.error('加载 Agent 复核详情失败:', error)
     activeAgentRun.value = summaryRun
@@ -616,6 +731,7 @@ const openAgentRunResultById = async (runId, scene = '') => {
     const res = await getAgentRun(normalizedRunId)
     const run = normalizeAgentRun(res?.data || {})
     activeAgentRun.value = run.id ? run : { ...run, id: normalizedRunId, scene: normalizedScene }
+    resetReviewActionForm()
     const summaryScene = activeAgentRun.value.scene || normalizedScene
     if (summaryScene) {
       agentRunSummaryMap.value = {
@@ -632,26 +748,49 @@ const openAgentRunResultById = async (runId, scene = '') => {
     agentRunDetailLoading.value = false
   }
 }
-const acknowledgeAgentRunById = async (runId, scene = '') => {
+const submitAgentRunReviewAction = async (runId, scene = '', action = reviewActionForm.value.action) => {
   if (!runId || acknowledgingRunId.value === runId) return
 
+  const normalizedAction = normalizeOverrideAction(action)
+  const actionConfig = AGENT_REVIEW_ACTIONS.find((item) => item.key === normalizedAction) || AGENT_REVIEW_ACTIONS[0]
+  const reason = normalizeScalarText(reviewActionForm.value.reason)
+  const reviewNote = normalizeScalarText(reviewActionForm.value.reviewNote)
+  const newStatus = normalizeScalarText(reviewActionForm.value.newStatus)
   acknowledgingRunId.value = runId
+  acknowledgingAction.value = normalizedAction
   try {
-    await reviewAgentRun(runId, { action: 'acknowledged' })
-    ElMessage.success('已记录人工复核')
+    await reviewAgentRun(runId, {
+      action: normalizedAction,
+      reason: reason || actionConfig.label,
+      ...(newStatus ? { newStatus } : {}),
+      ...(reviewNote ? { reviewNote } : {})
+    })
+    ElMessage.success(actionConfig.message)
+    resetReviewActionForm()
     if (scene) {
       await loadAgentRunSummaryForScene(scene)
     }
     if (activeAgentRun.value?.id === runId) {
       const res = await getAgentRun(runId)
       activeAgentRun.value = normalizeAgentRun(res?.data || activeAgentRun.value)
+      const summaryScene = activeAgentRun.value.scene || scene
+      if (summaryScene) {
+        agentRunSummaryMap.value = {
+          ...agentRunSummaryMap.value,
+          [summaryScene]: activeAgentRun.value
+        }
+      }
     }
   } catch (error) {
     console.error('记录人工复核失败:', error)
     ElMessage.error(error?.message || '记录人工复核失败')
   } finally {
     acknowledgingRunId.value = ''
+    acknowledgingAction.value = ''
   }
+}
+const acknowledgeAgentRunById = async (runId, scene = '') => {
+  await submitAgentRunReviewAction(runId, scene, 'acknowledged')
 }
 const acknowledgeAgentRun = async (task) => {
   const scene = resolveAgentReviewScene(task)
@@ -824,8 +963,7 @@ watch(
 .agent-review-meta,
 .agent-review-actions,
 .agent-run-hero,
-.agent-run-stats,
-.agent-drawer-actions {
+.agent-run-stats {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1019,6 +1157,135 @@ watch(
 .agent-drawer-empty {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.agent-review-control {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-soft);
+}
+
+.review-action-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.review-action-option {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-strong);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.review-action-option.active {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-strong));
+}
+
+.review-action-option.is-acknowledged.active {
+  border-color: color-mix(in srgb, var(--success) 46%, var(--border-soft));
+  background: color-mix(in srgb, var(--success) 15%, var(--surface-strong));
+}
+
+.review-action-option.is-needs_review.active {
+  border-color: color-mix(in srgb, var(--warning) 50%, var(--border-soft));
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface-strong));
+}
+
+.review-action-option.is-dismissed.active {
+  border-color: color-mix(in srgb, var(--text-muted) 42%, var(--border-soft));
+  background: color-mix(in srgb, var(--text-muted) 12%, var(--surface-strong));
+}
+
+.review-status-select {
+  width: 100%;
+}
+
+.agent-review-control :deep(.el-input__wrapper),
+.agent-review-control :deep(.el-select__wrapper) {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-soft);
+  box-shadow: none;
+}
+
+.agent-review-control :deep(.el-input__inner),
+.agent-review-control :deep(.el-select__placeholder),
+.agent-review-control :deep(.el-select__selected-item) {
+  color: var(--text-primary);
+}
+
+.agent-review-control :deep(.el-textarea__inner) {
+  min-height: 82px;
+  background: var(--surface-strong);
+  color: var(--text-primary);
+  border-color: var(--border-soft);
+  box-shadow: none;
+}
+
+.agent-review-control :deep(.el-textarea__inner::placeholder) {
+  color: var(--text-muted);
+}
+
+.agent-review-control :deep(.el-input__count) {
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.agent-drawer-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.review-action-button {
+  min-width: 0;
+  border-color: var(--border-soft);
+  color: var(--text-primary);
+  background: var(--surface-strong);
+}
+
+.review-action-button:hover,
+.review-action-button:focus-visible {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
+}
+
+.review-action-button.is-acknowledged {
+  border-color: color-mix(in srgb, var(--success) 34%, transparent);
+  background: color-mix(in srgb, var(--success) 14%, var(--surface-strong));
+}
+
+.review-action-button.is-needs_review {
+  border-color: color-mix(in srgb, var(--warning) 38%, transparent);
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface-strong));
+}
+
+.review-action-button.is-dismissed {
+  border-color: color-mix(in srgb, var(--text-muted) 32%, transparent);
+  background: color-mix(in srgb, var(--text-muted) 12%, var(--surface-strong));
+}
+
+.review-action-button.is-reset {
+  border-color: var(--border-soft);
+  background: var(--surface-strong);
+}
+
+.review-action-button.is-disabled,
+.review-action-button:disabled {
+  color: var(--text-muted);
+  border-color: var(--border-soft);
+  background: var(--surface-strong);
 }
 
 @media (max-width: 1100px) {
