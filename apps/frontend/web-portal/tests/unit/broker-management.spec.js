@@ -91,7 +91,10 @@ describe('BrokerManagement delete flow', () => {
           'el-card': { template: '<div><slot name="header" /><slot /></div>' },
           'el-table': { template: '<div><slot /></div>' },
           'el-table-column': true,
-          'el-statistic': true,
+          'el-statistic': {
+            props: ['title', 'value'],
+            template: '<div class="el-statistic"><span>{{ title }}</span><strong>{{ value }}</strong><slot /></div>'
+          },
           'el-button': { template: '<button><slot /></button>' },
           'el-button-group': { template: '<div><slot /></div>' },
           'el-dialog': { template: '<div><slot /><slot name="footer" /></div>' },

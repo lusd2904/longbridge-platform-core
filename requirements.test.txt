@@ -1,1 +1,2 @@
+-r requirements.services.txt
 pytest==8.4.2

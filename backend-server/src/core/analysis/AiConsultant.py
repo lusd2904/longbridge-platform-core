@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from core.analysis.ai_analyst import AIAnalyst
 from utils.MonitorLink import MonitorLink
@@ -20,6 +20,178 @@ class AiConsultant:
         market_context = AiConsultant._market_context(data)
         indicators_desc = AiConsultant._indicator_overview(symbol, stock_name, algo_side, data, market_context)
         user_id = int(data.get('user_id') or 1)
+
+        combined_prompt = AiConsultant._build_combined_analysis_prompt(
+            stock_name=stock_name,
+            symbol=symbol,
+            algo_side=algo_side,
+            indicators_desc=indicators_desc,
+        )
+        combined_text = AIAnalyst.get_decision(None, combined_prompt, task='scan_final', user_id=user_id)
+
+        sections = AiConsultant._extract_combined_sections(combined_text)
+        if sections:
+            pulse_text = sections["pulse"]
+            risk_text = sections["risk"]
+            decision_text = sections["decision"]
+
+            if not AiConsultant._is_unusable_response(
+                pulse_text,
+                required_fields=['趋势判断', '指标共振', '大盘联动', '机会窗口', '一句结论', '建议标签']
+            ) and not AiConsultant._is_unusable_response(
+                risk_text,
+                required_fields=['情绪温度', '资金流与波动', '主要风险', '仓位建议', '市场环境', '一句结论', '建议标签']
+            ) and not AiConsultant._is_unusable_response(
+                decision_text,
+                required_fields=['趋势判断', '关键指标', '市场扫描', '操作策略', '目标价位', '止损价位', '综合置信度', '最终决策', '详细理由']
+            ):
+                MonitorLink.log(f"   [市场脉冲层]: {pulse_text[:240]}")
+                MonitorLink.log(f"   [风险筛查层]: {risk_text[:240]}")
+                MonitorLink.log(f"   [决策终审层]: {decision_text[:240]}")
+                verdict = AiConsultant._extract_verdict(decision_text, fallback=algo_side)
+                pulse_analysis = AiConsultant._build_pulse_analysis(pulse_text, algo_side, data, verdict)
+                risk_analysis = AiConsultant._build_risk_analysis(risk_text, data, verdict)
+                decision_analysis = AiConsultant._build_decision_analysis(decision_text, data, market_context, verdict)
+
+                reason = (
+                    f"市场环境{market_context.get('summary', '中性')}，"
+                    f"脉冲层判断{pulse_analysis.get('trend', '震荡整理')}，"
+                    f"风险层提示{risk_analysis.get('risk', '中性风险')}，"
+                    f"终审层给出{verdict}。"
+                )
+
+                try:
+                    from utils.DbUtil import DbUtil
+
+                    DbUtil.add_web_log(
+                        f"[AI决策] {symbol} | Pulse:{pulse_text[:100]}... | "
+                        f"Risk:{risk_text[:100]}... | Final:{decision_text[:100]}... | 状态:{verdict}"
+                    )
+                except Exception as exc:
+                    MonitorLink.log(f"⚠️ [AI联调] 记录日志失败: {exc}")
+
+                return verdict, reason, pulse_analysis, risk_analysis, decision_analysis
+
+        if AiConsultant._is_timeout_fallback(combined_text, task='scan_final'):
+            MonitorLink.log("⚠️ [AI联调] 综合分析超时，使用本地降级结果")
+            return AiConsultant._build_timeout_downgrade(symbol, algo_side, data, market_context, combined_text)
+
+        MonitorLink.log("⚠️ [AI联调] 综合单次分析返回格式不完整，回退三层链路")
+        return AiConsultant._run_legacy_layered_analysis(symbol, algo_side, data, market_context, user_id)
+
+    @staticmethod
+    def _build_combined_analysis_prompt(stock_name: str, symbol: str, algo_side: str, indicators_desc: str) -> str:
+        return f"""你是“持仓综合分析器”。
+请一次性输出三个区块，且必须严格按以下标题和字段顺序返回，不要使用 Markdown，不要输出额外解释。
+先基于指标快照生成“市场脉冲层”，再结合脉冲层生成“风险筛查层”，最后结合前两层生成“决策终审层”。
+
+市场脉冲层:
+趋势判断: ...
+指标共振: ...
+大盘联动: ...
+机会窗口: ...
+一句结论: ...
+建议标签: BUY/SELL/HOLD
+
+风险筛查层:
+情绪温度: ...
+资金流与波动: ...
+主要风险: ...
+仓位建议: ...
+市场环境: ...
+一句结论: ...
+建议标签: BUY/SELL/HOLD
+
+决策终审层:
+趋势判断: ...
+关键指标: ...
+市场扫描: ...
+操作策略: ...
+目标价位: $...
+止损价位: $...
+基本面评分: x/10
+技术面评分: x/10
+资金面评分: x/10
+大盘共振评分: x/10
+综合置信度: x%
+最终决策: BUY/SELL/HOLD
+详细理由: ...
+
+标的: {stock_name} ({symbol})
+算法原始信号: {algo_side}
+
+{indicators_desc}
+"""
+
+    @staticmethod
+    def _extract_layer_block(text: str, label: str, trailing_labels: Tuple[str, ...] = ()) -> str:
+        content = str(text or "").strip()
+        if not content:
+            return ""
+
+        if trailing_labels:
+            trailing_pattern = "|".join(re.escape(item) for item in trailing_labels)
+            pattern = rf"{re.escape(label)}\s*[:：]\s*(.*?)(?=\n(?:{trailing_pattern})\s*[:：]|\Z)"
+        else:
+            pattern = rf"{re.escape(label)}\s*[:：]\s*(.*)\Z"
+
+        match = re.search(pattern, content, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return ""
+
+    @staticmethod
+    def _extract_combined_sections(text: str) -> Optional[Dict[str, str]]:
+        pulse_text = AiConsultant._extract_layer_block(
+            text,
+            "市场脉冲层",
+            ("风险筛查层", "决策终审层"),
+        )
+        risk_text = AiConsultant._extract_layer_block(
+            text,
+            "风险筛查层",
+            ("决策终审层",),
+        )
+        decision_text = AiConsultant._extract_layer_block(text, "决策终审层")
+
+        if not pulse_text or not risk_text or not decision_text:
+            return None
+        return {
+            "pulse": pulse_text,
+            "risk": risk_text,
+            "decision": decision_text,
+        }
+
+    @staticmethod
+    def _is_timeout_fallback(text: str, task: str) -> bool:
+        fallback = AIAnalyst._safe_scan_fallback(task)
+        if not fallback:
+            return False
+        return str(text or "").strip() == fallback.strip()
+
+    @staticmethod
+    def _build_timeout_downgrade(symbol: str, algo_side: str, data: Dict, market_context: Dict, decision_text: str):
+        pulse_text = AIAnalyst._safe_scan_fallback("scan_pulse") or ""
+        risk_text = AIAnalyst._safe_scan_fallback("scan_risk") or ""
+        final_text = decision_text or AIAnalyst._safe_scan_fallback("scan_final") or ""
+
+        verdict = AiConsultant._extract_verdict(final_text, fallback=algo_side)
+        pulse_analysis = AiConsultant._build_pulse_analysis(pulse_text, algo_side, data, verdict)
+        risk_analysis = AiConsultant._build_risk_analysis(risk_text, data, verdict)
+        decision_analysis = AiConsultant._build_decision_analysis(final_text, data, market_context, verdict)
+
+        reason = (
+            f"市场环境{market_context.get('summary', '中性')}，"
+            f"脉冲层判断{pulse_analysis.get('trend', '震荡整理')}，"
+            f"风险层提示{risk_analysis.get('risk', '中性风险')}，"
+            f"终审层给出{verdict}。"
+        )
+        return verdict, reason, pulse_analysis, risk_analysis, decision_analysis
+
+    @staticmethod
+    def _run_legacy_layered_analysis(symbol, algo_side, data, market_context, user_id):
+        stock_name = AiConsultant._lookup_stock_name(symbol)
+        indicators_desc = AiConsultant._indicator_overview(symbol, stock_name, algo_side, data, market_context)
 
         pulse_prompt = f"""你是“市场脉冲层”分析师。
 请只输出 6 行，禁止额外解释，必须使用以下字段：

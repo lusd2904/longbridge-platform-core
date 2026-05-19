@@ -207,7 +207,7 @@ def get_finance_briefings():
         limit = int(request.args.get('limit', 18))
         market = str(request.args.get('market', '') or '').strip().upper()
         items = FinanceBriefingService.get_latest(limit=limit, market=market or None)
-        if not items:
+        if str(request.args.get('refresh') or '').strip().lower() in {'1', 'true', 'yes', 'on'}:
             FinanceBriefingService.refresh_all_markets(user_id=request.user_id)
             items = FinanceBriefingService.get_latest(limit=limit, market=market or None)
         return jsonify({'success': True, 'data': items})

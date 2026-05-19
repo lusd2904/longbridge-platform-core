@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from apps.intelligence.intelligence_shared import boundary as analysis_boundary
+from core.analysis.AiConsultant import AiConsultant
+from core.analysis import ai_analyst
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +52,142 @@ def test_legacy_ai_routes_and_consultant_stop_faking_analysis_results() -> None:
     assert "pulse_text = AiConsultant._fallback_pulse_text" not in consultant_source
     assert "risk_text = AiConsultant._fallback_risk_text" not in consultant_source
     assert "decision_text = AiConsultant._fallback_decision_text" not in consultant_source
+
+
+def test_ai_consultant_uses_one_model_call_on_normal_path(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(AiConsultant, "_lookup_stock_name", staticmethod(lambda symbol: symbol))
+
+    def fake_get_decision(cls, model, prompt, task="general", user_id=1):
+        calls.append(task)
+        return (
+            "市场脉冲层:\n"
+            "趋势判断: 上升\n"
+            "指标共振: OK\n"
+            "大盘联动: OK\n"
+            "机会窗口: OK\n"
+            "一句结论: pulse\n"
+            "建议标签: BUY\n\n"
+            "风险筛查层:\n"
+            "情绪温度: 中性\n"
+            "资金流与波动: OK\n"
+            "主要风险: 低\n"
+            "仓位建议: 轻仓\n"
+            "市场环境: 稳定\n"
+            "一句结论: risk\n"
+            "建议标签: HOLD\n\n"
+            "决策终审层:\n"
+            "趋势判断: 上升\n"
+            "关键指标: OK\n"
+            "市场扫描: OK\n"
+            "操作策略: 观察\n"
+            "目标价位: $1\n"
+            "止损价位: $0.9\n"
+            "基本面评分: 7/10\n"
+            "技术面评分: 7/10\n"
+            "资金面评分: 7/10\n"
+            "大盘共振评分: 7/10\n"
+            "综合置信度: 80%\n"
+            "最终决策: BUY\n"
+            "详细理由: final"
+        )
+
+    monkeypatch.setattr(ai_analyst.AIAnalyst, "get_decision", classmethod(fake_get_decision))
+
+    verdict, reason, pulse, risk, decision = AiConsultant.get_final_decision_with_details(
+        "AAPL.US",
+        "HOLD",
+        {
+            "user_id": 1,
+            "price": 10,
+            "rsi": 55,
+            "macd": 0.1,
+            "atr": 1.2,
+            "roc": 2.0,
+            "support": 9.5,
+            "resistance": 10.5,
+        },
+    )
+
+    assert calls == ["scan_final"]
+    assert verdict == "BUY"
+    assert "终审层给出BUY" in reason
+    assert pulse["role"] == "市场脉冲层"
+    assert risk["role"] == "风险筛查层"
+    assert decision["role"] == "决策终审层"
+
+
+def test_ai_consultant_falls_back_to_legacy_chain_when_combined_format_breaks(monkeypatch) -> None:
+    calls = []
+    first_scan_final = {"seen": False}
+
+    monkeypatch.setattr(AiConsultant, "_lookup_stock_name", staticmethod(lambda symbol: symbol))
+    monkeypatch.setattr(AiConsultant, "_extract_combined_sections", staticmethod(lambda text: None))
+
+    def fake_get_decision(cls, model, prompt, task="general", user_id=1):
+        calls.append(task)
+        if task == "scan_final" and not first_scan_final["seen"]:
+            first_scan_final["seen"] = True
+            return "格式不完整"
+        if task == "scan_pulse":
+            return (
+                "趋势判断: 上升\n"
+                "指标共振: OK\n"
+                "大盘联动: OK\n"
+                "机会窗口: OK\n"
+                "一句结论: pulse\n"
+                "建议标签: BUY"
+            )
+        if task == "scan_risk":
+            return (
+                "情绪温度: 中性\n"
+                "资金流与波动: OK\n"
+                "主要风险: 低\n"
+                "仓位建议: 轻仓\n"
+                "市场环境: 稳定\n"
+                "一句结论: risk\n"
+                "建议标签: HOLD"
+            )
+        return (
+            "趋势判断: 上升\n"
+            "关键指标: OK\n"
+            "市场扫描: OK\n"
+            "操作策略: 观察\n"
+            "目标价位: $1\n"
+            "止损价位: $0.9\n"
+            "基本面评分: 7/10\n"
+            "技术面评分: 7/10\n"
+            "资金面评分: 7/10\n"
+            "大盘共振评分: 7/10\n"
+            "综合置信度: 80%\n"
+            "最终决策: BUY\n"
+            "详细理由: final"
+        )
+
+    monkeypatch.setattr(ai_analyst.AIAnalyst, "get_decision", classmethod(fake_get_decision))
+
+    verdict, reason, pulse, risk, decision = AiConsultant.get_final_decision_with_details(
+        "AAPL.US",
+        "HOLD",
+        {
+            "user_id": 1,
+            "price": 10,
+            "rsi": 55,
+            "macd": 0.1,
+            "atr": 1.2,
+            "roc": 2.0,
+            "support": 9.5,
+            "resistance": 10.5,
+        },
+    )
+
+    assert calls == ["scan_final", "scan_pulse", "scan_risk", "scan_final"]
+    assert verdict == "BUY"
+    assert "终审层给出BUY" in reason
+    assert pulse["role"] == "市场脉冲层"
+    assert risk["role"] == "风险筛查层"
+    assert decision["role"] == "决策终审层"
 
 
 def test_scan_routes_and_trade_engine_stop_using_random_market_fallbacks() -> None:

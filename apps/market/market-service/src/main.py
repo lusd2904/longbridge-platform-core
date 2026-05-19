@@ -90,11 +90,15 @@ app = create_service_app(
 PORT = service_port("REF_MARKET_SERVICE_PORT", 8102)
 _TRADING_SESSION_CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
 _TRADING_SESSION_TTL_SECONDS = 90
+_LIVE_MARKET_CACHE_TTL_SECONDS = 6
+_SYMBOL_OVERVIEW_CACHE_TTL_SECONDS = 10
 _HISTORY_COVERAGE_START_DATE = date(2024, 1, 1)
 _HISTORY_COVERAGE_STATUSES = {"complete", "partial", "missing"}
 _HISTORY_COVERAGE_CACHE_TTL_SECONDS = 15
 _HISTORY_COVERAGE_CACHE_LOCK = threading.Lock()
 _HISTORY_COVERAGE_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_LIVE_MARKET_CACHE_LOCK = threading.Lock()
+_LIVE_MARKET_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 
 
 def _as_bool(value: object) -> bool:
@@ -1110,6 +1114,37 @@ def _serialize_live(payload: Any, *, data_source: str = "longbridge-live", extra
     return body
 
 
+def _live_cache_get(cache_key: Tuple[Any, ...]) -> Optional[Dict[str, Any]]:
+    now = time.time()
+    with _LIVE_MARKET_CACHE_LOCK:
+        cached = _LIVE_MARKET_CACHE.get(cache_key)
+        if not cached:
+            return None
+        if float(cached.get("expires_at") or 0) <= now:
+            _LIVE_MARKET_CACHE.pop(cache_key, None)
+            return None
+        return copy.deepcopy(cached.get("payload"))
+
+
+def _live_cache_set(cache_key: Tuple[Any, ...], payload: Dict[str, Any], ttl_seconds: int) -> Dict[str, Any]:
+    now = time.time()
+    cached_payload = copy.deepcopy(payload)
+    with _LIVE_MARKET_CACHE_LOCK:
+        if len(_LIVE_MARKET_CACHE) > 256:
+            expired_keys = [
+                key
+                for key, value in _LIVE_MARKET_CACHE.items()
+                if float(value.get("expires_at") or 0) <= now
+            ]
+            for key in expired_keys[:64]:
+                _LIVE_MARKET_CACHE.pop(key, None)
+        _LIVE_MARKET_CACHE[cache_key] = {
+            "expires_at": now + max(1, int(ttl_seconds or 1)),
+            "payload": cached_payload,
+        }
+    return copy.deepcopy(cached_payload)
+
+
 def _cached_content_payload(
     *,
     symbol: str,
@@ -1883,6 +1918,11 @@ async def remove_stock_from_pool(
 async def symbol_overview(symbol: str, session: dict = Depends(get_current_session)):
     user_id = int(session["user_id"])
     normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+    cache_key = ("symbol-overview", user_id, normalized_symbol)
+    cached_payload = _live_cache_get(cache_key)
+    if cached_payload:
+        return cached_payload
+
     overview = IndicatorSnapshotService.get_symbol_overview(normalized_symbol, user_id=user_id)
     history = HistoricalMarketDataService.get_history(
         normalized_symbol,
@@ -1901,7 +1941,7 @@ async def symbol_overview(symbol: str, session: dict = Depends(get_current_sessi
     quote_snapshot = QuoteSnapshotService.get_latest(normalized_symbol, max_age_minutes=20)
     content_cache = _content_cache_bundle(normalized_symbol)
 
-    return {
+    payload = {
         "success": True,
         "data": {
             **overview,
@@ -1924,6 +1964,7 @@ async def symbol_overview(symbol: str, session: dict = Depends(get_current_sessi
             ),
         },
     }
+    return _live_cache_set(cache_key, payload, _SYMBOL_OVERVIEW_CACHE_TTL_SECONDS)
 
 
 @app.get("/api/v1/market/runtime")
@@ -2023,9 +2064,16 @@ async def longbridge_quotes(
     symbol: Optional[str] = None,
     session: dict = Depends(get_current_session),
 ):
+    normalized_symbols = _require_symbols(symbols, symbol)
+    cache_key = ("longbridge-quotes", int(session["user_id"]), tuple(normalized_symbols))
+    cached_payload = _live_cache_get(cache_key)
+    if cached_payload:
+        return cached_payload
+
     ctx = _with_quote_context(int(session["user_id"]))
-    payload = ctx.quote(_require_symbols(symbols, symbol))
-    return {"success": True, "data": _serialize_live(payload)}
+    payload = ctx.quote(normalized_symbols)
+    response = {"success": True, "data": _serialize_live(payload)}
+    return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
 
 
 @app.get("/api/v1/market/longbridge/options/quotes")
@@ -2056,9 +2104,16 @@ async def longbridge_warrant_quotes(
 
 @app.get("/api/v1/market/longbridge/depth")
 async def longbridge_depth(symbol: str, session: dict = Depends(get_current_session)):
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+    cache_key = ("longbridge-depth", int(session["user_id"]), normalized_symbol)
+    cached_payload = _live_cache_get(cache_key)
+    if cached_payload:
+        return cached_payload
+
     ctx = _with_quote_context(int(session["user_id"]))
-    payload = ctx.depth(HistoricalMarketDataService.normalize_symbol(symbol))
-    return {"success": True, "data": _serialize_live(payload)}
+    payload = ctx.depth(normalized_symbol)
+    response = {"success": True, "data": _serialize_live(payload)}
+    return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
 
 
 @app.get("/api/v1/market/longbridge/brokers")
@@ -2081,9 +2136,17 @@ async def longbridge_trades(
     count: int = 50,
     session: dict = Depends(get_current_session),
 ):
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+    safe_count = max(1, min(int(count or 50), 1000))
+    cache_key = ("longbridge-trades", int(session["user_id"]), normalized_symbol, safe_count)
+    cached_payload = _live_cache_get(cache_key)
+    if cached_payload:
+        return cached_payload
+
     ctx = _with_quote_context(int(session["user_id"]))
-    payload = ctx.trades(HistoricalMarketDataService.normalize_symbol(symbol), max(1, min(int(count or 50), 1000)))
-    return {"success": True, "data": _serialize_live(payload)}
+    payload = ctx.trades(normalized_symbol, safe_count)
+    response = {"success": True, "data": _serialize_live(payload)}
+    return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
 
 
 @app.get("/api/v1/market/longbridge/intraday")

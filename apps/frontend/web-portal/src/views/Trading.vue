@@ -390,6 +390,9 @@
                   <el-tag size="small" :type="hasLivePushQuote ? 'success' : 'warning'">
                     {{ currentQuoteSourceLabel }}
                   </el-tag>
+                  <el-tag v-if="quoteFetchStatusTag" size="small" :type="quoteFetchStatusTagType">
+                    {{ quoteFetchStatusTag }}
+                  </el-tag>
                   <el-tag v-if="currentQuoteReady" :type="Number(currentQuote?.change ?? 0) >= 0 ? 'success' : 'danger'">
                     {{ formatPercentValue(currentQuote?.changePercent) }}
                   </el-tag>
@@ -808,7 +811,11 @@ const currentQuote = ref(null)
 const quotePullFallback = ref(null)
 const depthPullFallback = ref({})
 const tradesPullFallback = ref([])
+const quoteFetchStatus = ref('idle')
+const depthFetchStatus = ref('idle')
+const tradesFetchStatus = ref('idle')
 const quoteLoading = ref(false)
+const boardLoading = ref(false)
 const marketInsights = ref([])
 const quantStatus = ref({ enabled: false, autoExecute: false, signals: [] })
 const tradeSnapshotMeta = ref({
@@ -837,6 +844,7 @@ const mobileConfirmVisible = ref(false)
 const lastOrderFeedback = ref(null)
 const AUTO_REFRESH_INTERVAL = 15000
 let refreshTimer = null
+let activeSymbolSearchId = 0
 
 const orderForm = ref({
   symbol: '',
@@ -992,21 +1000,38 @@ const currentQuoteReady = computed(() => Boolean(currentQuote.value?.quoteReady)
 const currentQuoteDisplayName = computed(() => currentQuote.value?.name || displaySymbol.value || '待选标的')
 const currentQuoteSourceLabel = computed(() => {
   if (hasLivePushQuote.value) return 'Longbridge Push'
-  if (String(currentQuote.value?.quoteSource || '').includes('longbridge-cli')) return 'Longbridge CLI'
+  const sourceKey = String(currentQuote.value?.quoteSource || '').toLowerCase()
+  if (sourceKey.includes('longbridge-cli')) return 'Longbridge CLI'
+  if (sourceKey.includes('quote-snapshot')) return '行情快照'
+  if (sourceKey.includes('daily-history')) return '日线快照'
+  if (sourceKey.includes('symbol-overview')) return '标的概览'
   if (currentQuoteReady.value) return 'Longbridge Pull'
   return '等待行情'
 })
+const quoteFetchStatusTag = computed(() => {
+  if (quoteFetchStatus.value === 'degraded') return 'Quote 降级'
+  if (quoteFetchStatus.value === 'failed') return 'Quote 失败'
+  return ''
+})
+const quoteFetchStatusTagType = computed(() => (
+  quoteFetchStatus.value === 'failed' ? 'danger' : 'warning'
+))
 const depthSourceLabel = computed(() => {
   if (hasLivePushDepth.value) return 'Longbridge Push'
-  const bidRows = Array.isArray(depthPullFallback.value?.bids || depthPullFallback.value?.bid)
-  const askRows = Array.isArray(depthPullFallback.value?.asks || depthPullFallback.value?.ask)
-  return bidRows || askRows ? 'Longbridge CLI/Pull' : '等待深度'
+  if (depthFetchStatus.value === 'failed') return '深度拉取失败'
+  const bidRows = depthPullFallback.value?.bids || depthPullFallback.value?.bid || []
+  const askRows = depthPullFallback.value?.asks || depthPullFallback.value?.ask || []
+  return (Array.isArray(bidRows) && bidRows.length) || (Array.isArray(askRows) && askRows.length)
+    ? 'Longbridge CLI/Pull'
+    : '等待深度'
 })
 const tradesSourceLabel = computed(() => {
   if (hasLivePushTrades.value) return 'Longbridge Push'
+  if (tradesFetchStatus.value === 'failed') return '逐笔拉取失败'
   return tradesPullFallback.value.length ? 'Longbridge CLI/Pull' : '等待逐笔'
 })
 const marketBoardBadge = computed(() => {
+  if (depthFetchStatus.value === 'failed' || tradesFetchStatus.value === 'failed') return '接口降级'
   if (hasLivePushDepth.value || hasLivePushTrades.value) return '实时推送'
   if (depthBids.value.length || depthAsks.value.length || recentTape.value.length) return 'CLI 补位'
   return '刷新中'
@@ -1020,7 +1045,10 @@ const bestBidAskSummary = computed(() => {
   return `${bid} / ${ask}`
 })
 const marketBoardWaitingText = computed(() => {
-  if (quoteLoading.value) {
+  if (depthFetchStatus.value === 'failed' || tradesFetchStatus.value === 'failed') {
+    return '长桥行情拉取失败，仅展示当前可用数据，可点击刷新重试。'
+  }
+  if (quoteLoading.value || boardLoading.value) {
     return '等待长桥CLI数据/刷新中，收到推送或拉取补位后会自动更新。'
   }
   return '等待长桥CLI数据/刷新中，可点击刷新或保持推送连接。'
@@ -1179,6 +1207,110 @@ const tradingContentTags = computed(() => ([
   { type: contentRefreshing.value ? 'warning' : 'info', text: contentRefreshing.value ? '回源刷新中' : '内容缓存' }
 ]))
 
+const clearSymbolContent = () => {
+  announcementItems.value = []
+  newsItems.value = []
+  topicItems.value = []
+  contentMeta.value = { dataSource: 'content-cache-empty', updatedAt: '', totalCount: 0 }
+}
+
+const pickFirstDefinedValue = (...values) => {
+  for (const value of values) {
+    if (value !== null && value !== undefined && value !== '') {
+      return value
+    }
+  }
+  return undefined
+}
+
+const pickNumericValue = (values = [], { positiveOnly = false } = {}) => {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') {
+      continue
+    }
+    const number = Number(value)
+    if (!Number.isFinite(number)) {
+      continue
+    }
+    if (positiveOnly && number <= 0) {
+      continue
+    }
+    return number
+  }
+  return undefined
+}
+
+const buildOverviewQuotePayload = (overview = {}, symbol = '', fallbackPosition = null) => {
+  const quoteSnapshot = overview?.quoteSnapshot || {}
+  const dailySnapshot = overview?.snapshots?.daily || {}
+  const quotePrice = pickNumericValue([
+    quoteSnapshot?.price,
+    quoteSnapshot?.last_price,
+    dailySnapshot?.closePrice,
+    dailySnapshot?.close_price
+  ], { positiveOnly: true })
+  const prevClose = pickNumericValue([
+    quoteSnapshot?.prevClose,
+    quoteSnapshot?.prev_close,
+    dailySnapshot?.prevClose,
+    dailySnapshot?.prev_close
+  ], { positiveOnly: true })
+  const changePercent = pickNumericValue([
+    quoteSnapshot?.changePercent,
+    quoteSnapshot?.change_percent,
+    dailySnapshot?.changePercent,
+    dailySnapshot?.change_percent
+  ])
+  const change = pickNumericValue([
+    quoteSnapshot?.change,
+    dailySnapshot?.change,
+    Number.isFinite(prevClose) && Number.isFinite(quotePrice) ? quotePrice - prevClose : undefined
+  ])
+  const hasQuoteSnapshotPrice = pickNumericValue([
+    quoteSnapshot?.price,
+    quoteSnapshot?.last_price
+  ], { positiveOnly: true }) !== undefined
+  const hasDailySnapshotPrice = pickNumericValue([
+    dailySnapshot?.closePrice,
+    dailySnapshot?.close_price
+  ], { positiveOnly: true }) !== undefined
+
+  return {
+    symbol,
+    name: overview?.fundamentals?.name || overview?.name || fallbackPosition?.name || symbol,
+    price: quotePrice,
+    last_price: quotePrice,
+    prev_close: prevClose,
+    prevClose: prevClose,
+    change_percent: changePercent,
+    changePercent: changePercent,
+    change,
+    volume: pickNumericValue([quoteSnapshot?.volume, dailySnapshot?.volume]),
+    open: pickNumericValue([quoteSnapshot?.open, dailySnapshot?.openPrice, dailySnapshot?.open_price], { positiveOnly: true }),
+    high: pickNumericValue([quoteSnapshot?.high, dailySnapshot?.highPrice, dailySnapshot?.high_price], { positiveOnly: true }),
+    low: pickNumericValue([quoteSnapshot?.low, dailySnapshot?.lowPrice, dailySnapshot?.low_price], { positiveOnly: true }),
+    session: quoteSnapshot?.session || '',
+    timestamp: pickFirstDefinedValue(
+      quoteSnapshot?.snapshotAt,
+      quoteSnapshot?.snapshot_at,
+      quoteSnapshot?.updatedAt,
+      dailySnapshot?.snapshotDate
+    ) || '',
+    source: hasQuoteSnapshotPrice
+      ? 'quote-snapshot'
+      : hasDailySnapshotPrice
+        ? 'daily-history'
+        : 'symbol-overview'
+  }
+}
+
+const applyOverviewPayload = (overview = {}, symbol = '', fallbackPosition = null) => {
+  const nextQuote = normalizeQuote(buildOverviewQuotePayload(overview, symbol, fallbackPosition))
+  currentQuote.value = nextQuote
+  applyContentBundle(overview?.contentCache || {}, 'content-cache')
+  return nextQuote
+}
+
 const normalizeDepthRows = (rows = []) => {
   const items = Array.isArray(rows) ? rows : []
   return items.slice(0, 5).map((item, index) => ({
@@ -1249,6 +1381,23 @@ const applyContentBundle = (bundle = {}, fallbackSource = 'content-cache') => {
   }
 }
 
+const loadSymbolOverview = async (symbol, { fallbackPosition = null, applyQuote = true } = {}) => {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+  if (!normalizedSymbol) {
+    clearSymbolContent()
+    return {}
+  }
+
+  const overviewRes = await getSymbolOverview(normalizedSymbol)
+  const overviewData = overviewRes?.data || {}
+  if (applyQuote) {
+    applyOverviewPayload(overviewData, normalizedSymbol, fallbackPosition)
+  } else {
+    applyContentBundle(overviewData?.contentCache || {}, 'content-cache')
+  }
+  return overviewData
+}
+
 const refreshContentFeeds = async (symbol) => {
   const normalizedSymbol = String(symbol || '').trim().toUpperCase()
   if (!normalizedSymbol) {
@@ -1298,16 +1447,12 @@ const refreshContentFeeds = async (symbol) => {
 const loadSymbolFeeds = async (symbol, { refreshContent = false } = {}) => {
   const normalizedSymbol = String(symbol || '').trim().toUpperCase()
   if (!normalizedSymbol) {
-    announcementItems.value = []
-    newsItems.value = []
-    topicItems.value = []
-    contentMeta.value = { dataSource: 'content-cache-empty', updatedAt: '', totalCount: 0 }
+    clearSymbolContent()
     return
   }
 
   try {
-    const overviewRes = await getSymbolOverview(normalizedSymbol)
-    applyContentBundle(overviewRes?.data?.contentCache || {}, 'content-cache')
+    await loadSymbolOverview(normalizedSymbol)
   } catch (error) {
     console.error('加载内容缓存失败:', error)
     applyContentBundle({}, 'content-cache-empty')
@@ -1514,11 +1659,19 @@ const getSessionTagType = (session) => {
 
 const searchSymbol = async () => {
   const symbol = displaySymbol.value
+  const searchId = ++activeSymbolSearchId
   if (!symbol) {
     currentQuote.value = null
     quotePullFallback.value = null
     depthPullFallback.value = {}
     tradesPullFallback.value = []
+    quoteFetchStatus.value = 'idle'
+    depthFetchStatus.value = 'idle'
+    tradesFetchStatus.value = 'idle'
+    clearSymbolContent()
+    quoteLoading.value = false
+    boardLoading.value = false
+    contentRefreshing.value = false
     return
   }
 
@@ -1531,50 +1684,154 @@ const searchSymbol = async () => {
   quotePullFallback.value = null
   depthPullFallback.value = {}
   tradesPullFallback.value = []
+  quoteFetchStatus.value = 'loading'
+  depthFetchStatus.value = 'loading'
+  tradesFetchStatus.value = 'loading'
+  clearSymbolContent()
   quoteLoading.value = true
+  boardLoading.value = true
+  contentRefreshing.value = false
   try {
     const params = selectedAccount.value ? { account_id: selectedAccount.value } : {}
-    const [quoteRes, depthRes, tradesRes] = await Promise.allSettled([
-      getStockQuote(symbol, params),
-      getLongbridgeDepth(symbol),
-      getLongbridgeTrades(symbol, { count: 18 })
-    ])
+    let quoteSurfaceReleased = false
+    const releaseQuoteSurface = () => {
+      if (quoteSurfaceReleased || searchId !== activeSymbolSearchId) {
+        return
+      }
+      quoteSurfaceReleased = true
+      if (orderForm.value.orderType === 'limit' && Number(currentQuote.value?.price || 0) > 0) {
+        orderForm.value.price = Number(currentQuote.value.price)
+      }
+      if (isPhoneLayout.value) {
+        activeTradeSection.value = 'quote'
+      }
+      quoteLoading.value = false
+    }
 
-    if (quoteRes.status === 'fulfilled') {
-      const normalizedQuote = normalizeQuote({
-        ...(quoteRes.value?.data || {}),
-        source: quoteRes.value?.data?.quoteSource || quoteRes.value?.data?.quote_source || 'longbridge-cli'
+    const overviewTask = loadSymbolOverview(symbol, { fallbackPosition, applyQuote: false })
+      .then((overviewData) => {
+        if (searchId !== activeSymbolSearchId) {
+          return { ok: false, stale: true }
+        }
+        const overviewQuote = normalizeQuote(buildOverviewQuotePayload(overviewData, symbol, fallbackPosition))
+        const liveQuoteReady = Boolean(
+          quotePullFallback.value &&
+          String(quotePullFallback.value.symbol || '').trim().toUpperCase() === symbol &&
+          quotePullFallback.value.quoteReady
+        )
+        if (!liveQuoteReady) {
+          currentQuote.value = overviewQuote
+          releaseQuoteSurface()
+        }
+        return { ok: true, overviewData, quote: overviewQuote }
       })
-      quotePullFallback.value = normalizedQuote
-      currentQuote.value = normalizedQuote
-    } else if (fallbackPosition) {
-      currentQuote.value = normalizeQuote({
-        symbol,
-        name: fallbackPosition.name || symbol
+      .catch((error) => {
+        console.warn('加载标的概览失败:', error)
+        return { ok: false, error }
       })
-    } else {
-      currentQuote.value = normalizeQuote({ symbol, name: symbol })
+
+    const quoteTask = getStockQuote(symbol, params)
+      .then((quoteRes) => {
+        if (searchId !== activeSymbolSearchId) {
+          return { ok: false, stale: true }
+        }
+        const normalizedQuote = normalizeQuote({
+          ...(quoteRes?.data || {}),
+          symbol,
+          name: currentQuote.value?.name || fallbackPosition?.name || symbol,
+          source: quoteRes?.data?.quoteSource || quoteRes?.data?.quote_source || 'longbridge-cli'
+        })
+        quotePullFallback.value = normalizedQuote
+        currentQuote.value = normalizedQuote
+        quoteFetchStatus.value = 'success'
+        releaseQuoteSurface()
+        return { ok: true }
+      })
+      .catch((error) => {
+        console.warn('加载实时 quote 失败:', error)
+        return { ok: false, error }
+      })
+
+    const depthTask = getLongbridgeDepth(symbol)
+      .then((depthRes) => {
+        if (searchId !== activeSymbolSearchId) {
+          return
+        }
+        depthFetchStatus.value = 'success'
+        depthPullFallback.value = depthRes?.data?.payload || depthRes?.data || {}
+      })
+      .catch((error) => {
+        if (searchId === activeSymbolSearchId) {
+          depthFetchStatus.value = 'failed'
+        }
+        console.warn('加载盘口失败:', error)
+      })
+
+    const tradesTask = getLongbridgeTrades(symbol, { count: 18 })
+      .then((tradesRes) => {
+        if (searchId !== activeSymbolSearchId) {
+          return
+        }
+        tradesFetchStatus.value = 'success'
+        tradesPullFallback.value = Array.isArray(tradesRes?.data?.payload)
+          ? tradesRes.data.payload
+          : Array.isArray(tradesRes?.data)
+            ? tradesRes.data
+            : []
+      })
+      .catch((error) => {
+        if (searchId === activeSymbolSearchId) {
+          tradesFetchStatus.value = 'failed'
+        }
+        console.warn('加载逐笔失败:', error)
+      })
+
+    const overviewState = await overviewTask
+    const contentTask = overviewState.ok && !contentCacheReady.value
+      ? (async () => {
+          contentRefreshing.value = true
+          try {
+            await refreshContentFeeds(symbol)
+          } finally {
+            if (searchId === activeSymbolSearchId) {
+              contentRefreshing.value = false
+            }
+          }
+        })()
+      : Promise.resolve()
+    const quoteState = await quoteTask
+
+    if (searchId !== activeSymbolSearchId) {
+      return
     }
 
-    depthPullFallback.value = depthRes.status === 'fulfilled'
-      ? (depthRes.value?.data?.payload || depthRes.value?.data || {})
-      : {}
-    tradesPullFallback.value = tradesRes.status === 'fulfilled'
-      ? (Array.isArray(tradesRes.value?.data?.payload) ? tradesRes.value.data.payload : Array.isArray(tradesRes.value?.data) ? tradesRes.value.data : [])
-      : []
+    quoteFetchStatus.value = quoteState.ok
+      ? 'success'
+      : overviewState.ok && currentQuoteReady.value
+        ? 'degraded'
+        : 'failed'
 
-    await loadSymbolFeeds(symbol)
-    if (orderForm.value.orderType === 'limit' && Number(currentQuote.value?.price || 0) > 0) {
-      orderForm.value.price = Number(currentQuote.value.price)
+    if (!overviewState.ok && !quoteState.ok) {
+      currentQuote.value = fallbackPosition
+        ? normalizeQuote({ symbol, name: fallbackPosition.name || symbol })
+        : normalizeQuote({ symbol, name: symbol })
+      throw overviewState.error || quoteState.error
     }
-    if (isPhoneLayout.value) {
-      activeTradeSection.value = 'quote'
-    }
+
+    releaseQuoteSurface()
+    await Promise.allSettled([depthTask, tradesTask, contentTask])
   } catch (error) {
+    if (searchId !== activeSymbolSearchId) {
+      return
+    }
     console.error('搜索股票失败:', error)
     ElMessage.error('获取行情失败，请检查股票代码')
   } finally {
+    if (searchId !== activeSymbolSearchId) {
+      return
+    }
     quoteLoading.value = false
+    boardLoading.value = false
   }
 }
 

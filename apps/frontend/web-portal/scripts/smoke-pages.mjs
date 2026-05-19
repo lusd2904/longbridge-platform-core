@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { createProgressReporter, sanitizeText, withStepTimeout } from './smoke-helpers.mjs'
+import { createProgressReporter, sanitizeText, waitForPageStable, withStepTimeout } from './smoke-helpers.mjs'
 import { collectRenderableSuggestionTexts, hasExpectedSuggestion } from '../src/utils/aiAnalysisSuggestions.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -18,6 +18,7 @@ const username = process.env.SMOKE_USERNAME || 'admin'
 const password = process.env.SMOKE_PASSWORD || 'admin123'
 const PAGE_TIMEOUT_MS = Number(process.env.SMOKE_PAGE_TIMEOUT_MS || 60000)
 const ACTION_TIMEOUT_MS = Number(process.env.SMOKE_ACTION_TIMEOUT_MS || 60000)
+const OPTIONAL_ACTION_TIMEOUT_MS = Number(process.env.SMOKE_OPTIONAL_ACTION_TIMEOUT_MS || 1200)
 const RUN_MOBILE_SMOKE = process.env.SMOKE_INCLUDE_MOBILE === '1'
 const DEFAULT_CHROME_EXECUTABLE = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const progress = createProgressReporter({
@@ -48,16 +49,84 @@ const readSuggestionTexts = async (suggestionsLocator) => {
   return collectRenderableSuggestionTexts(texts)
 }
 
-const waitForSuggestionTexts = async (page, suggestionsLocator, timeoutMs = 8000) => {
+const verifyAiAnalysisSuggestions = async (page, search, keyword, expectedSymbols) => {
+  await search.fill(keyword)
+  const suggestions = page.locator('.ai-target-suggest-popper .el-autocomplete-suggestion li')
   await page.waitForFunction(
-    (selector) => {
-      const nodes = Array.from(document.querySelectorAll(selector))
-      return nodes.some((node) => (node.textContent || '').replace(/\s+/g, ' ').trim().length > 0)
+    ({ selector, expected }) => {
+      const suggestionTexts = Array.from(document.querySelectorAll(selector))
+        .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim().toUpperCase())
+        .filter(Boolean)
+
+      return expected.some((candidate) => {
+        const normalizedCandidate = String(candidate || '').trim().toUpperCase()
+        return normalizedCandidate && suggestionTexts.some((text) => text.includes(normalizedCandidate))
+      })
     },
-    '.ai-target-suggest-popper .el-autocomplete-suggestion li',
+    {
+      selector: '.ai-target-suggest-popper .el-autocomplete-suggestion li',
+      expected: expectedSymbols
+    },
+    { timeout: 8000 }
+  )
+  const suggestionTexts = await readSuggestionTexts(suggestions)
+  if (!suggestionTexts.length) {
+    throw new Error(`AI analysis symbol autocomplete did not show suggestions for ${keyword}`)
+  }
+  if (!hasExpectedSuggestion(suggestionTexts, expectedSymbols)) {
+    throw new Error(`AI analysis suggestions missing expected targets for ${keyword}: ${suggestionTexts.join(' | ')}`)
+  }
+  return suggestionTexts
+}
+
+const waitForAiAnalysisScanState = async (page, timeoutMs = 8000) => {
+  await page.waitForFunction(
+    () => {
+      const selectors = [
+        '.scan-loading-panel',
+        '.scan-inline-status',
+        '.analysis-scan-status.is-running'
+      ]
+
+      return selectors.some((selector) => {
+        const node = document.querySelector(selector)
+        if (!node) {
+          return false
+        }
+
+        const style = window.getComputedStyle(node)
+        return style.visibility !== 'hidden' && style.display !== 'none'
+      })
+    },
+    undefined,
     { timeout: timeoutMs }
   )
-  return readSuggestionTexts(suggestionsLocator)
+}
+
+const waitForAiAnalysisScanOutcome = async (page, timeoutMs = 45000) => {
+  await page.waitForFunction(
+    () => {
+      const status = document.querySelector('.analysis-scan-status')
+      const statusText = (status?.textContent || '').replace(/\s+/g, ' ').trim()
+      const hasCompletedStatus = status?.classList.contains('is-complete') || statusText.includes('最近一次扫描已完成')
+      const hasFailedStatus = status?.classList.contains('is-error') || statusText.includes('最近一次扫描失败')
+      const hasVerdict = Boolean(document.querySelector('.verdict-row-card'))
+      const hasScannedTarget = Array.from(document.querySelectorAll('.target-decision'))
+        .some((node) => {
+          const text = (node.textContent || '').replace(/\s+/g, ' ').trim()
+          return text && text !== '未扫描'
+        })
+
+      return hasCompletedStatus || hasFailedStatus || hasVerdict || hasScannedTarget
+    },
+    undefined,
+    { timeout: timeoutMs }
+  )
+
+  const statusText = sanitizeText(await page.locator('.analysis-scan-status').innerText().catch(() => ''))
+  if (statusText.includes('最近一次扫描失败')) {
+    throw new Error(`AI analysis scan failed: ${statusText}`)
+  }
 }
 
 const fileExists = async (candidate) => {
@@ -81,7 +150,7 @@ const resolveBrowserLaunchOptions = async () => {
 }
 
 const safeClick = async (page, target, options = {}) => {
-  const timeout = options.timeout ?? 5000
+  const timeout = options.timeout ?? OPTIONAL_ACTION_TIMEOUT_MS
   try {
     await target.waitFor({ state: 'visible', timeout })
     await target.click({ timeout })
@@ -107,9 +176,13 @@ const clickTabByText = async (page, text, options = {}) => {
   return safeClick(page, page.locator('.el-tabs__item').filter({ hasText: text }).first(), options)
 }
 
-const waitForStable = async (page, ms = 1200) => {
-  await page.waitForLoadState('domcontentloaded')
-  await page.waitForTimeout(ms)
+const waitForStable = async (page, options = {}) => waitForPageStable(page, options)
+
+const waitForRoutePath = async (page, matcher, timeoutMs = 4000) => {
+  await page.waitForURL((url) => {
+    const pathname = new URL(url).pathname
+    return typeof matcher === 'function' ? matcher(pathname) : matcher.test(pathname)
+  }, { timeout: timeoutMs })
 }
 
 const closeBrowserQuietly = async (browserInstance) => {
@@ -152,10 +225,18 @@ const collectPageSnapshot = async (page, name, scenario = 'desktop') => {
   }
 }
 
+const normalizePageAction = (action) => {
+  if (!action) {
+    return {}
+  }
+  return typeof action === 'function' ? { blocking: action } : action
+}
+
 const visitPage = async (page, route, name, action, scenario = 'desktop') => {
   const startedAt = Date.now()
   const stepPrefix = `${scenario}:${name}`
   progress(`start ${stepPrefix} ${route}`)
+  const actionPlan = normalizePageAction(action)
 
   await withStepTimeout(
     page.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded' }),
@@ -165,26 +246,46 @@ const visitPage = async (page, route, name, action, scenario = 'desktop') => {
     waitForStable(page),
     { label: `${stepPrefix}:stabilize`, timeoutMs: ACTION_TIMEOUT_MS }
   )
+  const initialReadyDurationMs = Date.now() - startedAt
 
   const result = {
     name,
     route,
     ok: true,
     actions: [],
+    readinessDurationMs: initialReadyDurationMs,
+    initialReadyDurationMs,
+    actionDurationMs: 0,
+    snapshotDurationMs: 0,
+    verificationDurationMs: 0,
+    verificationActions: [],
     durationMs: 0
   }
 
   try {
-    if (action) {
+    if (actionPlan.blocking) {
+      const actionStartedAt = Date.now()
       result.actions = await withStepTimeout(
-        action(page),
+        actionPlan.blocking(page),
         { label: `${stepPrefix}:actions`, timeoutMs: ACTION_TIMEOUT_MS }
       )
+      result.actionDurationMs = Date.now() - actionStartedAt
     }
+    const snapshotStartedAt = Date.now()
     Object.assign(result, await withStepTimeout(
       collectPageSnapshot(page, name, scenario),
       { label: `${stepPrefix}:snapshot`, timeoutMs: 8000 }
     ))
+    result.snapshotDurationMs = Date.now() - snapshotStartedAt
+
+    if (actionPlan.afterReady) {
+      const verificationStartedAt = Date.now()
+      result.verificationActions = await withStepTimeout(
+        actionPlan.afterReady(page),
+        { label: `${stepPrefix}:verify`, timeoutMs: ACTION_TIMEOUT_MS }
+      )
+      result.verificationDurationMs = Date.now() - verificationStartedAt
+    }
   } catch (error) {
     result.ok = false
     result.error = error?.stack || error?.message || String(error)
@@ -192,7 +293,7 @@ const visitPage = async (page, route, name, action, scenario = 'desktop') => {
   } finally {
     result.durationMs = Date.now() - startedAt
     results.push(result)
-    progress(`${result.ok ? 'done' : 'fail'} ${stepPrefix} ${result.durationMs}ms`)
+    progress(`${result.ok ? 'done' : 'fail'} ${stepPrefix} ready=${result.initialReadyDurationMs}ms actions=${result.actionDurationMs}ms snapshot=${result.snapshotDurationMs}ms total=${result.durationMs}ms verify=${result.verificationDurationMs}ms`)
   }
 }
 
@@ -210,33 +311,40 @@ const pageActions = {
     }
     return actions
   },
-  market: async (page) => {
-    const actions = []
-    if (await clickByRole(page, 'radio', 'A股')) {
-      actions.push('switched market CN')
-      await waitForStable(page)
+  market: {
+    blocking: async (page) => {
+      const actions = []
+      if (await clickByRole(page, 'radio', 'A股')) {
+        actions.push('switched market CN')
+        await waitForStable(page, { minimumMs: 240, quietWindowMs: 220, timeoutMs: 2400 })
+      }
+      if (await clickByRole(page, 'radio', '港股')) {
+        actions.push('switched market HK')
+        await waitForStable(page, { minimumMs: 240, quietWindowMs: 220, timeoutMs: 2400 })
+      }
+      if (await clickByRole(page, 'radio', '美股')) {
+        actions.push('switched market US')
+        await waitForStable(page, { minimumMs: 240, quietWindowMs: 220, timeoutMs: 2400 })
+      }
+      const listSegment = page.locator('.segment-button').filter({ hasText: '列表' }).first()
+      if (await safeClick(page, listSegment)) {
+        actions.push('opened market mobile list segment')
+        await waitForStable(page, { minimumMs: 180, quietWindowMs: 180, timeoutMs: 1800 })
+      }
+      return actions
+    },
+    afterReady: async (page) => {
+      const actions = []
+      const detailButton = page.locator('button').filter({ hasText: '详情' }).first()
+      if (await safeClick(page, detailButton, { timeout: 2500 })) {
+        await waitForRoutePath(page, /^\/symbol\/[^/]+$/, 4000)
+        actions.push('verified first symbol detail route')
+        await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {})
+        await waitForRoutePath(page, (pathname) => pathname === '/market', 4000)
+        await waitForStable(page, { quietWindowMs: 180, timeoutMs: 1600 })
+      }
+      return actions
     }
-    if (await clickByRole(page, 'radio', '港股')) {
-      actions.push('switched market HK')
-      await waitForStable(page)
-    }
-    if (await clickByRole(page, 'radio', '美股')) {
-      actions.push('switched market US')
-      await waitForStable(page)
-    }
-    const listSegment = page.locator('.segment-button').filter({ hasText: '列表' }).first()
-    if (await safeClick(page, listSegment)) {
-      actions.push('opened market mobile list segment')
-      await waitForStable(page, 800)
-    }
-    const detailButton = page.locator('button').filter({ hasText: '详情' }).first()
-    if (await safeClick(page, detailButton)) {
-      actions.push('opened first symbol detail')
-      await waitForStable(page)
-      await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {})
-      await waitForStable(page)
-    }
-    return actions
   },
   stockPool: async (page) => {
     const actions = []
@@ -273,31 +381,20 @@ const pageActions = {
     const actions = []
     const search = page.getByPlaceholder('输入代码 / 名称，如 NVDA、NVDL')
     if (await search.isVisible().catch(() => false)) {
-      await search.fill('nvda')
-      actions.push('filled analysis search nvda')
+      const nvdaSuggestions = await verifyAiAnalysisSuggestions(page, search, 'nvda', ['NVDA.US', 'NVDL.US'])
+      actions.push(`verified ${nvdaSuggestions.length} symbol suggestions for nvda`)
 
-      const suggestions = page.locator('.ai-target-suggest-popper .el-autocomplete-suggestion li')
-      const suggestionTexts = await waitForSuggestionTexts(page, suggestions)
-      if (!suggestionTexts.length) {
-        throw new Error('AI analysis symbol autocomplete did not show suggestions')
-      }
-      if (!hasExpectedSuggestion(suggestionTexts, ['NVDA.US', 'NVDL.US'])) {
-        throw new Error(`AI analysis suggestions missing expected targets: ${suggestionTexts.join(' | ')}`)
-      }
-      actions.push(`verified ${suggestionTexts.length} symbol suggestions`)
+      const nvdlSuggestions = await verifyAiAnalysisSuggestions(page, search, 'nvdl', ['NVDL.US'])
+      actions.push(`verified ${nvdlSuggestions.length} symbol suggestions for nvdl`)
 
       await page.keyboard.press('Escape')
       const scanButton = page.locator('button').filter({ hasText: /扫描/ }).first()
       if (await safeClick(page, scanButton, { timeout: 8000 })) {
         actions.push('clicked scan symbols')
-        await page.waitForTimeout(400)
-        const hasLoadingPanel = await page.locator('.scan-loading-panel').isVisible().catch(() => false)
-        const hasInlineLoading = await page.locator('.scan-inline-status').isVisible().catch(() => false)
-        if (!hasLoadingPanel || !hasInlineLoading) {
-          throw new Error('AI analysis scan loading state was not visible')
-        }
-        actions.push('verified scan loading state')
-        await page.locator('.scan-loading-panel').waitFor({ state: 'hidden', timeout: 45000 }).catch(() => {})
+        await waitForAiAnalysisScanState(page)
+        actions.push('verified scan triggered state')
+        await waitForAiAnalysisScanOutcome(page)
+        actions.push('verified scan completed state')
       }
     }
     if (await clickByRole(page, 'button', '刷新标的')) {
@@ -328,13 +425,11 @@ const pageActions = {
       actions.push('switched trading mobile segment positions')
       await waitForStable(page, 800)
     }
-    if (await clickFirstButtonByText(page, '买入')) {
-      actions.push('clicked quick buy')
-      await waitForStable(page, 500)
+    if (await page.locator('button, label').filter({ hasText: '买入' }).first().isVisible().catch(() => false)) {
+      actions.push('verified buy controls visible without submitting')
     }
-    if (await clickFirstButtonByText(page, '卖出')) {
-      actions.push('clicked quick sell')
-      await waitForStable(page, 500)
+    if (await page.locator('button, label').filter({ hasText: '卖出' }).first().isVisible().catch(() => false)) {
+      actions.push('verified sell controls visible without submitting')
     }
     return actions
   },
@@ -484,15 +579,15 @@ const pageActions = {
     const actions = []
     if (await clickByRole(page, 'radio', '美股')) {
       actions.push('selected news US')
-      await waitForStable(page)
+      await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
     if (await clickByRole(page, 'radio', 'A股')) {
       actions.push('selected news CN')
-      await waitForStable(page)
+      await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
     if (await clickByRole(page, 'radio', '港股')) {
       actions.push('selected news HK')
-      await waitForStable(page)
+      await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
     return actions
   },
@@ -512,19 +607,19 @@ const pageActions = {
     const actions = []
     if (await clickByRole(page, 'button', /刷新/)) {
       actions.push('refreshed notifications')
-      await waitForStable(page, 1000)
+      await waitForStable(page, { minimumMs: 220, quietWindowMs: 180, timeoutMs: 1400 })
     }
     if (await clickByRole(page, 'radio', '交易')) {
       actions.push('filtered trade notifications')
-      await waitForStable(page, 1000)
+      await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
     if (await clickByRole(page, 'radio', '风控')) {
       actions.push('filtered risk notifications')
-      await waitForStable(page, 1000)
+      await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
     if (await clickByRole(page, 'radio', '系统')) {
       actions.push('filtered system notifications')
-      await waitForStable(page, 1000)
+      await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
     }
     return actions
   },
@@ -705,7 +800,7 @@ const summaryLines = [
 
 for (const pageResult of results) {
   summaryLines.push(
-    `${pageResult.ok ? 'OK' : 'FAIL'} ${pageResult.name} ${pageResult.route} ${pageResult.durationMs}ms actions=${pageResult.actions.length}`
+    `${pageResult.ok ? 'OK' : 'FAIL'} ${pageResult.name} ${pageResult.route} ready=${pageResult.initialReadyDurationMs ?? pageResult.readinessDurationMs}ms actionMs=${pageResult.actionDurationMs || 0}ms snapshotMs=${pageResult.snapshotDurationMs || 0}ms total=${pageResult.durationMs}ms verify=${pageResult.verificationDurationMs}ms actions=${pageResult.actions.length}+${pageResult.verificationActions.length}`
   )
 }
 

@@ -105,6 +105,16 @@
         :closable="false"
         class="analysis-status-alert"
       />
+
+      <div
+        v-if="scanStatusVisible"
+        class="analysis-scan-status"
+        :class="`is-${scanStatusTone}`"
+      >
+        <span>{{ scanStatusLabel }}</span>
+        <strong>{{ scanStatusHeadline }}</strong>
+        <small>{{ scanStatusDetail }}</small>
+      </div>
     </section>
 
     <MobileSegmentControl
@@ -599,6 +609,32 @@ const scanProgressText = computed(() => {
   const suffix = scanningSymbols.value.length > 4 ? ` 等 ${scanningSymbols.value.length} 个标的` : ''
   return `${preview}${suffix}`
 })
+const scanStatusVisible = computed(() => analyzing.value || Boolean(analysisErrorMessage.value) || Boolean(lastScanAt.value))
+const scanStatusTone = computed(() => {
+  if (analyzing.value) return 'running'
+  if (analysisErrorMessage.value) return 'error'
+  return 'complete'
+})
+const scanStatusLabel = computed(() => {
+  if (analyzing.value) return '状态'
+  if (analysisErrorMessage.value) return '结果'
+  return '最近完成'
+})
+const scanStatusHeadline = computed(() => {
+  if (analyzing.value) return '扫描进行中'
+  if (analysisErrorMessage.value) return '最近一次扫描失败'
+  return '最近一次扫描已完成'
+})
+const scanStatusDetail = computed(() => {
+  if (analyzing.value) return scanProgressText.value
+  if (analysisErrorMessage.value) return analysisErrorMessage.value
+
+  const finishedAt = formatDate(lastScanAt.value)
+  const summary = analyzedCount.value
+    ? `已收录 ${analyzedCount.value} 个扫描结果`
+    : '已返回最新扫描结果'
+  return finishedAt ? `${finishedAt} · ${summary}` : summary
+})
 const emptyTargetMessage = computed(() => {
   if (loading.value) return '正在加载标的'
   if (manualSearchTarget.value) return `未在当前列表命中，可直接扫描 ${manualSearchTarget.value.symbol}`
@@ -1068,11 +1104,15 @@ const scanTargets = async (targetList) => {
     }
   } catch (error) {
     const message = error?.businessMessage || error?.data?.error || error.message || 'AI 研判失败'
-    const abortedByNavigation = pageUnmounted.value && /abort|cancel|failed to fetch/i.test(message)
-    if (abortedByNavigation) {
+    const recoverableNetworkFailure = /abort|cancel|failed to fetch/i.test(message)
+    if (pageUnmounted.value && recoverableNetworkFailure) {
       return
     }
-    console.error('AI 研判失败:', error)
+    if (recoverableNetworkFailure) {
+      console.warn('AI 研判请求未完成:', message)
+    } else {
+      console.error('AI 研判失败:', error)
+    }
     analysisErrorMessage.value = message
     ElMessage.error(message)
   } finally {
@@ -1335,6 +1375,48 @@ onBeforeUnmount(() => {
 .toolbar-actions :deep(.refresh-targets-button.is-disabled) {
   opacity: 0.62;
   color: var(--text-secondary) !important;
+}
+
+.analysis-scan-status {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  border: 1px solid var(--ai-border);
+  background: var(--ai-surface);
+}
+
+.analysis-scan-status span {
+  color: var(--ai-text-muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.analysis-scan-status strong {
+  color: var(--text-emphasis);
+  font-size: 15px;
+}
+
+.analysis-scan-status small {
+  color: var(--ai-text-secondary);
+  line-height: 1.5;
+}
+
+.analysis-scan-status.is-running {
+  border-color: color-mix(in srgb, var(--el-color-primary) 36%, var(--ai-border));
+  background: color-mix(in srgb, var(--el-color-primary-light-9) 55%, var(--ai-surface));
+}
+
+.analysis-scan-status.is-complete {
+  border-color: color-mix(in srgb, var(--el-color-success) 32%, var(--ai-border));
+  background: color-mix(in srgb, var(--el-color-success-light-9) 58%, var(--ai-surface));
+}
+
+.analysis-scan-status.is-error {
+  border-color: color-mix(in srgb, var(--el-color-danger) 32%, var(--ai-border));
+  background: color-mix(in srgb, var(--el-color-danger-light-9) 60%, var(--ai-surface));
 }
 
 .search-input :deep(.el-input__wrapper) {

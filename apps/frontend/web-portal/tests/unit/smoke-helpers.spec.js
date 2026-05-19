@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { withStepTimeout } from '../../scripts/smoke-helpers.mjs'
+import { normalizePageStabilityOptions, waitForPageStable, withStepTimeout } from '../../scripts/smoke-helpers.mjs'
 import {
   collectRenderableSuggestionTexts,
   filterLocalSuggestionMatches,
@@ -25,6 +25,41 @@ describe('withStepTimeout', () => {
       new Promise(() => {}),
       { label: 'mobile:trading:actions', timeoutMs: 10 }
     )).rejects.toThrow('mobile:trading:actions timed out after 10ms')
+  })
+})
+
+describe('page stability helpers', () => {
+  it('uses a short quiet-window strategy by default and preserves explicit minimum waits', () => {
+    expect(normalizePageStabilityOptions()).toEqual({
+      loadState: 'domcontentloaded',
+      minimumMs: 0,
+      quietWindowMs: 220,
+      timeoutMs: 2000
+    })
+
+    expect(normalizePageStabilityOptions(1200)).toEqual({
+      loadState: 'domcontentloaded',
+      minimumMs: 1200,
+      quietWindowMs: 220,
+      timeoutMs: 2400
+    })
+  })
+
+  it('waits for domcontentloaded, the optional minimum delay, and a quiet DOM window', async () => {
+    const calls = []
+    const page = {
+      waitForLoadState: async (state) => calls.push(['load', state]),
+      waitForTimeout: async (ms) => calls.push(['timeout', ms]),
+      waitForFunction: async (_fn, args, options) => calls.push(['function', args, options])
+    }
+
+    await waitForPageStable(page, { minimumMs: 180, quietWindowMs: 120, timeoutMs: 900 })
+
+    expect(calls).toEqual([
+      ['load', 'domcontentloaded'],
+      ['timeout', 180],
+      ['function', { quietWindowMs: 120 }, { timeout: 900 }]
+    ])
   })
 })
 
@@ -59,6 +94,31 @@ describe('aiAnalysisSuggestions', () => {
     )
 
     expect(ranked.map((item) => item.symbol)).toEqual(['NVDA.US', 'NVDL.US', 'NVDS.US'])
+  })
+
+  it('keeps exact base-symbol suggestions stable for nvda and nvdl inputs', () => {
+    const targets = [
+      { symbol: 'NVDA.US', name: 'NVIDIA Corporation', market: 'US' },
+      { symbol: 'NVDL.US', name: 'GraniteShares 2x Long NVDA Daily ETF', market: 'US' }
+    ]
+
+    const nvdaRanked = rankSuggestionMatches(
+      mergeSuggestionSources(
+        [normalizeSuggestionEntry({ symbol: 'NVDA.US', name: 'NVDA.US', market: 'US' })],
+        filterLocalSuggestionMatches(targets, 'nvda')
+      ),
+      'nvda'
+    )
+    const nvdlRanked = rankSuggestionMatches(
+      mergeSuggestionSources(
+        [normalizeSuggestionEntry({ symbol: 'NVDL.US', name: 'NVDL.US', market: 'US' })],
+        filterLocalSuggestionMatches(targets, 'nvdl')
+      ),
+      'nvdl'
+    )
+
+    expect(nvdaRanked.map((item) => item.symbol).slice(0, 2)).toEqual(['NVDA.US', 'NVDL.US'])
+    expect(nvdlRanked[0]?.symbol).toBe('NVDL.US')
   })
 
   it('treats empty rendered suggestion text as absent while still matching expected targets', () => {

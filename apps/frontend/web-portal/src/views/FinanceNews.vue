@@ -114,6 +114,7 @@ const financeSourceSummary = computed(() => buildFinanceBriefingReadModelSummary
 const financeSourceTags = computed(() => ([
   ...(financeSourceSummary.value.tags || [])
     .filter((tag) => !/^\d+\s*条$/.test(String(tag?.text || '').trim())),
+  ...(loading.value && items.value.length ? [{ text: '后台刷新中', type: 'warning' }] : []),
   { text: `${filteredItems.value.length} 条`, type: 'success' },
   { text: focusSymbol.value ? `关注 ${focusSymbol.value}` : '全部标的', type: 'info' }
 ]))
@@ -283,7 +284,7 @@ const dedupeItems = (list = []) => {
 }
 
 const applyLocalFilters = () => {
-  // 本页默认读取聚合结果，输入框只做本地筛选。
+  // 关注标的仍然只做本地筛选；市场维度由后端过滤，避免固定 limit 把目标市场挤掉。
 }
 
 const handleMarketChange = () => {
@@ -294,8 +295,10 @@ const loadData = async () => {
   loading.value = true
   try {
     const params = {
-      limit: selectedMarket.value === 'ALL' ? 60 : 30,
-      ...(selectedMarket.value !== 'ALL' ? { market: selectedMarket.value } : {})
+      limit: 60
+    }
+    if (selectedMarket.value !== 'ALL') {
+      params.market = selectedMarket.value
     }
     const res = await getFinanceBriefings(params)
     items.value = dedupeItems(res?.data || [])

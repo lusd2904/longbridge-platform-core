@@ -657,34 +657,59 @@ const formatInsightOption = (item = {}) => {
   return `${item.generatedAt || '--'}${suffix}`
 }
 
+const normalizeInsightResponse = (response) => ({
+  data: Array.isArray(response?.data) ? response.data : [],
+  meta: response?.meta && typeof response.meta === 'object' ? response.meta : {}
+})
+
 const loadMarketInsights = async ({ resetSelection = false } = {}) => {
   const requestId = insightRequestId + 1
   insightRequestId = requestId
   const market = selectedMarket.value
-  const requestedGeneratedAt = selectedInsightTime.value
-  const historyRes = await getMarketInsightHistory({
-    market,
-    limit: 24
-  })
+  const requestedGeneratedAt = resetSelection ? '' : selectedInsightTime.value
+  const [historyRes, insightRes] = await Promise.all([
+    getMarketInsightHistory({
+      market,
+      limit: 24
+    }),
+    getMarketInsightsAtTime(
+      requestedGeneratedAt
+        ? { market, generated_at: requestedGeneratedAt }
+        : { market }
+    )
+  ])
   if (requestId !== insightRequestId || market !== selectedMarket.value) {
     return
   }
+
   insightHistory.value = Array.isArray(historyRes?.data) ? historyRes.data : []
+  const selectedHistoryEntry = insightHistory.value.find((item) => item.generatedAt === requestedGeneratedAt)
+  const nextGeneratedAt = resetSelection || !selectedHistoryEntry
+    ? (insightHistory.value[0]?.generatedAt || '')
+    : requestedGeneratedAt
 
-  if (resetSelection || !insightHistory.value.some((item) => item.generatedAt === requestedGeneratedAt)) {
-    selectedInsightTime.value = insightHistory.value[0]?.generatedAt || ''
-  }
+  selectedInsightTime.value = nextGeneratedAt
 
-  const insightRes = await getMarketInsightsAtTime(
-    selectedInsightTime.value
-      ? { market, generated_at: selectedInsightTime.value }
-      : { market }
-  )
-  if (requestId !== insightRequestId || market !== selectedMarket.value) {
+  if (requestedGeneratedAt && nextGeneratedAt && nextGeneratedAt !== requestedGeneratedAt) {
+    const fallbackRes = await getMarketInsightsAtTime({ market, generated_at: nextGeneratedAt })
+    if (requestId !== insightRequestId || market !== selectedMarket.value) {
+      return
+    }
+    const normalizedFallback = normalizeInsightResponse(fallbackRes)
+    marketInsights.value = normalizedFallback.data
+    marketInsightMeta.value = normalizedFallback.meta
     return
   }
-  marketInsights.value = Array.isArray(insightRes?.data) ? insightRes.data : []
-  marketInsightMeta.value = insightRes?.meta && typeof insightRes.meta === 'object' ? insightRes.meta : {}
+
+  if (requestedGeneratedAt && !nextGeneratedAt) {
+    marketInsights.value = []
+    marketInsightMeta.value = {}
+    return
+  }
+
+  const normalizedInsight = normalizeInsightResponse(insightRes)
+  marketInsights.value = normalizedInsight.data
+  marketInsightMeta.value = normalizedInsight.meta
 }
 
 const loadMarketData = async () => {

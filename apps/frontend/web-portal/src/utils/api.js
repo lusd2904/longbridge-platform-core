@@ -1338,6 +1338,35 @@ const marketInsightCache = new Map()
 const marketInsightPending = new Map()
 const marketInsightCacheKey = (prefix, params = {}) => `${prefix}:${JSON.stringify(params || {})}`
 
+const liveMarketCache = new Map()
+const liveMarketPending = new Map()
+const liveMarketCacheKey = (prefix, params = {}) => `${prefix}:${JSON.stringify(params || {})}`
+const withLiveMarketCache = async (prefix, params, loader, ttlMs = 6000) => {
+  const key = liveMarketCacheKey(prefix, params)
+  const cached = liveMarketCache.get(key)
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.payload
+  }
+  if (liveMarketPending.has(key)) {
+    return liveMarketPending.get(key)
+  }
+
+  const pending = Promise.resolve()
+    .then(loader)
+    .then((payload) => {
+      liveMarketCache.set(key, {
+        payload,
+        expiresAt: Date.now() + ttlMs
+      })
+      return payload
+    })
+    .finally(() => {
+      liveMarketPending.delete(key)
+    })
+  liveMarketPending.set(key, pending)
+  return pending
+}
+
 export const getMarketInsightHistory = async (params = {}) => {
   const key = marketInsightCacheKey('history', params)
   const cached = marketInsightCache.get(key)
@@ -1720,10 +1749,18 @@ export const getMarketHistoryBackfillStatus = () => serviceGet('market', '/api/v
 
 export const getStockQuotes = async (symbols = []) => {
   const querySymbols = Array.isArray(symbols) ? symbols : [symbols]
-  const res = await serviceGet('market', '/api/v1/market/longbridge/quotes', { symbols: querySymbols })
-  const payload = res?.data?.payload ?? res?.data?.data?.payload ?? res?.data?.data ?? res?.data
-  const items = Array.isArray(payload) ? payload : []
-  return { ...res, data: items.map(normalizeQuotePayload) }
+  const normalizedSymbols = querySymbols
+    .map((item) => String(item || '').trim().toUpperCase())
+    .filter(Boolean)
+  if (!normalizedSymbols.length) {
+    return successPayload([])
+  }
+  return withLiveMarketCache('quotes', { symbols: normalizedSymbols }, async () => {
+    const res = await serviceGet('market', '/api/v1/market/longbridge/quotes', { symbols: normalizedSymbols })
+    const payload = res?.data?.payload ?? res?.data?.data?.payload ?? res?.data?.data ?? res?.data
+    const items = Array.isArray(payload) ? payload : []
+    return { ...res, data: items.map(normalizeQuotePayload) }
+  })
 }
 
 export const getMarketQuotes = (symbols = []) => getStockQuotes(symbols)
@@ -1857,16 +1894,28 @@ export const cancelStopLoss = (orderId) => servicePost('risk', '/api/v1/risk/sto
 export const cancelTakeProfit = (orderId) => servicePost('risk', '/api/v1/risk/takeprofit/cancel', { order_id: orderId })
 
 export const getNotifications = (params = {}) => serviceGet('risk', '/api/v1/notifications', params)
+export const getNotificationsBootstrap = (params = {}) => serviceGet('risk', '/api/v1/notifications/bootstrap', params)
 export const markNotificationRead = (payload = {}) => servicePost('risk', '/api/v1/notifications/read', payload)
 export const markAllNotificationsRead = (payload = {}) => servicePost('risk', '/api/v1/notifications/read-all', payload)
 export const deleteNotificationItem = (payload = {}) => servicePost('risk', '/api/v1/notifications/delete', payload)
 export const clearNotifications = (payload = {}) => servicePost('risk', '/api/v1/notifications/clear', payload)
 
 export const getLongbridgeAnnouncements = (symbol) => serviceGet('market', '/api/v1/market/longbridge/announcements', { symbol })
-export const getLongbridgeDepth = (symbol) => serviceGet('market', '/api/v1/market/longbridge/depth', { symbol })
+export const getLongbridgeDepth = (symbol) => {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+  return withLiveMarketCache('depth', { symbol: normalizedSymbol }, () => (
+    serviceGet('market', '/api/v1/market/longbridge/depth', { symbol: normalizedSymbol })
+  ))
+}
 export const getLongbridgeNews = (symbol) => serviceGet('market', '/api/v1/market/longbridge/content/news', { symbol })
-export const getLongbridgeTrades = (symbol, params = {}) => serviceGet('market', '/api/v1/market/longbridge/trades', {
-  symbol,
-  count: params.count || 18
-})
+export const getLongbridgeTrades = (symbol, params = {}) => {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+  const count = params.count || 18
+  return withLiveMarketCache('trades', { symbol: normalizedSymbol, count }, () => (
+    serviceGet('market', '/api/v1/market/longbridge/trades', {
+      symbol: normalizedSymbol,
+      count
+    })
+  ))
+}
 export const getLongbridgeTopics = (symbol) => serviceGet('market', '/api/v1/market/longbridge/content/topics', { symbol })

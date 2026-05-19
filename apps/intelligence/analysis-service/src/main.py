@@ -1805,7 +1805,7 @@ async def finance_briefings(
     safe_limit = max(1, min(int(limit or 20), 60))
     normalized_market = str(market or "").strip().upper() or None
     items = FinanceBriefingService.get_latest(limit=safe_limit, market=normalized_market)
-    if refresh or not items:
+    if refresh:
         FinanceBriefingService.refresh_all_markets(user_id=user_id)
         items = FinanceBriefingService.get_latest(limit=safe_limit, market=normalized_market)
     return {

@@ -30,6 +30,7 @@ app = create_service_app(
     description="Phase 1 live gateway for dependency health and service catalog.",
 )
 PORT = service_port("REF_GATEWAY_PORT", 5101)
+HEALTH_PROBE_TIMEOUT_SECONDS = float(os.getenv("REF_GATEWAY_HEALTH_PROBE_TIMEOUT", "3.0"))
 
 
 def _config_port(env_var: str, default: int) -> int:
@@ -99,7 +100,7 @@ def probe_health(base_url: str):
     started_at = time.perf_counter()
     health_url = f"{str(base_url or '').rstrip('/')}/health"
     try:
-        with urlopen(health_url, timeout=1.5) as response:
+        with urlopen(health_url, timeout=HEALTH_PROBE_TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
             return {
                 "reachable": True,

@@ -1331,15 +1331,20 @@ async def get_dashboard_summary(
 
 
 @app.get("/api/v1/trade/accounts/{account_id}/positions")
-async def get_positions(account_id: int, session: dict = Depends(get_current_session)):
-    state = _build_account_state(user_id=int(session["user_id"]), account_id=account_id, limit=1)
+async def get_positions(
+    account_id: int,
+    realtime: bool = Query(default=False),
+    session: dict = Depends(get_current_session),
+):
+    user_id = int(session["user_id"])
+    state = _build_account_state(user_id=user_id, account_id=account_id, limit=1) if realtime else _build_snapshot_state(user_id=user_id, account_id=account_id)
     return {
         "success": True,
         "data": state["positions"],
         "meta": _build_positions_meta(
             state=state,
-            data_source=state.get("dataSource") or "live",
-            default_mode="realtime",
+            data_source=state.get("dataSource") or ("live" if realtime else "snapshot"),
+            default_mode="realtime" if realtime else "database",
         ),
     }
 

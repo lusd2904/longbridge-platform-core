@@ -1,5 +1,13 @@
 export const normalizeSuggestionKeyword = (value = '') => String(value || '').trim().toLowerCase()
 
+const normalizeSuggestionSymbolBase = (value = '') => {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .split('.')
+    .filter(Boolean)[0] || ''
+}
+
 export const buildSuggestionLabel = (target = {}) => {
   const symbol = String(target?.symbol || '').trim().toUpperCase()
   const name = String(target?.name || '').trim()
@@ -31,7 +39,10 @@ export const filterLocalSuggestionMatches = (targets = [], keyword = '') => {
       if (!normalizedKeyword) {
         return true
       }
-      return [target?.symbol, target?.name]
+
+      const symbol = String(target?.symbol || '').trim()
+      const symbolBase = normalizeSuggestionSymbolBase(symbol)
+      return [symbol, symbolBase, target?.name]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedKeyword))
     })
@@ -41,6 +52,7 @@ export const filterLocalSuggestionMatches = (targets = [], keyword = '') => {
 const scoreSuggestion = (item = {}, keyword = '') => {
   const normalizedKeyword = normalizeSuggestionKeyword(keyword)
   const symbol = String(item?.symbol || '').trim().toUpperCase()
+  const symbolBase = normalizeSuggestionSymbolBase(symbol)
   const name = String(item?.name || '').trim().toUpperCase()
 
   if (!normalizedKeyword) {
@@ -48,19 +60,19 @@ const scoreSuggestion = (item = {}, keyword = '') => {
   }
 
   const upperKeyword = normalizedKeyword.toUpperCase()
-  if (symbol === upperKeyword || symbol === `${upperKeyword}.US`) {
+  if (symbolBase === upperKeyword || symbol === upperKeyword || symbol === `${upperKeyword}.US`) {
     return 0
   }
   if (symbol.startsWith(`${upperKeyword}.`)) {
     return 1
   }
-  if (symbol.startsWith(upperKeyword)) {
+  if (symbolBase.startsWith(upperKeyword) || symbol.startsWith(upperKeyword)) {
     return 2
   }
   if (name.startsWith(upperKeyword)) {
     return 3
   }
-  if (symbol.includes(upperKeyword)) {
+  if (symbolBase.includes(upperKeyword) || symbol.includes(upperKeyword)) {
     return 4
   }
   if (name.includes(upperKeyword)) {

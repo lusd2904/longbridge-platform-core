@@ -1177,6 +1177,44 @@ def _list_recent_live_orders(user_id: int, limit: int = 12) -> List[Dict[str, An
     return rows[:limit]
 
 
+def _list_recent_order_projection_notifications(user_id: int, limit: int = 12) -> List[Dict[str, Any]]:
+    if not _table_exists("trade_order_projections"):
+        return []
+
+    rows = DbUtil.fetch_all(
+        """
+        SELECT account_id, order_id, symbol, action, quantity, price, status,
+               COALESCE(updated_at, created_at) AS event_time
+        FROM trade_order_projections
+        WHERE user_id = %s
+        ORDER BY COALESCE(updated_at, created_at) DESC, order_id DESC
+        LIMIT %s
+        """,
+        (user_id, max(1, min(int(limit or 12), 100))),
+    ) or []
+
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        event_time = row.get("event_time")
+        if hasattr(event_time, "strftime"):
+            event_time_text = event_time.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            event_time_text = str(event_time or '')
+        action = str(row.get("action") or "").upper()
+        quantity = float(row.get("quantity") or 0)
+        price = float(row.get("price") or 0)
+        items.append({
+            "notificationKey": f"trade:{row.get('account_id')}:{row.get('order_id') or row.get('symbol')}:{event_time_text}",
+            "type": "trade",
+            "title": f"{row.get('symbol') or ''} {('买入' if action == 'BUY' else '卖出' if action == 'SELL' else '订单更新')}",
+            "message": f"状态 {_format_order_status_label(row.get('status'))}，数量 {quantity:.2f}，价格 {price:.2f}",
+            "time": event_time_text,
+            "route": "/orders",
+        })
+
+    return items
+
+
 def _collect_notifications(user_id: int, limit: int = 50, notification_type: str = '') -> List[Dict[str, Any]]:
     notification_type = str(notification_type or '').strip().lower()
     items: List[Dict[str, Any]] = []
@@ -1194,7 +1232,11 @@ def _collect_notifications(user_id: int, limit: int = 50, notification_type: str
             })
 
     if notification_type in {'', 'trade'}:
-        items.extend(_list_recent_live_orders(user_id=user_id, limit=max(8, limit // 2)))
+        trade_limit = max(8, limit // 2)
+        trade_items = _list_recent_order_projection_notifications(user_id=user_id, limit=trade_limit)
+        if not trade_items:
+            trade_items = _list_recent_live_orders(user_id=user_id, limit=trade_limit)
+        items.extend(trade_items)
 
     if notification_type in {'', 'agent', 'agent-review', 'agent-risk'}:
         items.extend(_collect_agent_review_notifications(user_id=user_id, limit=max(8, limit // 2)))

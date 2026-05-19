@@ -55,7 +55,11 @@
       </article>
     </section>
 
-    <el-card class="notifications-list glass-card" v-loading="loading">
+    <el-card class="notifications-list glass-card" v-loading="loading && !hydrated">
+      <div class="notification-sync-row" :class="{ pending: loading && hydrated }">
+        <span>{{ notificationSyncLabel }}</span>
+        <span>{{ notificationSyncTime }}</span>
+      </div>
       <div v-if="filteredNotifications.length === 0" class="empty-state">
         <el-empty description="暂无消息">
         </el-empty>
@@ -118,6 +122,7 @@ import {
   clearNotifications,
   deleteNotificationItem,
   getNotifications,
+  getNotificationsBootstrap,
   markAllNotificationsRead,
   markNotificationRead
 } from '../api/risk.js'
@@ -127,8 +132,10 @@ import { getSession, setActiveSubsystem, setSession } from '../utils/auth.js'
 const router = useRouter()
 const { isPhoneLayout } = useAdaptiveLayout()
 const loading = ref(false)
+const hydrated = ref(false)
 const activeType = ref('')
 const notifications = ref([])
+const lastLoadedAt = ref('')
 
 const emitUnreadCount = (count) => {
   if (typeof window === 'undefined') {
@@ -190,22 +197,34 @@ const normalizeNotification = (item = {}) => ({
 
 const unwrapNotificationPayload = (payload) => {
   if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.data?.items)) return payload.data.items
   if (Array.isArray(payload?.items)) return payload.items
   if (Array.isArray(payload?.list)) return payload.list
   return []
 }
 
 const filteredNotifications = computed(() => {
-  if (!activeType.value) {
-    return notifications.value
-  }
-  return notifications.value.filter((item) => item.type === activeType.value)
+  return notifications.value
 })
 const unreadCount = computed(() => notifications.value.filter((item) => !item.read).length)
 const latestNotificationTime = computed(() => filteredNotifications.value[0]?.time || notifications.value[0]?.time || '')
 const hasNotifications = computed(() => filteredNotifications.value.length > 0)
 const markAllReadDisabled = computed(() => loading.value || !filteredNotifications.value.some((item) => !item.read))
 const clearAllDisabled = computed(() => loading.value || !hasNotifications.value)
+const notificationSyncLabel = computed(() => {
+  if (loading.value && hydrated.value) {
+    return '后台刷新中'
+  }
+  if (lastLoadedAt.value) {
+    return '已同步'
+  }
+  return '等待同步'
+})
+const notificationSyncTime = computed(() => (
+  lastLoadedAt.value
+    ? `更新于 ${formatAbsoluteTime(lastLoadedAt.value)}`
+    : '刷新不会遮挡现有列表'
+))
 const notificationSummary = computed(() => [
   {
     label: '当前筛选',
@@ -255,18 +274,22 @@ const getTypeIcon = (type) => ({
 const loadNotifications = async () => {
   loading.value = true
   try {
-    const res = await getNotifications({
-      type: activeType.value,
-      limit: 60
-    })
+    const query = {
+      limit: 60,
+      ...(activeType.value ? { type: activeType.value } : {})
+    }
+    const res = await getNotificationsBootstrap(query).catch(() => getNotifications(query))
     notifications.value = unwrapNotificationPayload(res?.data)
       .map((item) => normalizeNotification(item))
       .sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime())
-    syncSessionNotificationCount(unreadCount.value)
+    lastLoadedAt.value = new Date().toISOString()
+    const summaryUnread = Number(res?.data?.summary?.unreadCount)
+    syncSessionNotificationCount(Number.isFinite(summaryUnread) ? summaryUnread : unreadCount.value)
   } catch (error) {
     console.error('加载通知失败:', error)
     ElMessage.error('加载通知失败')
   } finally {
+    hydrated.value = true
     loading.value = false
   }
 }
@@ -352,9 +375,18 @@ const formatTime = (time) => {
   return target.toLocaleString('zh-CN')
 }
 
-watch(activeType, loadNotifications)
+const formatAbsoluteTime = (time) => {
+  if (!time) return '--'
+  const target = new Date(time)
+  return Number.isNaN(target.getTime()) ? String(time) : target.toLocaleString('zh-CN')
+}
+
 watch(unreadCount, (count) => {
   syncSessionNotificationCount(count)
+})
+
+watch(activeType, () => {
+  loadNotifications()
 })
 
 onMounted(() => {
@@ -492,6 +524,24 @@ onMounted(() => {
 .notifications-list {
   border: 1px solid var(--border-soft);
   background: var(--surface-panel);
+}
+
+.notification-sync-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.notification-sync-row.pending {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-soft));
+  color: var(--text-primary);
 }
 
 .notification-tabs {
@@ -639,6 +689,11 @@ onMounted(() => {
 
   .notification-summary {
     grid-template-columns: 1fr;
+  }
+
+  .notification-sync-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .notification-item {

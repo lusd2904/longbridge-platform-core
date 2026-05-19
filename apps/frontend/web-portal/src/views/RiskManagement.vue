@@ -260,6 +260,7 @@ const eventFilter = ref('')
 const configDialogVisible = ref(false)
 const addOrderDialogVisible = ref(false)
 const overviewRefreshing = ref(false)
+let overviewRequestId = 0
 
 const riskConfig = ref({
   maxPositionSize: 35,
@@ -440,6 +441,7 @@ const enrichRiskOrder = (row = {}, type = 'stop_loss') => {
 }
 
 const loadOverview = async (forceRealtime = false) => {
+  const requestId = ++overviewRequestId
   overviewRefreshing.value = true
   try {
     const [snapshotRes, limitsRes, tradeSnapshotRes] = await Promise.allSettled([
@@ -457,9 +459,13 @@ const loadOverview = async (forceRealtime = false) => {
       payload?.snapshotAt
     )
 
-    if (forceRealtime || !hasSnapshotPayload) {
+    if (forceRealtime) {
       const liveOverviewRes = await getRiskOverview({ realtime: true })
       payload = liveOverviewRes?.data || payload
+    }
+
+    if (requestId !== overviewRequestId) {
+      return
     }
 
     overview.value = payload.overview || overview.value
@@ -511,11 +517,17 @@ const loadOverview = async (forceRealtime = false) => {
       ...(limitsRes.status === 'fulfilled' ? limitsRes.value?.data || {} : {}),
       ...(payload.config || {})
     }
+
+    if (!forceRealtime && !hasSnapshotPayload) {
+      void loadOverview(true)
+    }
   } catch (error) {
     console.error('加载风控总览失败:', error)
     ElMessage.error('加载风控数据失败')
   } finally {
-    overviewRefreshing.value = false
+    if (requestId === overviewRequestId) {
+      overviewRefreshing.value = false
+    }
   }
 }
 

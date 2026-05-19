@@ -7,135 +7,7 @@ import Kline from '@/views/Kline.vue'
 import Strategy from '@/views/Strategy.vue'
 import RiskManagement from '@/views/RiskManagement.vue'
 
-vi.mock('../../src/api/analysis.js', () => ({
-  getRecommendations: vi.fn(async () => ({
-    data: {
-      generated_at: '2026-03-27T08:00:00Z',
-      candidate_count: 1,
-      profile_label: '成长型',
-      summary: '系统已生成推荐摘要。',
-      stats: {
-        total: 1,
-        avg_return: 6.2,
-        avg_score: 82.4,
-        risk_alerts: 0,
-        markets: { US: 1 }
-      },
-      items: [
-        {
-          symbol: 'AAPL.US',
-          name: 'Apple',
-          market: 'US',
-          assetType: 'stock',
-          aiScore: 82.4,
-          expectedReturn: 6.2,
-          changePercent: 1.4,
-          confidence: 88,
-          riskLevel: 2,
-          horizon: 'swing',
-          thesis: '盈利与现金流质量稳定。',
-          reasons: ['盈利质量稳定'],
-          isTopPick: true
-        }
-      ]
-    },
-    meta: {
-      snapshotAt: '2026-03-27T08:00:00Z',
-      dataSource: 'recommendation_snapshots'
-    }
-  })),
-  refreshRecommendations: vi.fn(async () => ({
-    data: { stats: {}, items: [] },
-    meta: {}
-  })),
-  getStrategies: vi.fn(async () => ({
-    data: [
-      {
-        id: 1,
-        name: 'Apple 回撤防守',
-        status: 'active',
-        type: 'stop_loss',
-        executionMode: 'auto',
-        scheduleFrequency: 5,
-        schedulePeriod: 'minute',
-        triggerCount: 2,
-        createdAt: '2026-03-27T08:00:00Z',
-        lastExecutedAt: '2026-03-27T09:00:00Z',
-        params: [{ name: 'threshold', value: 6 }]
-      }
-    ]
-  })),
-  getStrategyTemplates: vi.fn(async () => ({
-    data: {
-      templates: [
-        {
-          templateCode: 'stop_loss_guard',
-          name: '止损保护',
-          summary: '浮亏超过阈值后提醒收缩风险。',
-          category: 'risk',
-          categoryLabel: '风险控制',
-          executionMode: 'auto',
-          scheduleFrequency: 5,
-          schedulePeriod: 'minute',
-          featured: true,
-          params: { threshold: 6 },
-          tags: ['防守']
-        }
-      ],
-      categories: [{ value: 'risk', label: '风险控制' }]
-    }
-  })),
-  createStrategy: vi.fn(async () => ({})),
-  updateStrategy: vi.fn(async () => ({})),
-  deleteStrategy: vi.fn(async () => ({})),
-  getStrategyMonitorSummary: vi.fn(async () => ({
-    data: {
-      overview: {
-        ruleCount: 1,
-        activeRuleCount: 1,
-        autoRuleCount: 1,
-        autoActiveRuleCount: 1,
-        manualRuleCount: 0,
-        manualActiveRuleCount: 0,
-        alertCount: 1,
-        status: 'running',
-        message: '监控链路健康',
-        lastRunAt: '2026-03-27T09:10:00Z'
-      },
-      alerts: [
-        {
-          id: 'alert-1',
-          symbol: 'AAPL.US',
-          strategyName: 'Apple 回撤防守',
-          message: '浮亏接近阈值',
-          severity: 'medium',
-          actionSuggested: '观察',
-          createdAt: '2026-03-27T09:10:00Z'
-        }
-      ]
-    }
-  })),
-  runStrategyMonitor: vi.fn(async () => ({ data: { alertCount: 0 } })),
-  getFinanceBriefings: vi.fn(async () => ({
-    data: [
-      {
-        id: 'briefing-1',
-        market: 'US',
-        headline: '美股盘前扫描',
-        summary: '科技龙头延续强势。',
-        briefingType: 'market-insight',
-        generatedAt: '2026-03-27T09:00:00Z',
-        payload: { symbol: 'AAPL.US' }
-      }
-    ],
-    meta: {
-      snapshotAt: '2026-03-27T09:00:00Z',
-      dataSource: 'finance_briefings'
-    }
-  }))
-}))
-
-vi.mock('../../src/api/market.js', () => ({
+const marketApiMocks = vi.hoisted(() => ({
   addStockToPool: vi.fn(async () => ({})),
   analyzeStock: vi.fn(async () => ({
     data: {
@@ -279,40 +151,7 @@ vi.mock('../../src/api/market.js', () => ({
   }))
 }))
 
-vi.mock('../../src/composables/useTheme.js', async () => {
-  const { ref } = await import('vue')
-  return {
-    useTheme: () => ({ activeTheme: ref('dark') }),
-    getThemeValue: (_name, fallback) => fallback
-  }
-})
-
-vi.mock('../../src/composables/useWebSocket.js', async () => {
-  const { ref } = await import('vue')
-  return {
-    useStockQuotes: () => ({
-      quotes: ref({
-        'AAPL.US': {
-          price: 194,
-          last_price: 194
-        }
-      }),
-      isConnected: ref(true)
-    }),
-    useLongbridgeMarketStream: () => ({
-      quotes: ref({}),
-      depth: ref({}),
-      trades: ref({}),
-      isConnected: ref(false)
-    })
-  }
-})
-
-vi.mock('../../src/utils/auth.js', () => ({
-  getCurrentUser: () => ({ id: 'user-1' })
-}))
-
-vi.mock('../../src/api/risk.js', () => ({
+const riskApiMocks = vi.hoisted(() => ({
   getRiskOverview: vi.fn(async () => ({
     data: {
       overview: {
@@ -397,6 +236,171 @@ vi.mock('../../src/api/risk.js', () => ({
   cancelTakeProfit: vi.fn(async () => ({}))
 }))
 
+vi.mock('../../src/api/analysis.js', () => ({
+  getRecommendations: vi.fn(async () => ({
+    data: {
+      generated_at: '2026-03-27T08:00:00Z',
+      candidate_count: 1,
+      profile_label: '成长型',
+      summary: '系统已生成推荐摘要。',
+      stats: {
+        total: 1,
+        avg_return: 6.2,
+        avg_score: 82.4,
+        risk_alerts: 0,
+        markets: { US: 1 }
+      },
+      items: [
+        {
+          symbol: 'AAPL.US',
+          name: 'Apple',
+          market: 'US',
+          assetType: 'stock',
+          aiScore: 82.4,
+          expectedReturn: 6.2,
+          changePercent: 1.4,
+          confidence: 88,
+          riskLevel: 2,
+          horizon: 'swing',
+          thesis: '盈利与现金流质量稳定。',
+          reasons: ['盈利质量稳定'],
+          isTopPick: true
+        }
+      ]
+    },
+    meta: {
+      snapshotAt: '2026-03-27T08:00:00Z',
+      dataSource: 'recommendation_snapshots'
+    }
+  })),
+  refreshRecommendations: vi.fn(async () => ({
+    data: { stats: {}, items: [] },
+    meta: {}
+  })),
+  getStrategies: vi.fn(async () => ({
+    data: [
+      {
+        id: 1,
+        name: 'Apple 回撤防守',
+        status: 'active',
+        type: 'stop_loss',
+        executionMode: 'auto',
+        scheduleFrequency: 5,
+        schedulePeriod: 'minute',
+        triggerCount: 2,
+        createdAt: '2026-03-27T08:00:00Z',
+        lastExecutedAt: '2026-03-27T09:00:00Z',
+        params: [{ name: 'threshold', value: 6 }]
+      }
+    ]
+  })),
+  getStrategyTemplates: vi.fn(async () => ({
+    data: {
+      templates: [
+        {
+          templateCode: 'stop_loss_guard',
+          name: '止损保护',
+          summary: '浮亏超过阈值后提醒收缩风险。',
+          category: 'risk',
+          categoryLabel: '风险控制',
+          executionMode: 'auto',
+          scheduleFrequency: 5,
+          schedulePeriod: 'minute',
+          featured: true,
+          params: { threshold: 6 },
+          tags: ['防守']
+        }
+      ],
+      categories: [{ value: 'risk', label: '风险控制' }]
+    }
+  })),
+  createStrategy: vi.fn(async () => ({})),
+  updateStrategy: vi.fn(async () => ({})),
+  deleteStrategy: vi.fn(async () => ({})),
+  getStrategyMonitorSummary: vi.fn(async () => ({
+    data: {
+      overview: {
+        ruleCount: 1,
+        activeRuleCount: 1,
+        autoRuleCount: 1,
+        autoActiveRuleCount: 1,
+        manualRuleCount: 0,
+        manualActiveRuleCount: 0,
+        alertCount: 1,
+        status: 'running',
+        message: '监控链路健康',
+        lastRunAt: '2026-03-27T09:10:00Z'
+      },
+      alerts: [
+        {
+          id: 'alert-1',
+          symbol: 'AAPL.US',
+          strategyName: 'Apple 回撤防守',
+          message: '浮亏接近阈值',
+          severity: 'medium',
+          actionSuggested: '观察',
+          createdAt: '2026-03-27T09:10:00Z'
+        }
+      ]
+    }
+  })),
+  runStrategyMonitor: vi.fn(async () => ({ data: { alertCount: 0 } })),
+  getFinanceBriefings: vi.fn(async () => ({
+    data: [
+      {
+        id: 'briefing-1',
+        market: 'US',
+        headline: '美股盘前扫描',
+        summary: '科技龙头延续强势。',
+        briefingType: 'market-insight',
+        generatedAt: '2026-03-27T09:00:00Z',
+        payload: { symbol: 'AAPL.US' }
+      }
+    ],
+    meta: {
+      snapshotAt: '2026-03-27T09:00:00Z',
+      dataSource: 'finance_briefings'
+    }
+  }))
+}))
+
+vi.mock('../../src/api/market.js', () => marketApiMocks)
+
+vi.mock('../../src/composables/useTheme.js', async () => {
+  const { ref } = await import('vue')
+  return {
+    useTheme: () => ({ activeTheme: ref('dark') }),
+    getThemeValue: (_name, fallback) => fallback
+  }
+})
+
+vi.mock('../../src/composables/useWebSocket.js', async () => {
+  const { ref } = await import('vue')
+  return {
+    useStockQuotes: () => ({
+      quotes: ref({
+        'AAPL.US': {
+          price: 194,
+          last_price: 194
+        }
+      }),
+      isConnected: ref(true)
+    }),
+    useLongbridgeMarketStream: () => ({
+      quotes: ref({}),
+      depth: ref({}),
+      trades: ref({}),
+      isConnected: ref(false)
+    })
+  }
+})
+
+vi.mock('../../src/utils/auth.js', () => ({
+  getCurrentUser: () => ({ id: 'user-1' })
+}))
+
+vi.mock('../../src/api/risk.js', () => riskApiMocks)
+
 vi.mock('../../src/api/trade.js', () => ({
   getTradeSnapshotState: vi.fn(async () => ({
     data: {
@@ -469,7 +473,11 @@ describe('market shell pages', () => {
   })
 
   it('uses shared page shell components in kline view', async () => {
+    marketApiMocks.getMarketHistoryCompare.mockClear()
     const wrapper = shallowMount(Kline, mountOptions)
+    expect(wrapper.find('page-hero-stub').exists()).toBe(true)
+    expect(marketApiMocks.getMarketHistoryCompare).toHaveBeenCalledTimes(1)
+
     await flushPromises()
 
     expect(wrapper.find('page-hero-stub').exists()).toBe(true)
@@ -487,7 +495,13 @@ describe('market shell pages', () => {
   })
 
   it('uses shared page shell components in risk management view', async () => {
+    riskApiMocks.getRiskOverview.mockClear()
+    riskApiMocks.getRiskOverviewSnapshot.mockClear()
     const wrapper = shallowMount(RiskManagement, mountOptions)
+    expect(wrapper.find('page-hero-stub').exists()).toBe(true)
+    expect(riskApiMocks.getRiskOverviewSnapshot).toHaveBeenCalledTimes(1)
+    expect(riskApiMocks.getRiskOverview).not.toHaveBeenCalled()
+
     await flushPromises()
 
     expect(wrapper.find('page-hero-stub').exists()).toBe(true)

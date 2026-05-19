@@ -485,23 +485,23 @@ const syncRoute = () => {
   }).catch(() => {})
 }
 
-const handleSymbolsChange = async (values = []) => {
+const handleSymbolsChange = (values = []) => {
   const normalized = normalizeSymbols(values)
   if (normalized.length < values.length) {
     ElMessage.warning('最多支持同时查询 6 个标的')
   }
   selectedSymbols.value = normalized
-  await loadHistory(false)
+  loadHistory(false)
 }
 
-const applyQuickSymbol = async (symbol) => {
+const applyQuickSymbol = (symbol) => {
   const merged = normalizeSymbols([symbol, ...selectedSymbols.value])
   if (merged.length === selectedSymbols.value.length && merged[0] !== symbol) {
     focusPrimary(symbol)
     return
   }
   selectedSymbols.value = merged
-  await loadHistory(false)
+  loadHistory(false)
 }
 
 const focusPrimary = (symbol) => {
@@ -713,7 +713,7 @@ const compareOption = computed(() => {
   }
 })
 
-onMounted(async () => {
+onMounted(() => {
   const initialSymbols = normalizeSymbols(
     String(route.query.symbols || route.query.symbol || 'AAPL.US')
       .split(',')
@@ -725,11 +725,11 @@ onMounted(async () => {
     : 'daily'
   lookbackLimit.value = [120, 240, 480].includes(Number(route.query.limit)) ? Number(route.query.limit) : 240
   loadBackfillStatus()
-  await loadHistory(false)
+  loadHistory(false)
 })
 
-watch([timeframe, lookbackLimit], async () => {
-  await loadHistory(false)
+watch([timeframe, lookbackLimit], () => {
+  loadHistory(false)
 })
 </script>
 

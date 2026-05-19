@@ -4,6 +4,7 @@ export {
   clearNotifications,
   deleteNotificationItem,
   getNotifications,
+  getNotificationsBootstrap,
   getRiskEvents,
   getRiskLimits,
   getRiskOverview,

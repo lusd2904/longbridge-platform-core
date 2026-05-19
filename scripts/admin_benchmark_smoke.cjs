@@ -168,18 +168,35 @@ function makeAuthHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function buildSuite(token, authInfo) {
+function createBenchmarkContext(token, authInfo, brokerAccounts = null) {
   const accountId = firstPositiveInt(
     authInfo?.data?.user?.defaultAccountId,
     authInfo?.data?.defaultAccountId,
-    authInfo?.data?.accountId
+    authInfo?.data?.accountId,
+    findDefaultAccountId(brokerAccounts?.data),
+    brokerAccounts?.data?.defaultAccountId,
+    brokerAccounts?.data?.accountId
   )
-  const dashboardSummarySpec = accountId
+  return {
+    token,
+    authInfo,
+    accountId,
+    marketSymbol: 'AAPL.US',
+    quoteSymbols: ['AAPL.US', 'TSLA.US', 'NVDA.US'],
+    notificationLimit: Math.max(LIMIT, 60),
+    orderLimit: Math.max(LIMIT, 20),
+    stockPoolPageSize: Math.min(Math.max(LIMIT, 10), 50)
+  }
+}
+
+function buildSuite(token, authInfo, brokerAccounts = null) {
+  const context = createBenchmarkContext(token, authInfo, brokerAccounts)
+  const dashboardSummarySpec = context.accountId
     ? {
         id: 'dashboard-summary',
         label: 'Dashboard Summary',
         method: 'GET',
-        path: `/svc/trade/api/v1/trade/accounts/${encodeURIComponent(accountId)}/summary`,
+        path: `/svc/trade/api/v1/trade/accounts/${encodeURIComponent(context.accountId)}/summary`,
         headers: makeAuthHeaders(token),
         query: {},
         summarize: (payload) => ({
@@ -317,7 +334,219 @@ function buildSuite(token, authInfo) {
       summarize: (payload) => ({
         providerCount: Array.isArray(payload?.data) ? payload.data.length : 0
       })
-    }
+    },
+    {
+      id: 'market-stock-pool',
+      label: 'Market Stock Pool',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/stock-pool',
+      headers: makeAuthHeaders(token),
+      query: {
+        market: 'all',
+        page: 1,
+        page_size: context.stockPoolPageSize
+      },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+        filteredTotal: payload?.stats?.filtered_total ?? payload?.total ?? null,
+        firstSymbol: Array.isArray(payload?.data) && payload.data[0]
+          ? payload.data[0].symbol || null
+          : null
+      })
+    },
+    {
+      id: 'market-insights',
+      label: 'Market Insights',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/insights',
+      headers: makeAuthHeaders(token),
+      query: { market: 'all' },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+        generatedAt: Array.isArray(payload?.data) && payload.data[0]
+          ? payload.data[0].generatedAt || payload.data[0].generated_at || null
+          : null
+      })
+    },
+    {
+      id: 'market-insights-history',
+      label: 'Market Insights History',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/insights/history',
+      headers: makeAuthHeaders(token),
+      query: { market: 'all', limit: Math.max(LIMIT, 24) },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+        latestGeneratedAt: Array.isArray(payload?.data) && payload.data[0]
+          ? payload.data[0].generatedAt || payload.data[0].generated_at || null
+          : null
+      })
+    },
+    {
+      id: 'longbridge-quotes',
+      label: 'Longbridge Quotes',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/longbridge/quotes',
+      headers: makeAuthHeaders(token),
+      query: { symbols: context.quoteSymbols },
+      summarize: (payload) => {
+        const rows = Array.isArray(payload?.data?.payload)
+          ? payload.data.payload
+          : Array.isArray(payload?.data?.data?.payload)
+            ? payload.data.data.payload
+            : Array.isArray(payload?.data?.data)
+              ? payload.data.data
+              : Array.isArray(payload?.data)
+                ? payload.data
+                : []
+        return {
+          itemCount: rows.length,
+          firstSymbol: rows[0]?.symbol || null
+        }
+      }
+    },
+    {
+      id: 'longbridge-depth',
+      label: 'Longbridge Depth',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/longbridge/depth',
+      headers: makeAuthHeaders(token),
+      query: { symbol: context.marketSymbol },
+      summarize: (payload) => ({
+        bidCount: Array.isArray(payload?.data?.bids) ? payload.data.bids.length : Array.isArray(payload?.data?.bid) ? payload.data.bid.length : 0,
+        askCount: Array.isArray(payload?.data?.asks) ? payload.data.asks.length : Array.isArray(payload?.data?.ask) ? payload.data.ask.length : 0
+      })
+    },
+    {
+      id: 'longbridge-trades',
+      label: 'Longbridge Trades',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/longbridge/trades',
+      headers: makeAuthHeaders(token),
+      query: { symbol: context.marketSymbol, count: 18 },
+      summarize: (payload) => {
+        const rows = Array.isArray(payload?.data?.payload)
+          ? payload.data.payload
+          : Array.isArray(payload?.data)
+            ? payload.data
+            : []
+        return {
+          itemCount: rows.length,
+          firstPrice: rows[0]?.price ?? null
+        }
+      }
+    },
+    {
+      id: 'symbol-overview',
+      label: 'Symbol Overview',
+      method: 'GET',
+      path: `/svc/market/api/v1/market/symbols/${encodeURIComponent(context.marketSymbol)}/overview`,
+      headers: makeAuthHeaders(token),
+      summarize: (payload) => ({
+        symbol: payload?.data?.symbol || context.marketSymbol,
+        name: payload?.data?.name || payload?.data?.security_name || null,
+        market: payload?.data?.market || payload?.data?.region || null
+      })
+    },
+    {
+      id: 'finance-briefings',
+      label: 'Finance Briefings',
+      method: 'GET',
+      path: '/svc/analysis/api/v1/analysis/finance-briefings',
+      headers: makeAuthHeaders(token),
+      query: { limit: Math.max(LIMIT, 4) },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+        firstTitle: Array.isArray(payload?.data) && payload.data[0]
+          ? trimText(payload.data[0].title || payload.data[0].headline || '')
+          : ''
+      })
+    },
+    {
+      id: 'notifications-all',
+      label: 'Notifications All',
+      method: 'GET',
+      path: '/svc/risk/api/v1/notifications',
+      headers: makeAuthHeaders(token),
+      query: { limit: context.notificationLimit },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+        unreadCount: Array.isArray(payload?.data)
+          ? payload.data.filter((item) => item && item.read !== true).length
+          : null
+      })
+    },
+    {
+      id: 'notifications-trade',
+      label: 'Notifications Trade',
+      method: 'GET',
+      path: '/svc/risk/api/v1/notifications',
+      headers: makeAuthHeaders(token),
+      query: { limit: context.notificationLimit, type: 'trade' },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+        firstType: Array.isArray(payload?.data) && payload.data[0]
+          ? payload.data[0].type || null
+          : null
+      })
+    },
+    {
+      id: 'risk-overview',
+      label: 'Risk Overview',
+      method: 'GET',
+      path: '/svc/risk/api/v1/risk/overview',
+      headers: makeAuthHeaders(token),
+      summarize: (payload) => ({
+        available: !isHtmlResponse(payload),
+        status: payload?.data?.status || payload?.status || null,
+        alertCount: Number(payload?.data?.alertCount ?? payload?.data?.alert_count ?? payload?.alertCount ?? 0)
+      })
+    },
+    {
+      id: 'orders-projection',
+      label: 'Orders Projection',
+      method: 'GET',
+      path: '/svc/trade/api/v1/trade/orders/projection',
+      headers: makeAuthHeaders(token),
+      query: {
+        ...(context.accountId ? { account_id: context.accountId } : {}),
+        limit: context.orderLimit
+      },
+      summarize: (payload) => ({
+        itemCount: Array.isArray(payload?.data?.list) ? payload.data.list.length : 0,
+        total: payload?.data?.count ?? null,
+        dataSource: payload?.data?.dataSource || null
+      })
+    },
+    context.accountId
+      ? {
+          id: 'positions-snapshot',
+          label: 'Positions Snapshot',
+          method: 'GET',
+          path: `/svc/trade/api/v1/trade/accounts/${encodeURIComponent(context.accountId)}/positions`,
+          headers: makeAuthHeaders(token),
+          summarize: (payload) => ({
+            itemCount: Array.isArray(payload?.data) ? payload.data.length : 0,
+            firstSymbol: Array.isArray(payload?.data) && payload.data[0]
+              ? payload.data[0].symbol || null
+              : null
+          })
+        }
+      : null,
+    context.accountId
+      ? {
+          id: 'positions-projection',
+          label: 'Positions Projection',
+          method: 'GET',
+          path: `/svc/trade/api/v1/trade/accounts/${encodeURIComponent(context.accountId)}/snapshot/state`,
+          headers: makeAuthHeaders(token),
+          summarize: (payload) => ({
+            positionCount: Number(payload?.data?.positionCount ?? payload?.data?.positions?.length ?? 0),
+            orderCount: Number(payload?.data?.orderCount ?? payload?.data?.orders?.length ?? 0),
+            dataSource: payload?.data?.dataSource || payload?.data?.source || null
+          })
+        }
+      : null
   ].filter(Boolean)
 }
 
@@ -332,10 +561,15 @@ function firstPositiveInt(...values) {
 }
 
 function findDefaultAccountId(accounts) {
-  if (!Array.isArray(accounts)) {
+  const rows = Array.isArray(accounts)
+    ? accounts
+    : Array.isArray(accounts?.data)
+      ? accounts.data
+      : []
+  if (!rows.length) {
     return null
   }
-  const found = accounts.find((item) => item && (item.is_default || item.isDefault))
+  const found = rows.find((item) => item && (item.is_default || item.isDefault))
   return firstPositiveInt(found?.id, found?.accountId, found?.account_id)
 }
 
@@ -413,6 +647,33 @@ function filterSuite(suite) {
   return suite.filter((spec) => ONLY_SET.has(spec.id))
 }
 
+function formatMetric(value) {
+  return value == null ? 'n/a' : `${value}ms`
+}
+
+function formatConsoleSummary(report) {
+  return (Array.isArray(report?.endpoints) ? report.endpoints : []).map((endpoint) => {
+    const status = endpoint.okCount > 0 && endpoint.failCount === 0
+      ? 'PASS'
+      : endpoint.okCount > 0
+        ? 'WARN'
+        : endpoint.unavailable
+          ? 'UNAVAILABLE'
+          : 'FAIL'
+    const codeText = endpoint.statusCodes?.length ? endpoint.statusCodes.join(',') : 'n/a'
+    const errorText = endpoint.lastError ? ` error="${endpoint.lastError}"` : ''
+    return [
+      `[${status}]`,
+      endpoint.id,
+      `${endpoint.method} ${endpoint.path}`,
+      `ok=${endpoint.okCount}/${endpoint.iterations ?? endpoint.okCount + endpoint.failCount}`,
+      `status=${codeText}`,
+      `p50=${formatMetric(endpoint.p50Ms)}`,
+      `p95=${formatMetric(endpoint.p95Ms)}${errorText}`
+    ].join(' ')
+  })
+}
+
 function printHelp() {
   console.log(HELP_TEXT)
 }
@@ -430,7 +691,10 @@ async function main() {
     headers: makeAuthHeaders(token)
   })
 
-  const suite = filterSuite(buildSuite(token, authInfo))
+  const brokerAccounts = await requestJson('GET', '/svc/trade/api/v1/trade/accounts', {
+    headers: makeAuthHeaders(token)
+  })
+  const suite = filterSuite(buildSuite(token, authInfo, brokerAccounts.ok ? brokerAccounts.data : null))
   const endpoints = []
 
   for (const spec of suite) {
@@ -475,13 +739,21 @@ async function main() {
     const target = path.resolve(OUTPUT_PATH)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.writeFileSync(target, json)
+    formatConsoleSummary(report).forEach((line) => console.log(line))
     console.log(target)
     return
   }
   console.log(json)
 }
 
-main().catch((error) => {
-  console.error(error?.stack || String(error))
-  process.exit(1)
-})
+module.exports = {
+  buildSuiteForTest: ({ token, authInfo, brokerAccounts }) => buildSuite(token, authInfo, brokerAccounts),
+  formatConsoleSummaryForTest: formatConsoleSummary
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.stack || String(error))
+    process.exit(1)
+  })
+}
