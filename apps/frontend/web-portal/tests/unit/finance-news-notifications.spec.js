@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const getFinanceBriefingsMock = vi.fn()
 const getNotificationsMock = vi.fn()
 const getNotificationsBootstrapMock = vi.fn()
+const markNotificationReadMock = vi.fn()
 const pushMock = vi.fn()
 
 vi.mock('../../src/api/analysis.js', () => ({
@@ -17,7 +18,7 @@ vi.mock('../../src/api/risk.js', () => ({
   getNotifications: getNotificationsMock,
   getNotificationsBootstrap: getNotificationsBootstrapMock,
   markAllNotificationsRead: vi.fn(),
-  markNotificationRead: vi.fn()
+  markNotificationRead: markNotificationReadMock
 }))
 
 vi.mock('../../src/composables/useAdaptiveLayout.js', () => ({
@@ -154,6 +155,7 @@ describe('FinanceNews and Notifications fetch behavior', () => {
         }
       }
     })
+    markNotificationReadMock.mockResolvedValue({ data: { ok: true } })
   })
 
   it('reloads finance news by market so fixed limits cannot hide target markets', async () => {
@@ -206,5 +208,71 @@ describe('FinanceNews and Notifications fetch behavior', () => {
     expect(getNotificationsBootstrapMock).toHaveBeenCalledTimes(3)
     expect(getNotificationsBootstrapMock).toHaveBeenLastCalledWith({ limit: 60, type: 'trade' })
     expect(getNotificationsMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps agent run context when opening a notification', async () => {
+    getNotificationsBootstrapMock.mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            notificationKey: 'agent:run-20260520-001',
+            type: 'agent',
+            title: '自选股盘前复核 已完成',
+            message: '盘前复核完成',
+            time: '2026-05-20T08:35:00Z',
+            read: false,
+            route: '/scheduler-center?agentRunId=run-20260520-001&scene=watchlist_pre_open_review',
+            runId: 'run-20260520-001',
+            scene: 'watchlist_pre_open_review'
+          }
+        ],
+        summary: { unreadCount: 1 }
+      }
+    })
+    const { default: Notifications } = await import('../../src/views/Notifications.vue')
+    const wrapper = shallowMount(Notifications, mountOptions)
+
+    await flushPromises()
+    await wrapper.vm.handleNotification(wrapper.vm.filteredNotifications[0])
+
+    expect(markNotificationReadMock).toHaveBeenCalledWith({ notification_key: 'agent:run-20260520-001' })
+    expect(pushMock).toHaveBeenCalledWith('/scheduler-center?agentRunId=run-20260520-001&scene=watchlist_pre_open_review')
+  })
+
+  it('supports separate route query payloads for agent notifications', async () => {
+    getNotificationsBootstrapMock.mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            notificationKey: 'agent:run-20260520-002',
+            type: 'agent',
+            title: '自选股盘后复核 已完成',
+            message: '盘后复核完成',
+            time: '2026-05-20T18:35:00Z',
+            read: true,
+            route: '/scheduler-center',
+            query: {
+              agentRunId: 'run-20260520-002',
+              scene: 'watchlist_post_close_review'
+            }
+          }
+        ],
+        summary: { unreadCount: 0 }
+      }
+    })
+    const { default: Notifications } = await import('../../src/views/Notifications.vue')
+    const wrapper = shallowMount(Notifications, mountOptions)
+
+    await flushPromises()
+    await wrapper.vm.handleNotification(wrapper.vm.filteredNotifications[0])
+
+    expect(markNotificationReadMock).not.toHaveBeenCalled()
+    expect(pushMock).toHaveBeenCalledWith({
+      path: '/scheduler-center',
+      query: {
+        agentRunId: 'run-20260520-002',
+        scene: 'watchlist_post_close_review'
+      }
+    })
   })
 })

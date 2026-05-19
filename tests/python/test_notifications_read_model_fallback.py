@@ -37,3 +37,34 @@ def test_default_notifications_fall_back_to_live_trade_orders_when_projection_em
     assert items[0]["type"] == "trade"
     assert items[0]["title"] == "AAPL.US 买入"
     assert items[0]["id"] == live_order["notificationKey"]
+
+
+def test_agent_review_notifications_link_to_specific_run(monkeypatch) -> None:
+    monkeypatch.setattr(
+        data_routes.AgentRunService,
+        "list_recent_runs",
+        lambda *args, **kwargs: [
+            {
+                "runId": "run-20260520-001",
+                "scene": "watchlist_pre_open_review",
+                "status": "succeeded",
+                "resultSummary": {
+                    "summary": "盘前复核完成",
+                    "reviewAdvice": [{"title": "关注 NVDL"}],
+                    "riskFlags": [{"title": "波动放大"}],
+                },
+                "finishedAt": "2026-05-20T08:35:00Z",
+            }
+        ],
+    )
+
+    items = data_routes._collect_agent_review_notifications(user_id=1, limit=10)
+
+    assert len(items) == 1
+    assert items[0]["notificationKey"] == "agent:run-20260520-001"
+    assert items[0]["runId"] == "run-20260520-001"
+    assert items[0]["run_id"] == "run-20260520-001"
+    assert items[0]["scene"] == "watchlist_pre_open_review"
+    assert items[0]["route"] == "/scheduler-center?agentRunId=run-20260520-001&scene=watchlist_pre_open_review"
+    assert "1 条建议" in items[0]["message"]
+    assert "1 条风险" in items[0]["message"]

@@ -182,6 +182,11 @@ const ensureNotificationShellContext = () => {
   setActiveSubsystem('platform')
 }
 
+const normalizeRouteQuery = (item = {}) => {
+  const query = item.query || item.routeQuery || item.route_query || {}
+  return query && typeof query === 'object' && !Array.isArray(query) ? query : {}
+}
+
 const normalizeNotification = (item = {}) => ({
   ...item,
   id: item.id || item.notificationKey || item.notification_key || `${item.type || 'notice'}-${item.time || item.created_at || Date.now()}`,
@@ -192,7 +197,10 @@ const normalizeNotification = (item = {}) => ({
   time: item.time || item.created_at || item.createdAt || item.timestamp || '',
   read: Boolean(item.read ?? item.isRead ?? item.is_read),
   route: item.route || item.path || '',
-  symbol: item.symbol || item.code || ''
+  query: normalizeRouteQuery(item),
+  symbol: item.symbol || item.code || '',
+  runId: item.runId || item.run_id || item.agentRunId || item.agent_run_id || '',
+  scene: item.scene || item.sceneKey || item.scene_key || ''
 })
 
 const unwrapNotificationPayload = (payload) => {
@@ -360,7 +368,23 @@ const handleNotification = async (notification) => {
     await markRead(notification)
   }
   if (notification.route) {
-    router.push(notification.route)
+    if (
+      typeof notification.route === 'string' &&
+      notification.query &&
+      Object.keys(notification.query).length
+    ) {
+      router.push({ path: notification.route, query: notification.query })
+    } else {
+      router.push(notification.route)
+    }
+  } else if (notification.runId) {
+    router.push({
+      name: 'SchedulerCenter',
+      query: {
+        agentRunId: notification.runId,
+        ...(notification.scene ? { scene: notification.scene } : {})
+      }
+    })
   }
 }
 

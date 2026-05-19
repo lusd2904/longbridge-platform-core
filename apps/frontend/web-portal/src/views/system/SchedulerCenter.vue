@@ -222,13 +222,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { getAgentRun, getAgentRuns, reviewAgentRun } from '../../api/analysis.js'
 import { getPlatformTasks, runPlatformTask, updatePlatformTask } from '../../api/platform.js'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const tasks = ref([])
 const runningTaskKeys = ref(new Set())
@@ -239,10 +240,15 @@ const agentRunDetailLoading = ref(false)
 const activeAgentRun = ref(null)
 const activeAgentTaskLabel = ref('')
 const acknowledgingRunId = ref('')
+const routeQueryHydrated = ref(false)
 
 const AGENT_REVIEW_TASK_SCENES = {
   watchlist_pre_open_review: 'watchlist_pre_open_review',
   watchlist_post_close_review: 'watchlist_post_close_review'
+}
+const AGENT_REVIEW_SCENE_LABELS = {
+  watchlist_pre_open_review: '自选股盘前复核',
+  watchlist_post_close_review: '自选股盘后复核'
 }
 const AGENT_REVIEW_TASK_KEYS = new Set(Object.keys(AGENT_REVIEW_TASK_SCENES))
 
@@ -250,6 +256,10 @@ const scheduleLabel = (type) => ({ interval: '循环', daily: '每日', manual: 
 const categoryLabel = (category) => ({ readmodel: '快照', market: '市场', analysis: '分析', trade: '交易', system: '系统', history: '历史' }[category] || '其他')
 const isReadmodelTask = (task) => String(task?.category || '') === 'readmodel'
 const resolveAgentReviewScene = (task) => AGENT_REVIEW_TASK_SCENES[String(task?.taskKey || '').trim()] || ''
+const resolveAgentReviewTaskLabel = (scene) => {
+  const matchedTask = tasks.value.find((task) => resolveAgentReviewScene(task) === scene)
+  return matchedTask?.taskName || AGENT_REVIEW_SCENE_LABELS[scene] || 'Agent 复核'
+}
 const isAgentReviewTask = (task) => AGENT_REVIEW_TASK_KEYS.has(String(task?.taskKey || '').trim())
 const taskStateLabel = (state) => ({
   idle: '空闲',
@@ -593,6 +603,35 @@ const openAgentRunResult = async (task) => {
     agentRunDetailLoading.value = false
   }
 }
+const openAgentRunResultById = async (runId, scene = '') => {
+  const normalizedRunId = normalizeScalarText(runId)
+  const normalizedScene = normalizeScalarText(scene)
+  if (!normalizedRunId) return
+
+  activeAgentTaskLabel.value = resolveAgentReviewTaskLabel(normalizedScene)
+  agentRunDrawerVisible.value = true
+  agentRunDetailLoading.value = true
+
+  try {
+    const res = await getAgentRun(normalizedRunId)
+    const run = normalizeAgentRun(res?.data || {})
+    activeAgentRun.value = run.id ? run : { ...run, id: normalizedRunId, scene: normalizedScene }
+    const summaryScene = activeAgentRun.value.scene || normalizedScene
+    if (summaryScene) {
+      agentRunSummaryMap.value = {
+        ...agentRunSummaryMap.value,
+        [summaryScene]: activeAgentRun.value
+      }
+      activeAgentTaskLabel.value = resolveAgentReviewTaskLabel(summaryScene)
+    }
+  } catch (error) {
+    console.error('加载 Agent 复核详情失败:', error)
+    activeAgentRun.value = { id: normalizedRunId, scene: normalizedScene, status: 'unknown', summary: '' }
+    ElMessage.error(error?.message || '加载复核详情失败')
+  } finally {
+    agentRunDetailLoading.value = false
+  }
+}
 const acknowledgeAgentRunById = async (runId, scene = '') => {
   if (!runId || acknowledgingRunId.value === runId) return
 
@@ -624,7 +663,19 @@ const acknowledgeAgentRun = async (task) => {
   await acknowledgeAgentRunById(summaryRun.id, scene)
 }
 
-onMounted(loadTasks)
+onMounted(async () => {
+  await loadTasks()
+  await openAgentRunResultById(route.query?.agentRunId, route.query?.scene)
+  routeQueryHydrated.value = true
+})
+
+watch(
+  () => route.query?.agentRunId,
+  async (runId, previousRunId) => {
+    if (!routeQueryHydrated.value || !runId || runId === previousRunId) return
+    await openAgentRunResultById(runId, route.query?.scene)
+  }
+)
 </script>
 
 <style scoped lang="scss">

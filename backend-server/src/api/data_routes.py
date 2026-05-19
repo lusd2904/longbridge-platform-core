@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify
 from utils.DbUtil import DbUtil
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
+from urllib.parse import urlencode
 import json
 from api.auth_routes import login_required, admin_required
 from core.broker.BrokerInterface import get_broker_manager, get_broker
@@ -1296,6 +1297,10 @@ def _collect_agent_review_notifications(user_id: int, limit: int = 20) -> List[D
 
     items: List[Dict[str, Any]] = []
     for row in rows:
+        run_id = row.get('runId') or row.get('run_id') or row.get('id')
+        if not run_id:
+            continue
+
         scene = str(row.get("scene") or "").strip()
         if scene not in scene_labels:
             continue
@@ -1326,13 +1331,17 @@ def _collect_agent_review_notifications(user_id: int, limit: int = 20) -> List[D
             "cancelled": "已取消",
         }.get(status, "已更新")
 
+        route_query = urlencode({"agentRunId": str(run_id), "scene": scene})
         items.append({
-            "notificationKey": f"agent:{row.get('runId') or row.get('run_id')}",
+            "notificationKey": f"agent:{run_id}",
             "type": "agent",
             "title": f"{scene_labels[scene]} {status_label}",
             "message": summary[:500],
             "time": row.get("finishedAt") or row.get("updatedAt") or row.get("createdAt"),
-            "route": "/scheduler-center",
+            "route": f"/scheduler-center?{route_query}",
+            "runId": run_id,
+            "run_id": run_id,
+            "scene": scene,
         })
 
     return items[:limit]
