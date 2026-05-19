@@ -221,12 +221,51 @@ const clickTabByText = async (page, text, options = {}) => {
 }
 
 const waitForStable = async (page, options = {}) => waitForPageStable(page, options)
+const waitForLightTransition = async (page, options = {}) => waitForStable(page, {
+  quietWindowMs: options.quietWindowMs ?? 160,
+  timeoutMs: options.timeoutMs ?? 1400,
+  ...(options.loadState ? { loadState: options.loadState } : {})
+})
+const waitForRefreshStable = async (page, options = {}) => waitForStable(page, {
+  minimumMs: options.minimumMs ?? 260,
+  quietWindowMs: options.quietWindowMs ?? 220,
+  timeoutMs: options.timeoutMs ?? 2600,
+  ...(options.loadState ? { loadState: options.loadState } : {})
+})
 
 const waitForRoutePath = async (page, matcher, timeoutMs = 4000) => {
   await page.waitForURL((url) => {
     const pathname = new URL(url).pathname
     return typeof matcher === 'function' ? matcher(pathname) : matcher.test(pathname)
   }, { timeout: timeoutMs })
+}
+
+const expectVisible = async (locator, label, timeoutMs = 3000) => {
+  await locator.first().waitFor({ state: 'visible', timeout: timeoutMs })
+  return label
+}
+
+const expectOverlay = async (page, title, timeoutMs = 3000) => {
+  const overlay = page.locator('.el-dialog, .el-drawer').filter({ hasText: title }).first()
+  await overlay.waitFor({ state: 'visible', timeout: timeoutMs })
+  return overlay
+}
+
+const closeOverlayByEscape = async (page, overlay, timeoutMs = 3000) => {
+  await page.keyboard.press('Escape').catch(() => {})
+  if (await overlay.waitFor({ state: 'hidden', timeout: timeoutMs }).then(() => true).catch(() => false)) {
+    return
+  }
+
+  const closeButton = overlay.locator([
+    '.el-dialog__headerbtn',
+    '.el-drawer__close-btn',
+    'button[aria-label="Close"]'
+  ].join(',')).first()
+  if (!await safeClick(page, closeButton, { timeout: 1000 })) {
+    throw new Error('Overlay did not close with Escape and no close button was clickable')
+  }
+  await overlay.waitFor({ state: 'hidden', timeout: timeoutMs })
 }
 
 const closeBrowserQuietly = async (browserInstance) => {
@@ -346,12 +385,12 @@ const pageActions = {
     const actions = []
     if (await clickByRole(page, 'button', /刷新|更新/)) {
       actions.push('clicked refresh')
-      await waitForStable(page, 1000)
+      await waitForRefreshStable(page, { timeoutMs: 2200 })
     }
     const marketSegment = page.locator('.segment-button').filter({ hasText: '市场' }).first()
     if (await safeClick(page, marketSegment)) {
       actions.push('switched dashboard mobile segment market')
-      await waitForStable(page, 800)
+      await waitForLightTransition(page)
     }
     return actions
   },
@@ -443,7 +482,9 @@ const pageActions = {
     }
     if (await clickByRole(page, 'button', '刷新标的')) {
       actions.push('clicked refresh symbols')
-      await waitForStable(page, 1500)
+      await waitForRefreshStable(page, { timeoutMs: 2600 })
+      await expectVisible(page.locator('.target-panel, .control-panel'), 'verified ai analysis targets visible')
+      actions.push('verified ai analysis targets visible')
     }
     return actions
   },
@@ -456,18 +497,16 @@ const pageActions = {
     }
     if (await clickByRole(page, 'button', '搜索')) {
       actions.push('searched symbol')
-      await waitForStable(page, 2200)
+      await waitForRefreshStable(page, { timeoutMs: 3200 })
     }
-    if (await page.getByText('盘口与逐笔').first().isVisible().catch(() => false)) {
-      actions.push('verified depth and trades panel')
-    }
-    if (await page.getByText('公告 / 资讯 / 讨论').first().isVisible().catch(() => false)) {
-      actions.push('verified content panel')
-    }
+    await expectVisible(page.getByText('盘口与逐笔'), 'verified depth and trades panel', 4000)
+    actions.push('verified depth and trades panel')
+    await expectVisible(page.getByText('公告 / 资讯 / 讨论'), 'verified content panel', 4000)
+    actions.push('verified content panel')
     const positionSegment = page.locator('.segment-button').filter({ hasText: '持仓' }).first()
     if (await safeClick(page, positionSegment)) {
       actions.push('switched trading mobile segment positions')
-      await waitForStable(page, 800)
+      await waitForLightTransition(page)
     }
     if (await page.locator('button, label').filter({ hasText: '买入' }).first().isVisible().catch(() => false)) {
       actions.push('verified buy controls visible without submitting')
@@ -487,8 +526,10 @@ const pageActions = {
     if (await safeClick(page, detailButton)) {
       actions.push('opened position detail')
       await waitForStable(page)
-      await page.keyboard.press('Escape').catch(() => {})
-      await waitForStable(page, 500)
+      const dialog = await expectOverlay(page, '持仓详情')
+      actions.push('verified position detail dialog')
+      await closeOverlayByEscape(page, dialog)
+      await waitForLightTransition(page)
     }
     return actions
   },
@@ -502,8 +543,10 @@ const pageActions = {
     if (await safeClick(page, detailButton)) {
       actions.push('opened order detail')
       await waitForStable(page)
-      await page.keyboard.press('Escape').catch(() => {})
-      await waitForStable(page, 500)
+      const dialog = await expectOverlay(page, '订单详情')
+      actions.push('verified order detail dialog')
+      await closeOverlayByEscape(page, dialog)
+      await waitForLightTransition(page)
     }
     return actions
   },
@@ -533,7 +576,9 @@ const pageActions = {
     const actions = []
     if (await clickByRole(page, 'button', '立即刷新')) {
       actions.push('refreshed recommendations')
-      await waitForStable(page, 1500)
+      await waitForRefreshStable(page, { timeoutMs: 3200 })
+      await expectVisible(page.locator('.spotlight-card, .recommendations-table'), 'verified recommendations content visible')
+      actions.push('verified recommendations content visible')
     }
     const tradeButton = page.locator('button').filter({ hasText: '去交易' }).first()
     if (await safeClick(page, tradeButton)) {
@@ -567,22 +612,29 @@ const pageActions = {
     if (await templateSearch.isVisible().catch(() => false)) {
       await templateSearch.fill('趋势')
       actions.push('searched strategy templates')
-      await waitForStable(page, 800)
+      await waitForLightTransition(page)
+      await expectVisible(page.locator('.template-library-card'), 'verified strategy template library visible')
+      actions.push('verified strategy template library visible')
       await templateSearch.clear()
     }
     const strategySearch = page.getByPlaceholder('搜索策略名称、描述或参数')
     if (await strategySearch.isVisible().catch(() => false)) {
       await strategySearch.fill('均线')
       actions.push('searched strategies')
-      await waitForStable(page, 800)
+      await waitForLightTransition(page)
+      await expectVisible(page.locator('.strategy-table-card'), 'verified strategy table visible')
+      actions.push('verified strategy table visible')
       await strategySearch.clear()
     }
     const detailButton = page.locator('button').filter({ hasText: '查看详情' }).first()
     if (await safeClick(page, detailButton)) {
       actions.push('opened strategy template detail')
-      await waitForStable(page, 800)
-      await page.keyboard.press('Escape').catch(() => {})
-      await waitForStable(page, 500)
+      const dialog = await expectOverlay(page, '模板详情')
+        .catch(() => expectOverlay(page, '策略模板'))
+        .catch(() => expectOverlay(page, '详情'))
+      actions.push('verified strategy detail dialog')
+      await closeOverlayByEscape(page, dialog)
+      await waitForLightTransition(page)
     }
     return actions
   },
@@ -591,13 +643,16 @@ const pageActions = {
     const refreshButton = page.locator('.backtest-list .card-header button').first()
     if (await safeClick(page, refreshButton)) {
       actions.push('refreshed backtest list')
-      await waitForStable(page, 1200)
+      await waitForRefreshStable(page)
+      await expectVisible(page.locator('.backtest-list'), 'verified backtest list visible')
+      actions.push('verified backtest list visible')
     }
     if (await clickByRole(page, 'button', '运行回测')) {
       actions.push('opened backtest dialog')
-      await waitForStable(page, 800)
-      await page.keyboard.press('Escape').catch(() => {})
-      await waitForStable(page, 500)
+      const dialog = await expectOverlay(page, '运行回测')
+      actions.push('verified backtest dialog')
+      await closeOverlayByEscape(page, dialog)
+      await waitForLightTransition(page)
     }
     return actions
   },
@@ -605,17 +660,22 @@ const pageActions = {
     const actions = []
     if (await clickByRole(page, 'button', '实时刷新')) {
       actions.push('refreshed risk overview')
-      await waitForStable(page, 1500)
+      await waitForRefreshStable(page, { timeoutMs: 3000 })
+      await expectVisible(page.locator('.risk-container'), 'verified risk container visible')
+      actions.push('verified risk container visible')
     }
     if (await clickSegmentByText(page, '高风险')) {
       actions.push('filtered high risk events')
-      await waitForStable(page, 600)
+      await waitForLightTransition(page)
+      await expectVisible(page.locator('.risk-events'), 'verified risk events visible')
+      actions.push('verified risk events visible')
     }
     if (await clickByRole(page, 'button', '风控设置')) {
       actions.push('opened risk settings dialog')
-      await waitForStable(page, 800)
-      await page.keyboard.press('Escape').catch(() => {})
-      await waitForStable(page, 500)
+      const dialog = await expectOverlay(page, '风控设置')
+      actions.push('verified risk settings dialog')
+      await closeOverlayByEscape(page, dialog)
+      await waitForLightTransition(page)
     }
     return actions
   },
@@ -671,7 +731,7 @@ const pageActions = {
     const actions = []
     if (await clickByRole(page, 'button', /刷新/)) {
       actions.push('refreshed system logs')
-      await waitForStable(page, 1200)
+      await waitForRefreshStable(page)
     }
     return actions
   },
@@ -685,7 +745,9 @@ const pageActions = {
     const actions = []
     if (await clickByRole(page, 'button', '刷新任务')) {
       actions.push('refreshed scheduler tasks')
-      await waitForStable(page, 1200)
+      await waitForRefreshStable(page)
+      await expectVisible(page.locator('.task-grid, .scheduler-page'), 'verified scheduler content visible')
+      actions.push('verified scheduler content visible')
     }
     return actions
   }
