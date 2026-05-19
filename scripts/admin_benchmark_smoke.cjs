@@ -437,6 +437,27 @@ function buildSuite(token, authInfo, brokerAccounts = null) {
       }
     },
     {
+      id: 'longbridge-snapshot',
+      label: 'Longbridge Snapshot',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/longbridge/snapshot',
+      headers: makeAuthHeaders(token),
+      query: { symbol: context.marketSymbol, count: 18 },
+      summarize: (payload) => {
+        const snapshot = payload?.data?.payload || payload?.data || {}
+        const quoteRows = Array.isArray(snapshot?.quote) ? snapshot.quote : []
+        const trades = Array.isArray(snapshot?.trades) ? snapshot.trades : []
+        const depth = snapshot?.depth || {}
+        return {
+          symbol: snapshot?.symbol || null,
+          quoteCount: quoteRows.length,
+          bidCount: Array.isArray(depth?.bids) ? depth.bids.length : Array.isArray(depth?.bid) ? depth.bid.length : 0,
+          askCount: Array.isArray(depth?.asks) ? depth.asks.length : Array.isArray(depth?.ask) ? depth.ask.length : 0,
+          tradeCount: trades.length
+        }
+      }
+    },
+    {
       id: 'symbol-overview',
       label: 'Symbol Overview',
       method: 'GET',

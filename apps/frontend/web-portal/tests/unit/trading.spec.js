@@ -15,6 +15,7 @@ const marketMocks = vi.hoisted(() => ({
   getLongbridgeAnnouncements: vi.fn(),
   getLongbridgeDepth: vi.fn(),
   getLongbridgeNews: vi.fn(),
+  getLongbridgeSnapshot: vi.fn(),
   getLongbridgeTopics: vi.fn(),
   getLongbridgeTrades: vi.fn(),
   getStockQuote: vi.fn(),
@@ -204,19 +205,18 @@ describe('Trading search performance', () => {
     marketMocks.getLongbridgeAnnouncements.mockResolvedValue({ data: { payload: [] } })
     marketMocks.getLongbridgeNews.mockResolvedValue({ data: { payload: [] } })
     marketMocks.getLongbridgeTopics.mockResolvedValue({ data: { payload: [] } })
+    marketMocks.getLongbridgeDepth.mockResolvedValue({ data: { payload: { bids: [], asks: [] } } })
+    marketMocks.getLongbridgeTrades.mockResolvedValue({ data: { payload: [] } })
+    marketMocks.getStockQuote.mockResolvedValue({ data: {} })
   })
 
-  it('releases quote loading on symbol overview before slow Longbridge quote/depth/trades complete', async () => {
-    const quoteDeferred = createDeferred()
-    const depthDeferred = createDeferred()
-    const tradesDeferred = createDeferred()
+  it('releases quote loading on symbol overview before slow Longbridge snapshot completes', async () => {
+    const snapshotDeferred = createDeferred()
 
     marketMocks.getSymbolOverview.mockResolvedValue({
       data: baseOverviewPayload
     })
-    marketMocks.getStockQuote.mockReturnValue(quoteDeferred.promise)
-    marketMocks.getLongbridgeDepth.mockReturnValue(depthDeferred.promise)
-    marketMocks.getLongbridgeTrades.mockReturnValue(tradesDeferred.promise)
+    marketMocks.getLongbridgeSnapshot.mockReturnValue(snapshotDeferred.promise)
 
     const wrapper = mountTrading()
     await flushPromises()
@@ -229,36 +229,33 @@ describe('Trading search performance', () => {
     expect(wrapper.text()).toContain('等待深度')
     expect(wrapper.text()).toContain('等待逐笔')
 
-    quoteDeferred.resolve({
-      data: {
-        symbol: 'AAPL.US',
-        name: 'Apple Inc.',
-        price: 190.11,
-        prev_close: 188.1,
-        change_percent: 1.07,
-        quoteSource: 'longbridge-cli',
-        timestamp: '2026-05-19T09:31:20Z'
-      }
-    })
-    depthDeferred.resolve({
+    snapshotDeferred.resolve({
       data: {
         payload: {
-          bids: [{ price: 190.05, volume: 500 }],
-          asks: [{ price: 190.2, volume: 600 }]
+          quote: [{
+            symbol: 'AAPL.US',
+            name: 'Apple Inc.',
+            price: 190.11,
+            prev_close: 188.1,
+            change_percent: 1.07,
+            quoteSource: 'longbridge-cli',
+            timestamp: '2026-05-19T09:31:20Z'
+          }],
+          depth: {
+            bids: [{ price: 190.05, volume: 500 }],
+            asks: [{ price: 190.2, volume: 600 }]
+          },
+          trades: [
+            {
+              trade_id: 't-1',
+              price: 190.12,
+              volume: 300,
+              trade_direction: 'buy',
+              timestamp: '2026-05-19T09:31:21Z'
+            }
+          ],
+          sources: { quote: 'longbridge-live', depth: 'longbridge-live', trades: 'longbridge-live' }
         }
-      }
-    })
-    tradesDeferred.resolve({
-      data: {
-        payload: [
-          {
-            trade_id: 't-1',
-            price: 190.12,
-            volume: 300,
-            trade_direction: 'buy',
-            timestamp: '2026-05-19T09:31:21Z'
-          }
-        ]
       }
     })
 
@@ -267,6 +264,44 @@ describe('Trading search performance', () => {
     expect(wrapper.text()).toContain('$190.11')
     expect(wrapper.text()).toContain('Longbridge CLI')
     expect(wrapper.text()).toContain('$190.05 / $190.20')
+    expect(wrapper.text()).toContain('1 条')
+    expect(marketMocks.getLongbridgeDepth).not.toHaveBeenCalled()
+    expect(marketMocks.getLongbridgeTrades).not.toHaveBeenCalled()
+    expect(marketMocks.getStockQuote).not.toHaveBeenCalled()
+  })
+
+  it('uses one Longbridge snapshot request for quote, depth and trades', async () => {
+    marketMocks.getSymbolOverview.mockResolvedValue({
+      data: baseOverviewPayload
+    })
+    marketMocks.getLongbridgeSnapshot.mockResolvedValue({
+      data: {
+        payload: {
+          quote: [{ symbol: 'AAPL.US', price: 192.14, prev_close: 188.1, change_percent: 2.15 }],
+          depth: { bids: [{ price: 192.1, volume: 100 }], asks: [{ price: 192.2, volume: 120 }] },
+          trades: [
+          {
+            trade_id: 't-1',
+            price: 192.16,
+            volume: 80,
+            trade_direction: 'buy',
+            timestamp: '2026-05-19T09:32:21Z'
+          }
+          ],
+          sources: {}
+        }
+      }
+    })
+
+    const wrapper = mountTrading()
+    await flushPromises()
+
+    expect(marketMocks.getLongbridgeSnapshot).toHaveBeenCalledWith('AAPL.US', { count: 18 })
+    expect(marketMocks.getLongbridgeDepth).not.toHaveBeenCalled()
+    expect(marketMocks.getLongbridgeTrades).not.toHaveBeenCalled()
+    expect(marketMocks.getStockQuote).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('$192.14')
+    expect(wrapper.text()).toContain('$192.10 / $192.20')
     expect(wrapper.text()).toContain('1 条')
   })
 
@@ -288,18 +323,23 @@ describe('Trading search performance', () => {
         }
       }
     })
-    marketMocks.getStockQuote.mockResolvedValue({
+    marketMocks.getLongbridgeSnapshot.mockResolvedValue({
       data: {
-        symbol: 'AAPL.US',
-        price: 191.26,
-        prev_close: 188.1,
-        change_percent: 1.68,
-        quoteSource: 'longbridge-cli',
-        timestamp: '2026-05-19T09:31:50Z'
+        payload: {
+          quote: [{
+            symbol: 'AAPL.US',
+            price: 191.26,
+            prev_close: 188.1,
+            change_percent: 1.68,
+            quoteSource: 'longbridge-cli',
+            timestamp: '2026-05-19T09:31:50Z'
+          }],
+          depth: { bids: [], asks: [] },
+          trades: [],
+          sources: {}
+        }
       }
     })
-    marketMocks.getLongbridgeDepth.mockResolvedValue({ data: { payload: { bids: [], asks: [] } } })
-    marketMocks.getLongbridgeTrades.mockResolvedValue({ data: { payload: [] } })
     marketMocks.getLongbridgeAnnouncements.mockReturnValue(announcementDeferred.promise)
     marketMocks.getLongbridgeNews.mockReturnValue(newsDeferred.promise)
     marketMocks.getLongbridgeTopics.mockReturnValue(topicsDeferred.promise)
@@ -340,19 +380,24 @@ describe('Trading search performance', () => {
     const overviewDeferred = createDeferred()
 
     marketMocks.getSymbolOverview.mockReturnValue(overviewDeferred.promise)
-    marketMocks.getStockQuote.mockResolvedValue({
+    marketMocks.getLongbridgeSnapshot.mockResolvedValue({
       data: {
-        symbol: 'AAPL.US',
-        name: 'Apple Inc.',
-        price: 193.42,
-        prev_close: 188.1,
-        change_percent: 2.83,
-        quoteSource: 'longbridge-cli',
-        timestamp: '2026-05-19T09:32:00Z'
+        payload: {
+          quote: [{
+            symbol: 'AAPL.US',
+            name: 'Apple Inc.',
+            price: 193.42,
+            prev_close: 188.1,
+            change_percent: 2.83,
+            quoteSource: 'longbridge-cli',
+            timestamp: '2026-05-19T09:32:00Z'
+          }],
+          depth: { bids: [], asks: [] },
+          trades: [],
+          sources: {}
+        }
       }
     })
-    marketMocks.getLongbridgeDepth.mockResolvedValue({ data: { payload: { bids: [], asks: [] } } })
-    marketMocks.getLongbridgeTrades.mockResolvedValue({ data: { payload: [] } })
 
     const wrapper = mountTrading()
     await flushPromises()
@@ -374,9 +419,7 @@ describe('Trading search performance', () => {
     marketMocks.getSymbolOverview.mockResolvedValue({
       data: baseOverviewPayload
     })
-    marketMocks.getStockQuote.mockRejectedValue(new Error('quote unavailable'))
-    marketMocks.getLongbridgeDepth.mockResolvedValue({ data: { payload: { bids: [], asks: [] } } })
-    marketMocks.getLongbridgeTrades.mockResolvedValue({ data: { payload: [] } })
+    marketMocks.getLongbridgeSnapshot.mockRejectedValue(new Error('quote unavailable'))
 
     const wrapper = mountTrading()
     await flushPromises()

@@ -786,7 +786,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { getQuantStatus } from '../api/analysis.js'
-import { getDashboardMarketInsights, getLongbridgeAnnouncements, getLongbridgeDepth, getLongbridgeNews, getLongbridgeTopics, getLongbridgeTrades, getStockQuote, getSymbolOverview } from '../api/market.js'
+import { getDashboardMarketInsights, getLongbridgeAnnouncements, getLongbridgeNews, getLongbridgeSnapshot, getLongbridgeTopics, getSymbolOverview } from '../api/market.js'
 import { buyStock, getBrokerAccounts, getProjectedOrders, getTradeSnapshotState, sellStock } from '../api/trade.js'
 import MobileSegmentControl from '../components/common/MobileSegmentControl.vue'
 import ReadModelSourceStrip from '../components/common/ReadModelSourceStrip.vue'
@@ -1311,6 +1311,13 @@ const applyOverviewPayload = (overview = {}, symbol = '', fallbackPosition = nul
   return nextQuote
 }
 
+const normalizeSnapshotQuotePayload = (payload = [], symbol = '') => {
+  if (Array.isArray(payload)) {
+    return payload.find((item) => String(item?.symbol || '').trim().toUpperCase() === symbol) || payload[0] || {}
+  }
+  return payload && typeof payload === 'object' ? payload : {}
+}
+
 const normalizeDepthRows = (rows = []) => {
   const items = Array.isArray(rows) ? rows : []
   return items.slice(0, 5).map((item, index) => ({
@@ -1692,7 +1699,6 @@ const searchSymbol = async () => {
   boardLoading.value = true
   contentRefreshing.value = false
   try {
-    const params = selectedAccount.value ? { account_id: selectedAccount.value } : {}
     let quoteSurfaceReleased = false
     const releaseQuoteSurface = () => {
       if (quoteSurfaceReleased || searchId !== activeSymbolSearchId) {
@@ -1730,60 +1736,32 @@ const searchSymbol = async () => {
         return { ok: false, error }
       })
 
-    const quoteTask = getStockQuote(symbol, params)
-      .then((quoteRes) => {
+    const snapshotTask = getLongbridgeSnapshot(symbol, { count: 18 })
+      .then((snapshotRes) => {
         if (searchId !== activeSymbolSearchId) {
           return { ok: false, stale: true }
         }
+        const snapshot = snapshotRes?.data?.payload || snapshotRes?.data || {}
+        const quotePayload = normalizeSnapshotQuotePayload(snapshot.quote, symbol)
         const normalizedQuote = normalizeQuote({
-          ...(quoteRes?.data || {}),
+          ...quotePayload,
           symbol,
           name: currentQuote.value?.name || fallbackPosition?.name || symbol,
-          source: quoteRes?.data?.quoteSource || quoteRes?.data?.quote_source || 'longbridge-cli'
+          source: quotePayload?.quoteSource || quotePayload?.quote_source || snapshot?.sources?.quote || 'longbridge-cli'
         })
         quotePullFallback.value = normalizedQuote
         currentQuote.value = normalizedQuote
         quoteFetchStatus.value = 'success'
+        depthFetchStatus.value = 'success'
+        tradesFetchStatus.value = 'success'
+        depthPullFallback.value = snapshot?.depth || {}
+        tradesPullFallback.value = Array.isArray(snapshot?.trades) ? snapshot.trades : []
         releaseQuoteSurface()
         return { ok: true }
       })
       .catch((error) => {
-        console.warn('加载实时 quote 失败:', error)
+        console.warn('加载实时行情快照失败:', error)
         return { ok: false, error }
-      })
-
-    const depthTask = getLongbridgeDepth(symbol)
-      .then((depthRes) => {
-        if (searchId !== activeSymbolSearchId) {
-          return
-        }
-        depthFetchStatus.value = 'success'
-        depthPullFallback.value = depthRes?.data?.payload || depthRes?.data || {}
-      })
-      .catch((error) => {
-        if (searchId === activeSymbolSearchId) {
-          depthFetchStatus.value = 'failed'
-        }
-        console.warn('加载盘口失败:', error)
-      })
-
-    const tradesTask = getLongbridgeTrades(symbol, { count: 18 })
-      .then((tradesRes) => {
-        if (searchId !== activeSymbolSearchId) {
-          return
-        }
-        tradesFetchStatus.value = 'success'
-        tradesPullFallback.value = Array.isArray(tradesRes?.data?.payload)
-          ? tradesRes.data.payload
-          : Array.isArray(tradesRes?.data)
-            ? tradesRes.data
-            : []
-      })
-      .catch((error) => {
-        if (searchId === activeSymbolSearchId) {
-          tradesFetchStatus.value = 'failed'
-        }
-        console.warn('加载逐笔失败:', error)
       })
 
     const overviewState = await overviewTask
@@ -1799,10 +1777,15 @@ const searchSymbol = async () => {
           }
         })()
       : Promise.resolve()
-    const quoteState = await quoteTask
+    const quoteState = await snapshotTask
 
     if (searchId !== activeSymbolSearchId) {
       return
+    }
+
+    if (!quoteState.ok) {
+      depthFetchStatus.value = 'failed'
+      tradesFetchStatus.value = 'failed'
     }
 
     quoteFetchStatus.value = quoteState.ok
@@ -1819,7 +1802,7 @@ const searchSymbol = async () => {
     }
 
     releaseQuoteSurface()
-    await Promise.allSettled([depthTask, tradesTask, contentTask])
+    await Promise.allSettled([contentTask])
   } catch (error) {
     if (searchId !== activeSymbolSearchId) {
       return

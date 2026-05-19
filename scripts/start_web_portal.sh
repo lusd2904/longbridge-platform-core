@@ -4,6 +4,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/load_env.sh"
+REF_PYTHON="${REF_PYTHON:-$ROOT_DIR/.venv/bin/python}"
+if [ ! -x "$REF_PYTHON" ]; then
+    REF_PYTHON="${PYTHON:-python3}"
+fi
 APP_DIR="$ROOT_DIR/apps/frontend/web-portal"
 LOG_DIR="$ROOT_DIR/logs"
 PID_DIR="$ROOT_DIR/.runtime"
@@ -36,7 +40,7 @@ if [ ! -d "$APP_DIR/node_modules" ]; then
     (cd "$APP_DIR" && npm install)
 fi
 
-python3 "$ROOT_DIR/scripts/detach_and_exec.py" \
+"$REF_PYTHON" "$ROOT_DIR/scripts/detach_and_exec.py" \
     "$APP_DIR" \
     "$LOG_FILE" \
     "$PID_FILE" \

@@ -64,3 +64,46 @@ def test_live_cache_sets_stale_window_on_write() -> None:
         cached = market_service._LIVE_MARKET_CACHE[cache_key]
 
     assert cached["stale_until"] > cached["expires_at"]
+
+
+def test_live_snapshot_reuses_component_cache(monkeypatch) -> None:
+    class FakeContext:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def quote(self, symbols):
+            self.calls.append(("quote", tuple(symbols)))
+            return [{"symbol": symbols[0], "last_price": 190.5}]
+
+        def depth(self, symbol):
+            self.calls.append(("depth", symbol))
+            return {"bids": [{"price": 190.4}], "asks": [{"price": 190.6}]}
+
+        def trades(self, symbol, count):
+            self.calls.append(("trades", symbol, count))
+            return [{"trade_id": "t-1", "price": 190.5}]
+
+    fake_context = FakeContext()
+    monkeypatch.setattr(market_service, "_with_quote_context", lambda user_id: fake_context)
+
+    with market_service._LIVE_MARKET_CACHE_LOCK:
+        market_service._LIVE_MARKET_CACHE.clear()
+
+    session = {"user_id": 1}
+    first = market_service.asyncio.run(
+        market_service.longbridge_snapshot(symbol="AAPL.US", count=18, session=session)
+    )
+    second = market_service.asyncio.run(
+        market_service.longbridge_snapshot(symbol="AAPL.US", count=18, session=session)
+    )
+
+    assert first["data"]["payload"]["symbol"] == "AAPL.US"
+    assert first["data"]["payload"]["quote"][0]["last_price"] == 190.5
+    assert first["data"]["payload"]["depth"]["bids"][0]["price"] == 190.4
+    assert first["data"]["payload"]["trades"][0]["trade_id"] == "t-1"
+    assert first == second
+    assert sorted(fake_context.calls) == sorted([
+        ("quote", ("AAPL.US",)),
+        ("depth", "AAPL.US"),
+        ("trades", "AAPL.US", 18),
+    ])

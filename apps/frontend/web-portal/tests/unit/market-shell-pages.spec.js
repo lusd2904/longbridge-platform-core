@@ -86,6 +86,7 @@ const marketApiMocks = vi.hoisted(() => ({
   getLongbridgeAnnouncements: vi.fn(async () => ({ data: { payload: [] } })),
   getLongbridgeDepth: vi.fn(async () => ({ data: { payload: { bids: [], asks: [] } } })),
   getLongbridgeNews: vi.fn(async () => ({ data: { payload: [] } })),
+  getLongbridgeSnapshot: vi.fn(async () => ({ data: { payload: { quote: [], depth: { bids: [], asks: [] }, trades: [], sources: {} } } })),
   getStockQuote: vi.fn(async () => ({ data: { price: 194.5, change_percent: 1.36, timestamp: '2026-03-27T09:31:00Z' } })),
   getLongbridgeTopics: vi.fn(async () => ({ data: { payload: [] } })),
   getLongbridgeTrades: vi.fn(async () => ({ data: { payload: [] } })),

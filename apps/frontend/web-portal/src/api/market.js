@@ -12,6 +12,7 @@ export {
   getLongbridgeAnnouncements,
   getLongbridgeDepth,
   getLongbridgeNews,
+  getLongbridgeSnapshot,
   getLongbridgeTrades,
   getLongbridgeTopics,
   getMarketHistory,

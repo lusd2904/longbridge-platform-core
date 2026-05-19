@@ -1918,4 +1918,23 @@ export const getLongbridgeTrades = (symbol, params = {}) => {
     })
   ))
 }
+export const getLongbridgeSnapshot = (symbol, params = {}) => {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+  const count = params.count || 18
+  if (!normalizedSymbol) {
+    return successPayload({
+      symbol: '',
+      quote: [],
+      depth: {},
+      trades: [],
+      sources: {}
+    })
+  }
+  return withLiveMarketCache('snapshot', { symbol: normalizedSymbol, count }, () => (
+    serviceGet('market', '/api/v1/market/longbridge/snapshot', {
+      symbol: normalizedSymbol,
+      count
+    })
+  ))
+}
 export const getLongbridgeTopics = (symbol) => serviceGet('market', '/api/v1/market/longbridge/content/topics', { symbol })

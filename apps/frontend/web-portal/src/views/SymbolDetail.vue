@@ -348,10 +348,9 @@ import VChart from 'vue-echarts'
 import {
   analyzeStock,
   getLongbridgeAnnouncements,
-  getLongbridgeDepth,
   getLongbridgeNews,
+  getLongbridgeSnapshot,
   getStockQuote,
-  getLongbridgeTrades,
   getLongbridgeTopics,
   getSymbolOverview
 } from '../api/market.js'
@@ -859,13 +858,29 @@ const fetchQuoteFallback = async () => {
   }
 }
 
+const normalizeSnapshotQuotePayload = (payload = []) => {
+  const symbol = routeSymbol.value
+  if (Array.isArray(payload)) {
+    return payload.find((item) => String(item?.symbol || '').trim().toUpperCase() === symbol) || payload[0] || {}
+  }
+  return payload && typeof payload === 'object' ? payload : {}
+}
+
+const applyLiveSnapshot = (snapshot = {}) => {
+  quoteApiFallback.value = {
+    ...normalizeSnapshotQuotePayload(snapshot.quote),
+    source: snapshot?.sources?.quote || 'longbridge-cli'
+  }
+  depthSnapshotFallback.value = snapshot?.depth || {}
+  tradeSnapshotsFallback.value = Array.isArray(snapshot?.trades) ? snapshot.trades : []
+}
+
 const loadDetail = async ({ refreshContent = false } = {}) => {
   loading.value = true
   try {
-    const [detailRes, depthRes, tradesRes] = await Promise.allSettled([
+    const [detailRes, snapshotRes] = await Promise.allSettled([
       getSymbolOverview(routeSymbol.value),
-      getLongbridgeDepth(routeSymbol.value),
-      getLongbridgeTrades(routeSymbol.value, { count: 18 })
+      getLongbridgeSnapshot(routeSymbol.value, { count: 18 })
     ])
 
     if (detailRes.status !== 'fulfilled') {
@@ -878,13 +893,13 @@ const loadDetail = async ({ refreshContent = false } = {}) => {
     marketInsight.value = data.marketInsight || null
     marketScan.value = data.marketScan || null
     applyContentBundle(data.contentCache || {}, 'content-cache')
-    depthSnapshotFallback.value = depthRes.status === 'fulfilled'
-      ? (depthRes.value?.data?.payload || depthRes.value?.data || {})
-      : {}
-    tradeSnapshotsFallback.value = tradesRes.status === 'fulfilled'
-      ? (Array.isArray(tradesRes.value?.data?.payload) ? tradesRes.value.data.payload : Array.isArray(tradesRes.value?.data) ? tradesRes.value.data : [])
-      : []
-    await fetchQuoteFallback()
+    if (snapshotRes.status === 'fulfilled') {
+      applyLiveSnapshot(snapshotRes.value?.data?.payload || snapshotRes.value?.data || {})
+    } else {
+      await fetchQuoteFallback()
+      depthSnapshotFallback.value = {}
+      tradeSnapshotsFallback.value = []
+    }
 
     if (refreshContent || !contentCacheReady.value) {
       await refreshContentFeeds()

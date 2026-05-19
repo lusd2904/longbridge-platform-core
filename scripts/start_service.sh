@@ -9,6 +9,10 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/load_env.sh"
+REF_PYTHON="${REF_PYTHON:-$ROOT_DIR/.venv/bin/python}"
+if [ ! -x "$REF_PYTHON" ]; then
+    REF_PYTHON="${PYTHON:-python3}"
+fi
 SERVICE_NAME="$1"
 SERVICE_DIR="$2"
 PORT="$3"
@@ -38,7 +42,7 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     exit 0
 fi
 
-if ! python3 - <<'PY' >/dev/null 2>&1
+if ! "$REF_PYTHON" - <<'PY' >/dev/null 2>&1
 import fastapi
 import uvicorn
 import bcrypt
@@ -47,14 +51,14 @@ import pymysql
 import dotenv
 PY
 then
-    python3 -m pip install --user -r "$ROOT_DIR/requirements.services.txt"
+    "$REF_PYTHON" -m pip install -r "$ROOT_DIR/requirements.services.txt"
 fi
 
-python3 "$ROOT_DIR/scripts/detach_and_exec.py" \
+"$REF_PYTHON" "$ROOT_DIR/scripts/detach_and_exec.py" \
     "$ROOT_DIR/$SERVICE_DIR/src" \
     "$LOG_FILE" \
     "$PID_FILE" \
-    env PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" SERVICE_PORT="$PORT" python3 main.py
+    env PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}" SERVICE_PORT="$PORT" "$REF_PYTHON" main.py
 
 for _ in {1..20}; do
     if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then

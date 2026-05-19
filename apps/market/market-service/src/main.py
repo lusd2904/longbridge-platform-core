@@ -1165,6 +1165,82 @@ async def _run_live_pull(loader):
     return await asyncio.to_thread(loader)
 
 
+def _live_response(payload: Any, *, data_source: str = "longbridge-live", extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {"success": True, "data": _serialize_live(payload, data_source=data_source, extra=extra)}
+
+
+async def _load_longbridge_quotes(
+    *,
+    user_id: int,
+    symbols: List[str],
+    ctx: Any = None,
+    allow_stale: bool = True,
+) -> Dict[str, Any]:
+    normalized_symbols = [HistoricalMarketDataService.normalize_symbol(symbol) for symbol in symbols]
+    cache_key = ("longbridge-quotes", int(user_id), tuple(normalized_symbols))
+    cached_payload = _live_cache_get(cache_key, allow_stale=allow_stale)
+    if cached_payload:
+        return cached_payload
+
+    quote_context = ctx or _with_quote_context(int(user_id))
+    payload = await _run_live_pull(lambda: quote_context.quote(normalized_symbols))
+    return _live_cache_set(cache_key, _live_response(payload), _LIVE_MARKET_CACHE_TTL_SECONDS)
+
+
+async def _load_longbridge_depth(
+    *,
+    user_id: int,
+    symbol: str,
+    ctx: Any = None,
+    allow_stale: bool = True,
+) -> Dict[str, Any]:
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+    cache_key = ("longbridge-depth", int(user_id), normalized_symbol)
+    cached_payload = _live_cache_get(cache_key, allow_stale=allow_stale)
+    if cached_payload:
+        return cached_payload
+
+    quote_context = ctx or _with_quote_context(int(user_id))
+    payload = await _run_live_pull(lambda: quote_context.depth(normalized_symbol))
+    return _live_cache_set(cache_key, _live_response(payload), _LIVE_MARKET_CACHE_TTL_SECONDS)
+
+
+async def _load_longbridge_trades(
+    *,
+    user_id: int,
+    symbol: str,
+    count: int = 50,
+    ctx: Any = None,
+    allow_stale: bool = True,
+) -> Dict[str, Any]:
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+    safe_count = max(1, min(int(count or 50), 1000))
+    cache_key = ("longbridge-trades", int(user_id), normalized_symbol, safe_count)
+    cached_payload = _live_cache_get(cache_key, allow_stale=allow_stale)
+    if cached_payload:
+        return cached_payload
+
+    quote_context = ctx or _with_quote_context(int(user_id))
+    payload = await _run_live_pull(lambda: quote_context.trades(normalized_symbol, safe_count))
+    return _live_cache_set(cache_key, _live_response(payload), _LIVE_MARKET_CACHE_TTL_SECONDS)
+
+
+def _extract_live_payload(response: Any, fallback: Any) -> Any:
+    if not isinstance(response, dict):
+        return fallback
+    data = response.get("data")
+    if isinstance(data, dict) and "payload" in data:
+        return data.get("payload")
+    return data if data is not None else fallback
+
+
+def _extract_live_source(response: Any, fallback: str = "longbridge-live") -> str:
+    data = response.get("data") if isinstance(response, dict) else {}
+    if isinstance(data, dict):
+        return str(data.get("dataSource") or fallback)
+    return fallback
+
+
 def _cached_content_payload(
     *,
     symbol: str,
@@ -2084,16 +2160,10 @@ async def longbridge_quotes(
     symbol: Optional[str] = None,
     session: dict = Depends(get_current_session),
 ):
-    normalized_symbols = _require_symbols(symbols, symbol)
-    cache_key = ("longbridge-quotes", int(session["user_id"]), tuple(normalized_symbols))
-    cached_payload = _live_cache_get(cache_key, allow_stale=True)
-    if cached_payload:
-        return cached_payload
-
-    ctx = _with_quote_context(int(session["user_id"]))
-    payload = await _run_live_pull(lambda: ctx.quote(normalized_symbols))
-    response = {"success": True, "data": _serialize_live(payload)}
-    return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
+    return await _load_longbridge_quotes(
+        user_id=int(session["user_id"]),
+        symbols=_require_symbols(symbols, symbol),
+    )
 
 
 @app.get("/api/v1/market/longbridge/options/quotes")
@@ -2124,16 +2194,7 @@ async def longbridge_warrant_quotes(
 
 @app.get("/api/v1/market/longbridge/depth")
 async def longbridge_depth(symbol: str, session: dict = Depends(get_current_session)):
-    normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
-    cache_key = ("longbridge-depth", int(session["user_id"]), normalized_symbol)
-    cached_payload = _live_cache_get(cache_key, allow_stale=True)
-    if cached_payload:
-        return cached_payload
-
-    ctx = _with_quote_context(int(session["user_id"]))
-    payload = await _run_live_pull(lambda: ctx.depth(normalized_symbol))
-    response = {"success": True, "data": _serialize_live(payload)}
-    return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
+    return await _load_longbridge_depth(user_id=int(session["user_id"]), symbol=symbol)
 
 
 @app.get("/api/v1/market/longbridge/brokers")
@@ -2156,16 +2217,45 @@ async def longbridge_trades(
     count: int = 50,
     session: dict = Depends(get_current_session),
 ):
+    return await _load_longbridge_trades(
+        user_id=int(session["user_id"]),
+        symbol=symbol,
+        count=count,
+    )
+
+
+@app.get("/api/v1/market/longbridge/snapshot")
+async def longbridge_snapshot(
+    symbol: str,
+    count: int = 18,
+    session: dict = Depends(get_current_session),
+):
+    user_id = int(session["user_id"])
     normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
-    safe_count = max(1, min(int(count or 50), 1000))
-    cache_key = ("longbridge-trades", int(session["user_id"]), normalized_symbol, safe_count)
+    safe_count = max(1, min(int(count or 18), 1000))
+    cache_key = ("longbridge-snapshot", user_id, normalized_symbol, safe_count)
     cached_payload = _live_cache_get(cache_key, allow_stale=True)
     if cached_payload:
         return cached_payload
 
-    ctx = _with_quote_context(int(session["user_id"]))
-    payload = await _run_live_pull(lambda: ctx.trades(normalized_symbol, safe_count))
-    response = {"success": True, "data": _serialize_live(payload)}
+    ctx = _with_quote_context(user_id)
+    quote_result, depth_result, trades_result = await asyncio.gather(
+        _load_longbridge_quotes(user_id=user_id, symbols=[normalized_symbol], ctx=ctx),
+        _load_longbridge_depth(user_id=user_id, symbol=normalized_symbol, ctx=ctx),
+        _load_longbridge_trades(user_id=user_id, symbol=normalized_symbol, count=safe_count, ctx=ctx),
+    )
+    payload = {
+        "symbol": normalized_symbol,
+        "quote": _extract_live_payload(quote_result, []),
+        "depth": _extract_live_payload(depth_result, {}),
+        "trades": _extract_live_payload(trades_result, []),
+        "sources": {
+            "quote": _extract_live_source(quote_result),
+            "depth": _extract_live_source(depth_result),
+            "trades": _extract_live_source(trades_result),
+        },
+    }
+    response = _live_response(payload, extra={"components": ["quote", "depth", "trades"]})
     return _live_cache_set(cache_key, response, _LIVE_MARKET_CACHE_TTL_SECONDS)
 
 
