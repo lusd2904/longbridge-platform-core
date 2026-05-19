@@ -781,6 +781,21 @@ const pageActions = {
       actions.push('verified scheduler content visible')
     }
     return actions
+  },
+  historyCoverage: async (page) => {
+    const actions = []
+    await expectVisible(page.getByText('历史补价覆盖'), 'verified history coverage title visible', 4000)
+    actions.push('verified history coverage title')
+    const keywordInput = page.getByPlaceholder('搜索标的 / 名称 / 市场')
+    if (await keywordInput.isVisible().catch(() => false)) {
+      await keywordInput.fill('NVDL')
+      actions.push('searched NVDL coverage')
+      await waitForRefreshStable(page, { timeoutMs: 3600 })
+      await expectVisible(page.locator('.table-card'), 'verified history coverage table visible', 4000)
+      actions.push('verified history coverage table visible')
+      await keywordInput.clear()
+    }
+    return actions
   }
 }
 
@@ -858,7 +873,8 @@ const desktopVisits = [
   { route: '/notifications', name: 'notifications', action: pageActions.notifications },
   { route: '/settings', name: 'settings', action: pageActions.settings },
   { route: '/user-management', name: 'user-management', action: pageActions.users },
-  { route: '/scheduler-center', name: 'scheduler-center', action: pageActions.scheduler }
+  { route: '/scheduler-center', name: 'scheduler-center', action: pageActions.scheduler },
+  { route: '/history-coverage', name: 'history-coverage', action: pageActions.historyCoverage }
 ]
 
 const mobileVisits = [

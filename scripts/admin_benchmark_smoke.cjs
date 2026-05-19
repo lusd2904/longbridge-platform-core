@@ -182,6 +182,7 @@ function createBenchmarkContext(token, authInfo, brokerAccounts = null) {
     authInfo,
     accountId,
     marketSymbol: 'AAPL.US',
+    historySymbols: ['NVDL.US', 'NVDA.US'],
     quoteSymbols: ['AAPL.US', 'TSLA.US', 'NVDA.US'],
     notificationLimit: Math.max(LIMIT, 60),
     orderLimit: Math.max(LIMIT, 20),
@@ -380,6 +381,86 @@ function buildSuite(token, authInfo, brokerAccounts = null) {
         latestGeneratedAt: Array.isArray(payload?.data) && payload.data[0]
           ? payload.data[0].generatedAt || payload.data[0].generated_at || null
           : null
+      })
+    },
+    {
+      id: 'market-history-compare',
+      label: 'Market History Compare',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/history/compare',
+      headers: makeAuthHeaders(token),
+      query: {
+        symbols: context.historySymbols,
+        timeframe: 'daily',
+        limit: 180,
+        refresh: false
+      },
+      summarize: (payload) => {
+        const series = Array.isArray(payload?.data?.series) ? payload.data.series : []
+        const comparison = Array.isArray(payload?.data?.comparison) ? payload.data.comparison : []
+        const snapshots = Array.isArray(payload?.data?.snapshots) ? payload.data.snapshots : []
+        return {
+          symbolCount: Array.isArray(payload?.data?.symbols) ? payload.data.symbols.length : context.historySymbols.length,
+          seriesCount: series.length,
+          pointCount: series.reduce((sum, item) => sum + (Array.isArray(item?.items) ? item.items.length : 0), 0),
+          comparisonCount: comparison.length,
+          snapshotCount: snapshots.length,
+          snapshotAt: payload?.meta?.snapshotAt || null
+        }
+      }
+    },
+    {
+      id: 'market-backfill-status',
+      label: 'Market Backfill Status',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/backfill/status',
+      headers: makeAuthHeaders(token),
+      summarize: (payload) => ({
+        available: !isHtmlResponse(payload),
+        running: Boolean(payload?.data?.running ?? payload?.data?.isRunning),
+        symbolCount: Number(payload?.data?.totalUniverseSymbols ?? payload?.data?.symbolCount ?? payload?.data?.symbol_count ?? 0),
+        completedCount: Number(payload?.data?.syncedSymbols ?? payload?.data?.completedCount ?? payload?.data?.completed_count ?? 0),
+        coverageRate: Number(payload?.data?.coverageRate ?? 0),
+        updatedAt: payload?.data?.updatedAt || payload?.data?.updated_at || null
+      })
+    },
+    {
+      id: 'market-history-coverage',
+      label: 'Market History Coverage',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/history/coverage',
+      headers: makeAuthHeaders(token),
+      query: {
+        page: 1,
+        page_size: Math.min(context.stockPoolPageSize, 20)
+      },
+      summarize: (payload) => ({
+        total: Number(payload?.data?.total ?? 0),
+        itemCount: Array.isArray(payload?.data?.items) ? payload.data.items.length : 0,
+        completeCount: Number(payload?.data?.summary?.counts?.complete ?? payload?.data?.summary?.complete ?? payload?.data?.summary?.completeCount ?? 0),
+        partialCount: Number(payload?.data?.summary?.counts?.partial ?? payload?.data?.summary?.partial ?? payload?.data?.summary?.partialCount ?? 0),
+        missingCount: Number(payload?.data?.summary?.counts?.missing ?? payload?.data?.summary?.missing ?? payload?.data?.summary?.missingCount ?? 0),
+        snapshotAt: payload?.meta?.snapshotAt || null
+      })
+    },
+    {
+      id: 'market-history-coverage-symbol',
+      label: 'Market History Coverage Symbol',
+      method: 'GET',
+      path: '/svc/market/api/v1/market/history/coverage',
+      headers: makeAuthHeaders(token),
+      query: {
+        search: 'NVDL',
+        page: 1,
+        page_size: Math.min(context.stockPoolPageSize, 20)
+      },
+      summarize: (payload) => ({
+        total: Number(payload?.data?.total ?? 0),
+        itemCount: Array.isArray(payload?.data?.items) ? payload.data.items.length : 0,
+        completeCount: Number(payload?.data?.summary?.counts?.complete ?? payload?.data?.summary?.complete ?? payload?.data?.summary?.completeCount ?? 0),
+        partialCount: Number(payload?.data?.summary?.counts?.partial ?? payload?.data?.summary?.partial ?? payload?.data?.summary?.partialCount ?? 0),
+        missingCount: Number(payload?.data?.summary?.counts?.missing ?? payload?.data?.summary?.missing ?? payload?.data?.summary?.missingCount ?? 0),
+        snapshotAt: payload?.meta?.snapshotAt || null
       })
     },
     {

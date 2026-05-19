@@ -42,7 +42,8 @@ class HistoricalMarketDataService:
     TABLE_NAME = 'market_price_history_daily'
     SUPPORTED_TIMEFRAMES = {'daily', 'weekly', 'monthly', 'quarterly', 'yearly'}
     _BACKFILL_STATUS_CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
-    _BACKFILL_STATUS_TTL_SECONDS = 60
+    _BACKFILL_STATUS_TTL_SECONDS = 300
+    _BACKFILL_STATUS_SCHEMA_READY = False
 
     @classmethod
     def _empty_history_payload(cls, symbol: str, timeframe: str = 'daily') -> Dict[str, object]:
@@ -221,28 +222,13 @@ class HistoricalMarketDataService:
 
     @classmethod
     def get_backfill_status(cls) -> Dict[str, object]:
-        from core.platform.SystemTaskService import SystemTaskService
-
         now = time.time()
         cached_payload = cls._BACKFILL_STATUS_CACHE.get("payload")
         if cached_payload and now < float(cls._BACKFILL_STATUS_CACHE.get("expires_at") or 0):
             return dict(cached_payload)
 
-        cls.ensure_schema()
-        SystemTaskService.ensure_schema()
-        DbUtil.execute_sql(
-            """
-            CREATE TABLE IF NOT EXISTS scheduled_jobs (
-                job_name VARCHAR(80) NOT NULL PRIMARY KEY,
-                last_run_date DATE DEFAULT NULL,
-                last_run_at DATETIME DEFAULT NULL,
-                status VARCHAR(32) DEFAULT 'idle',
-                message VARCHAR(255) DEFAULT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
-        )
+        cls._ensure_backfill_status_schema()
+        from core.platform.SystemTaskService import SystemTaskService
 
         universe_row = DbUtil.fetch_one(
             """
@@ -328,6 +314,30 @@ class HistoricalMarketDataService:
             "payload": dict(payload),
         }
         return payload
+
+    @classmethod
+    def _ensure_backfill_status_schema(cls) -> None:
+        if cls._BACKFILL_STATUS_SCHEMA_READY:
+            return
+
+        from core.platform.SystemTaskService import SystemTaskService
+
+        cls.ensure_schema()
+        SystemTaskService.ensure_schema()
+        DbUtil.execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS scheduled_jobs (
+                job_name VARCHAR(80) NOT NULL PRIMARY KEY,
+                last_run_date DATE DEFAULT NULL,
+                last_run_at DATETIME DEFAULT NULL,
+                status VARCHAR(32) DEFAULT 'idle',
+                message VARCHAR(255) DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+        cls._BACKFILL_STATUS_SCHEMA_READY = True
 
     @classmethod
     def _estimate_history_total_rows(cls) -> int:

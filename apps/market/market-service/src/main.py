@@ -78,6 +78,25 @@ async def market_service_lifespan(_: Any):
     SymbolContentCacheService.ensure_schema()
     QuoteSnapshotService.ensure_schema()
     WatchlistService.ensure_schema()
+    await asyncio.to_thread(HistoricalMarketDataService.get_backfill_status)
+    default_coverage_key = _build_history_coverage_cache_key(
+        start_date=_HISTORY_COVERAGE_START_DATE,
+        search="",
+        status="",
+        page=1,
+        page_size=20,
+        expected_start=None,
+        expected_end=None,
+    )
+    default_coverage_payload = await asyncio.to_thread(
+        _load_history_coverage_payload,
+        start_date=_HISTORY_COVERAGE_START_DATE,
+        search="",
+        status="",
+        page=1,
+        page_size=20,
+    )
+    _set_history_coverage_cache(default_coverage_key, default_coverage_payload)
     yield
 
 
@@ -95,7 +114,7 @@ _LIVE_MARKET_STALE_SECONDS = 45
 _SYMBOL_OVERVIEW_CACHE_TTL_SECONDS = 10
 _HISTORY_COVERAGE_START_DATE = date(2024, 1, 1)
 _HISTORY_COVERAGE_STATUSES = {"complete", "partial", "missing"}
-_HISTORY_COVERAGE_CACHE_TTL_SECONDS = 15
+_HISTORY_COVERAGE_CACHE_TTL_SECONDS = 300
 _HISTORY_COVERAGE_CACHE_LOCK = threading.Lock()
 _HISTORY_COVERAGE_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 _LIVE_MARKET_CACHE_LOCK = threading.Lock()
@@ -321,6 +340,14 @@ def _build_history_coverage_sql(
         return "", ()
 
     history_table = HistoricalMarketDataService.TABLE_NAME
+    params: List[Any] = []
+    search_clause = ""
+    search_value = str(search or "").strip()
+    if search_value:
+        search_clause = "AND (symbol LIKE %s OR display_name LIKE %s)"
+        like_value = f"%{search_value}%"
+        params.extend([like_value, like_value])
+
     select_sql = f"""
         WITH universe_union AS (
             {universe_sql}
@@ -346,34 +373,52 @@ def _build_history_coverage_sql(
             FROM ranked_universe
             WHERE row_rank = 1
         ),
-        history_agg AS (
+        filtered_universe AS (
             SELECT
                 symbol,
+                display_name,
                 market,
-                MIN(trade_date) AS first_date,
-                MAX(trade_date) AS latest_date,
+                universe_updated_at
+            FROM base_universe
+            WHERE 1 = 1
+              {search_clause}
+        ),
+        history_agg AS (
+            SELECT
+                history.symbol,
+                history.market,
+                MIN(history.trade_date) AS first_date,
+                MAX(history.trade_date) AS latest_date,
                 COUNT(*) AS row_count,
-                MAX(updated_at) AS last_updated
-            FROM {history_table}
-            WHERE trade_date >= %s
-            GROUP BY symbol, market
+                MAX(history.updated_at) AS last_updated
+            FROM {history_table} history
+            INNER JOIN filtered_universe
+              ON filtered_universe.symbol = history.symbol
+             AND filtered_universe.market = history.market
+            WHERE history.trade_date >= %s
+            GROUP BY history.symbol, history.market
         ),
         market_expectation AS (
             SELECT
-                market,
-                MIN(trade_date) AS expected_start_trade_date,
-                MAX(trade_date) AS expected_end,
-                COUNT(DISTINCT trade_date) AS expected_days
-            FROM {history_table}
-            WHERE trade_date >= %s
-            GROUP BY market
+                history.market,
+                MIN(history.trade_date) AS expected_start_trade_date,
+                MAX(history.trade_date) AS expected_end,
+                COUNT(DISTINCT history.trade_date) AS expected_days
+            FROM {history_table} history
+            INNER JOIN (
+                SELECT DISTINCT market
+                FROM filtered_universe
+            ) target_markets
+              ON target_markets.market = history.market
+            WHERE history.trade_date >= %s
+            GROUP BY history.market
         )
         SELECT *
         FROM (
             SELECT
-                base_universe.symbol,
-                base_universe.display_name AS name,
-                base_universe.market,
+                filtered_universe.symbol,
+                filtered_universe.display_name AS name,
+                filtered_universe.market,
                 history_agg.first_date,
                 history_agg.latest_date,
                 COALESCE(history_agg.row_count, 0) AS row_count,
@@ -391,23 +436,17 @@ def _build_history_coverage_sql(
                     ELSE 'partial'
                 END AS status,
                 GREATEST(COALESCE(market_expectation.expected_days, 0) - COALESCE(history_agg.row_count, 0), 0) AS missing_days,
-                COALESCE(history_agg.last_updated, base_universe.universe_updated_at) AS last_updated
-            FROM base_universe
+                COALESCE(history_agg.last_updated, filtered_universe.universe_updated_at) AS last_updated
+            FROM filtered_universe
             LEFT JOIN history_agg
-              ON history_agg.symbol = base_universe.symbol
-             AND history_agg.market = base_universe.market
+              ON history_agg.symbol = filtered_universe.symbol
+             AND history_agg.market = filtered_universe.market
             LEFT JOIN market_expectation
-              ON market_expectation.market = base_universe.market
+              ON market_expectation.market = filtered_universe.market
         ) AS coverage
         WHERE 1 = 1
     """
-    params: List[Any] = [start_date, start_date, start_date]
-
-    search_value = str(search or "").strip()
-    if search_value:
-        select_sql += " AND (coverage.symbol LIKE %s OR coverage.name LIKE %s)"
-        like_value = f"%{search_value}%"
-        params.extend([like_value, like_value])
+    params.extend([start_date, start_date, start_date])
 
     status_value = _normalize_history_coverage_status(status)
     if status_value:
@@ -415,6 +454,75 @@ def _build_history_coverage_sql(
         params.append(status_value)
 
     return select_sql, tuple(params)
+
+
+def _load_history_coverage_market_rows(*, start_date: date, search: str) -> List[Dict[str, Any]]:
+    universe_sql = _build_history_coverage_universe_sql()
+    if not universe_sql:
+        return []
+
+    params: List[Any] = []
+    search_clause = ""
+    search_value = str(search or "").strip()
+    if search_value:
+        search_clause = "AND (symbol LIKE %s OR display_name LIKE %s)"
+        like_value = f"%{search_value}%"
+        params.extend([like_value, like_value])
+
+    market_rows = DbUtil.fetch_all(
+        f"""
+        WITH universe_union AS (
+            {universe_sql}
+        ),
+        ranked_universe AS (
+            SELECT
+                symbol,
+                display_name,
+                market,
+                ROW_NUMBER() OVER (
+                    PARTITION BY symbol
+                    ORDER BY source_priority ASC, market ASC, symbol ASC
+                ) AS row_rank
+            FROM universe_union
+        ),
+        base_universe AS (
+            SELECT symbol, display_name, market
+            FROM ranked_universe
+            WHERE row_rank = 1
+        )
+        SELECT DISTINCT market
+        FROM base_universe
+        WHERE 1 = 1
+          {search_clause}
+        ORDER BY market ASC
+        """,
+        tuple(params),
+    ) or []
+    markets = [
+        str(row.get("market") or "").strip().upper()
+        for row in market_rows
+        if str(row.get("market") or "").strip()
+    ]
+    if not markets:
+        return []
+
+    placeholders = ", ".join(["%s"] * len(markets))
+    history_table = HistoricalMarketDataService.TABLE_NAME
+    return DbUtil.fetch_all(
+        f"""
+        SELECT
+            market,
+            MIN(trade_date) AS expected_start_trade_date,
+            MAX(trade_date) AS expected_end,
+            COUNT(DISTINCT trade_date) AS expected_days
+        FROM {history_table}
+        WHERE trade_date >= %s
+          AND market IN ({placeholders})
+        GROUP BY market
+        ORDER BY market ASC
+        """,
+        (start_date, *markets),
+    ) or []
 
 
 def _load_history_coverage_payload(
@@ -446,59 +554,38 @@ def _load_history_coverage_payload(
             "total": 0,
         }
 
-    total_row = DbUtil.fetch_one(
-        f"SELECT COUNT(*) AS total FROM ({coverage_sql}) AS paged_coverage",
-        coverage_params,
-    ) or {}
-    total = int(total_row.get("total") or 0)
-
-    summary_row = DbUtil.fetch_one(
-        f"""
-        SELECT
-            COUNT(*) AS filtered_total,
-            SUM(CASE WHEN paged_coverage.status = 'complete' THEN 1 ELSE 0 END) AS complete_count,
-            SUM(CASE WHEN paged_coverage.status = 'partial' THEN 1 ELSE 0 END) AS partial_count,
-            SUM(CASE WHEN paged_coverage.status = 'missing' THEN 1 ELSE 0 END) AS missing_count,
-            SUM(COALESCE(paged_coverage.row_count, 0)) AS total_rows,
-            SUM(COALESCE(paged_coverage.missing_days, 0)) AS total_missing_days,
-            MAX(paged_coverage.expected_end) AS expected_end,
-            MAX(paged_coverage.last_updated) AS last_updated
-        FROM ({coverage_sql}) AS paged_coverage
-        """,
-        coverage_params,
-    ) or {}
-
-    market_rows = DbUtil.fetch_all(
-        f"""
-        SELECT
-            market,
-            MAX(expected_start_trade_date) AS expected_start_trade_date,
-            MAX(expected_end) AS expected_end,
-            MAX(expected_days) AS expected_days
-        FROM ({coverage_sql}) AS filtered_coverage
-        GROUP BY market
-        ORDER BY market ASC
-        """,
-        coverage_params,
-    ) or []
-
     offset = max(int(page) - 1, 0) * int(page_size)
     item_rows = DbUtil.fetch_all(
         f"""
         SELECT *
-        FROM ({coverage_sql}) AS paged_coverage
+        FROM (
+            SELECT
+                paged_coverage.*,
+                COUNT(*) OVER() AS filtered_total,
+                SUM(CASE WHEN paged_coverage.status = 'complete' THEN 1 ELSE 0 END) OVER() AS complete_count,
+                SUM(CASE WHEN paged_coverage.status = 'partial' THEN 1 ELSE 0 END) OVER() AS partial_count,
+                SUM(CASE WHEN paged_coverage.status = 'missing' THEN 1 ELSE 0 END) OVER() AS missing_count,
+                SUM(COALESCE(paged_coverage.row_count, 0)) OVER() AS total_rows,
+                SUM(COALESCE(paged_coverage.missing_days, 0)) OVER() AS total_missing_days,
+                MAX(paged_coverage.expected_end) OVER() AS summary_expected_end,
+                MAX(paged_coverage.last_updated) OVER() AS summary_last_updated
+            FROM ({coverage_sql}) AS paged_coverage
+        ) AS windowed_coverage
         ORDER BY
-            CASE paged_coverage.status
+            CASE windowed_coverage.status
                 WHEN 'missing' THEN 0
                 WHEN 'partial' THEN 1
                 ELSE 2
             END ASC,
-            paged_coverage.missing_days DESC,
-            paged_coverage.symbol ASC
+            windowed_coverage.missing_days DESC,
+            windowed_coverage.symbol ASC
         LIMIT %s OFFSET %s
         """,
         coverage_params + (int(page_size), int(offset)),
     ) or []
+    summary_row = item_rows[0] if item_rows else {}
+    total = int(summary_row.get("filtered_total") or 0)
+    market_rows = _load_history_coverage_market_rows(start_date=start_date, search=search)
 
     items = [
         {
@@ -520,7 +607,7 @@ def _load_history_coverage_payload(
     return {
         "summary": {
             "expectedStart": start_date.isoformat(),
-            "expectedEnd": _isoformat_optional(summary_row.get("expected_end")),
+            "expectedEnd": _isoformat_optional(summary_row.get("summary_expected_end")),
             "markets": [
                 {
                     "market": row.get("market"),
@@ -539,7 +626,7 @@ def _load_history_coverage_payload(
             },
             "totalRows": int(summary_row.get("total_rows") or 0),
             "totalMissingDays": int(summary_row.get("total_missing_days") or 0),
-            "lastUpdated": _isoformat_optional(summary_row.get("last_updated")),
+            "lastUpdated": _isoformat_optional(summary_row.get("summary_last_updated")),
         },
         "items": items,
         "total": total,

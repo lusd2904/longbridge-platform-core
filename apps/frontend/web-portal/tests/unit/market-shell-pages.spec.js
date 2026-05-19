@@ -1,4 +1,4 @@
-import { flushPromises, shallowMount } from '@vue/test-utils'
+import { flushPromises, mount, shallowMount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import Recommendations from '@/views/Recommendations.vue'
 import FinanceNews from '@/views/FinanceNews.vue'
@@ -6,6 +6,7 @@ import SymbolDetail from '@/views/SymbolDetail.vue'
 import Kline from '@/views/Kline.vue'
 import Strategy from '@/views/Strategy.vue'
 import RiskManagement from '@/views/RiskManagement.vue'
+import HistoryCoverage from '@/views/system/HistoryCoverage.vue'
 
 const marketApiMocks = vi.hoisted(() => ({
   addStockToPool: vi.fn(async () => ({})),
@@ -26,6 +27,36 @@ const marketApiMocks = vi.hoisted(() => ({
         status: 'running',
         message: '历史补数持续回补中'
       }
+    }
+  })),
+  getMarketHistoryCoverage: vi.fn(async () => ({
+    data: {
+      summary: {
+        expectedStart: '2024-01-01',
+        expectedEnd: '2026-05-19',
+        filteredTotal: 3,
+        totalRows: 1280,
+        lastUpdated: '2026-05-20T00:41:56',
+        counts: {
+          complete: 1,
+          partial: 1,
+          missing: 1
+        }
+      },
+      items: [
+        {
+          symbol: 'NVDL.US',
+          name: 'GraniteShares 2x Long NVDA',
+          market: 'US',
+          firstDate: '2024-01-01',
+          latestDate: '2026-05-19',
+          rowCount: 610,
+          missingDays: 0,
+          status: 'complete',
+          lastUpdated: '2026-05-20T00:41:56'
+        }
+      ],
+      total: 3
     }
   })),
   getMarketHistoryCompare: vi.fn(async () => ({
@@ -508,5 +539,42 @@ describe('market shell pages', () => {
     expect(wrapper.find('page-hero-stub').exists()).toBe(true)
     expect(wrapper.find('metric-strip-stub').exists()).toBe(true)
     expect(wrapper.findAll('section-card-header-stub').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('maps history coverage read model fields into the system coverage page', async () => {
+    marketApiMocks.getMarketHistoryCoverage.mockClear()
+    const wrapper = mount(HistoryCoverage, {
+      global: {
+        ...mountOptions.global,
+        stubs: {
+          ...mountOptions.global.stubs,
+          PageHero: {
+            props: ['title', 'metrics'],
+            template: '<section><h1>{{ title }}</h1><div v-for="metric in metrics" :key="metric.label">{{ metric.label }} {{ metric.value }}</div><slot name="actions" /></section>'
+          },
+          MetricStrip: {
+            props: ['items'],
+            template: '<section><div v-for="item in items" :key="item.label">{{ item.label }} {{ item.value }}</div></section>'
+          },
+          SectionCardHeader: {
+            props: ['title', 'badge'],
+            template: '<header>{{ title }} {{ badge }}</header>'
+          },
+          'el-table': {
+            props: ['data'],
+            template: '<div class="el-table"><div v-for="row in data" :key="row.symbol" class="el-table__row">{{ row.symbol }} {{ row.rowCount }} {{ row.missingEstimate }}</div><slot /></div>'
+          }
+        }
+      }
+    })
+    expect(marketApiMocks.getMarketHistoryCoverage).toHaveBeenCalledTimes(1)
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('历史补价覆盖')
+    expect(wrapper.text()).toContain('总覆盖率')
+    expect(wrapper.text()).toContain('66.7%')
+    expect(wrapper.text()).toContain('NVDL.US')
+    expect(wrapper.text()).toContain('610')
   })
 })

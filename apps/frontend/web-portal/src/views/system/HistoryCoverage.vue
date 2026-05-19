@@ -93,7 +93,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getMarketHistoryCoverage } from '../../api/market.js'
 import { formatDecimal, formatPercent as formatPercentValue } from '../../utils/formatters.js'
@@ -142,7 +142,7 @@ const normalizeStatusKey = (item = {}) => {
   const normalized = String(item.status || '').trim().toLowerCase()
   if (normalized) return normalized
   const rowCount = toNumber(item.rowCount ?? item.rangeCount ?? item.totalCount, 0)
-  const missingEstimate = toNumber(item.missingEstimate ?? item.missingRows ?? item.missingCount, 0)
+  const missingEstimate = toNumber(item.missingEstimate ?? item.missingRows ?? item.missingCount ?? item.missingDays, 0)
   if (rowCount <= 0) return 'missing'
   if (missingEstimate > 0) return 'partial'
   if (item.complete === true) return 'complete'
@@ -153,14 +153,14 @@ const estimateCoverageRate = (item = {}) => {
   const explicit = clampCoverage(item.coverageRate ?? item.coverage ?? item.rate)
   if (explicit !== null) return explicit
   const rowCount = toNumber(item.rowCount ?? item.rangeCount ?? item.totalCount, 0)
-  const missingEstimate = toNumber(item.missingEstimate ?? item.missingRows ?? item.missingCount, 0)
+  const missingEstimate = toNumber(item.missingEstimate ?? item.missingRows ?? item.missingCount ?? item.missingDays, 0)
   const denominator = rowCount + Math.max(missingEstimate, 0)
   if (!denominator) return 0
   return clampCoverage((rowCount / denominator) * 100) ?? 0
 }
 
 const deriveMissingEstimate = (item = {}) => {
-  const explicit = item.missingEstimate ?? item.missingRows ?? item.missingCount
+  const explicit = item.missingEstimate ?? item.missingRows ?? item.missingCount ?? item.missingDays
   if (explicit !== null && explicit !== undefined && explicit !== '') {
     return Math.max(toNumber(explicit, 0), 0)
   }
@@ -179,6 +179,8 @@ const deriveMissingEstimate = (item = {}) => {
 
 const normalizeSummary = (payload = {}) => {
   const task = payload?.task && typeof payload.task === 'object' ? payload.task : {}
+  const backendSummary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : {}
+  const counts = backendSummary.counts && typeof backendSummary.counts === 'object' ? backendSummary.counts : {}
   const items = Array.isArray(payload?.items)
     ? payload.items
     : Array.isArray(payload?.rows)
@@ -186,15 +188,29 @@ const normalizeSummary = (payload = {}) => {
       : Array.isArray(payload?.list)
         ? payload.list
         : []
+  const totalUniverseSymbols = toNumber(
+    payload?.totalUniverseSymbols ?? backendSummary.totalUniverseSymbols ?? backendSummary.filteredTotal ?? payload?.total,
+    0
+  )
+  const syncedSymbols = toNumber(
+    payload?.syncedSymbols ?? backendSummary.syncedSymbols,
+    toNumber(counts.complete, 0) + toNumber(counts.partial, 0)
+  )
+  const coverageRate = clampCoverage(payload?.coverageRate ?? backendSummary.coverageRate)
+    ?? (totalUniverseSymbols ? clampCoverage((syncedSymbols / totalUniverseSymbols) * 100) : 0)
+    ?? 0
 
   return {
-    totalUniverseSymbols: toNumber(payload?.totalUniverseSymbols ?? payload?.summary?.totalUniverseSymbols, 0),
-    syncedSymbols: toNumber(payload?.syncedSymbols ?? payload?.summary?.syncedSymbols, 0),
-    coverageRate: clampCoverage(payload?.coverageRate ?? payload?.summary?.coverageRate) ?? 0,
-    totalRows: toNumber(payload?.totalRows ?? payload?.summary?.totalRows, 0),
-    latestTradeDate: payload?.latestTradeDate || payload?.summary?.latestTradeDate || '',
-    updatedAt: payload?.updatedAt || task?.lastRunAt || payload?.latestTradeDate || '',
-    task,
+    totalUniverseSymbols,
+    syncedSymbols,
+    coverageRate,
+    totalRows: toNumber(payload?.totalRows ?? backendSummary.totalRows, 0),
+    latestTradeDate: payload?.latestTradeDate || backendSummary.latestTradeDate || backendSummary.expectedEnd || '',
+    updatedAt: payload?.updatedAt || backendSummary.lastUpdated || task?.lastRunAt || payload?.latestTradeDate || '',
+    task: {
+      backfillStartDate: backendSummary.expectedStart || task.backfillStartDate,
+      ...task
+    },
     items
   }
 }
@@ -212,7 +228,7 @@ const normalizeRow = (item = {}, index = 0, fallback = {}) => {
     name: String(item.name || item.displayName || item.symbolName || `${normalizeMarketLabel(market)}历史覆盖`).trim() || '--',
     market,
     marketLabel: normalizeMarketLabel(market),
-    startDate: item.startDate || item.rangeStartDate || item.earliestDate || fallback.task?.backfillStartDate || '--',
+    startDate: item.startDate || item.rangeStartDate || item.firstDate || item.earliestDate || fallback.task?.backfillStartDate || '--',
     endDate: item.endDate || item.rangeEndDate || item.latestDate || fallback.latestTradeDate || '--',
     rowCount,
     missingEstimate,
@@ -221,7 +237,7 @@ const normalizeRow = (item = {}, index = 0, fallback = {}) => {
     statusType: statusMeta.type,
     coverageRate,
     coverageTone: statusMeta.tone,
-    updatedAt: item.updatedAt || item.lastUpdatedAt || item.latestSyncAt || fallback.updatedAt || '--'
+    updatedAt: item.updatedAt || item.lastUpdated || item.lastUpdatedAt || item.latestSyncAt || fallback.updatedAt || '--'
   }
 }
 
@@ -299,8 +315,7 @@ const summaryMetrics = computed(() => {
 })
 
 const statusOptions = computed(() => {
-  const set = new Set(tableRows.value.map((item) => item.statusKey).filter(Boolean))
-  return Array.from(set).map((key) => ({
+  return ['complete', 'partial', 'missing'].map((key) => ({
     value: key,
     label: STATUS_META_MAP[key]?.label || key
   }))
@@ -320,7 +335,12 @@ const resetFilters = () => {
 const loadCoverage = async (manual = false) => {
   loading.value = true
   try {
-    const res = await getMarketHistoryCoverage()
+    const res = await getMarketHistoryCoverage({
+      search: keyword.value.trim(),
+      status: statusFilter.value === 'all' ? '' : statusFilter.value,
+      page: 1,
+      page_size: 20
+    })
     const payload = normalizeSummary(res?.data || {})
     summary.value = payload
     const sourceItems = payload.items.length ? payload.items : buildFallbackRows(res?.data || {})
@@ -335,6 +355,24 @@ const loadCoverage = async (manual = false) => {
     loading.value = false
   }
 }
+
+let filterTimer = null
+const scheduleCoverageLoad = () => {
+  if (filterTimer) {
+    window.clearTimeout(filterTimer)
+  }
+  filterTimer = window.setTimeout(() => {
+    loadCoverage(false)
+  }, 260)
+}
+
+watch([keyword, statusFilter], scheduleCoverageLoad)
+
+onBeforeUnmount(() => {
+  if (filterTimer) {
+    window.clearTimeout(filterTimer)
+  }
+})
 
 onMounted(() => {
   loadCoverage(false)
