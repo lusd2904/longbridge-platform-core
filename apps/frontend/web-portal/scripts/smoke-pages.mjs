@@ -160,6 +160,34 @@ const safeClick = async (page, target, options = {}) => {
   }
 }
 
+const safeClickWhenReady = async (page, target, options = {}) => {
+  const timeout = options.timeout ?? OPTIONAL_ACTION_TIMEOUT_MS
+  try {
+    await target.waitFor({ state: 'visible', timeout })
+    await page.waitForFunction(
+      (element) => {
+        if (!element) {
+          return false
+        }
+
+        const isDisabled = element.disabled ||
+          element.getAttribute('aria-disabled') === 'true' ||
+          element.classList.contains('is-disabled')
+        const isLoading = element.classList.contains('is-loading') ||
+          element.getAttribute('aria-busy') === 'true'
+
+        return !isDisabled && !isLoading
+      },
+      await target.elementHandle(),
+      { timeout }
+    )
+    await target.click({ timeout })
+    return true
+  } catch {
+    return false
+  }
+}
+
 const clickByRole = async (page, role, name, options = {}) => {
   return safeClick(page, page.getByRole(role, { name }), options)
 }
@@ -170,6 +198,10 @@ const clickByText = async (page, text, options = {}) => {
 
 const clickFirstButtonByText = async (page, text, options = {}) => {
   return safeClick(page, page.locator('button').filter({ hasText: text }).first(), options)
+}
+
+const clickReadyButtonByText = async (page, text, options = {}) => {
+  return safeClickWhenReady(page, page.locator('button').filter({ hasText: text }).first(), options)
 }
 
 const clickSegmentByText = async (page, text, options = {}) => {
@@ -516,16 +548,16 @@ const pageActions = {
     const actions = []
     if (await clickSegmentByText(page, '周K')) {
       actions.push('switched weekly kline')
-      await waitForStable(page, 1800)
+      await waitForStable(page, { quietWindowMs: 180, timeoutMs: 1600 })
     }
-    if (await clickByRole(page, 'button', '刷新历史')) {
+    if (await clickReadyButtonByText(page, '刷新历史', { timeout: 4000 })) {
       actions.push('refreshed market history')
-      await waitForStable(page, 2500)
+      await waitForStable(page, { quietWindowMs: 180, timeoutMs: 2600 })
     }
     const focusButton = page.locator('button').filter({ hasText: '聚焦主图' }).first()
     if (await safeClick(page, focusButton)) {
       actions.push('focused primary chart')
-      await waitForStable(page, 800)
+      await waitForStable(page, { quietWindowMs: 160, timeoutMs: 1200 })
     }
     return actions
   },
