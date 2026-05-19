@@ -20,6 +20,11 @@ const PAGE_TIMEOUT_MS = Number(process.env.SMOKE_PAGE_TIMEOUT_MS || 60000)
 const ACTION_TIMEOUT_MS = Number(process.env.SMOKE_ACTION_TIMEOUT_MS || 60000)
 const OPTIONAL_ACTION_TIMEOUT_MS = Number(process.env.SMOKE_OPTIONAL_ACTION_TIMEOUT_MS || 1200)
 const RUN_MOBILE_SMOKE = process.env.SMOKE_INCLUDE_MOBILE === '1'
+const AI_ANALYSIS_DEEP_SCAN = process.env.SMOKE_AI_ANALYSIS_DEEP === '1'
+const PAGE_FILTERS = String(process.env.SMOKE_PAGE_FILTER || '')
+  .split(',')
+  .map((item) => item.trim().toLowerCase())
+  .filter(Boolean)
 const DEFAULT_CHROME_EXECUTABLE = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const progress = createProgressReporter({
   enabled: process.env.SMOKE_PROGRESS !== '0'
@@ -238,6 +243,28 @@ const waitForRoutePath = async (page, matcher, timeoutMs = 4000) => {
     const pathname = new URL(url).pathname
     return typeof matcher === 'function' ? matcher(pathname) : matcher.test(pathname)
   }, { timeout: timeoutMs })
+}
+
+const shouldVisitPage = ({ route, name }) => {
+  if (!PAGE_FILTERS.length) {
+    return true
+  }
+  const normalizedRoute = String(route || '').toLowerCase()
+  const normalizedName = String(name || '').toLowerCase()
+  return PAGE_FILTERS.some((filter) => (
+    filter === normalizedName ||
+    filter === normalizedRoute ||
+    normalizedRoute.includes(filter)
+  ))
+}
+
+const visitPages = async (page, visits, scenario = 'desktop') => {
+  for (const visit of visits) {
+    if (!shouldVisitPage(visit)) {
+      continue
+    }
+    await visitPage(page, visit.route, visit.name, visit.action, scenario)
+  }
 }
 
 const expectVisible = async (locator, label, timeoutMs = 3000) => {
@@ -476,8 +503,12 @@ const pageActions = {
         actions.push('clicked scan symbols')
         await waitForAiAnalysisScanState(page)
         actions.push('verified scan triggered state')
-        await waitForAiAnalysisScanOutcome(page)
-        actions.push('verified scan completed state')
+        if (AI_ANALYSIS_DEEP_SCAN) {
+          await waitForAiAnalysisScanOutcome(page)
+          actions.push('verified scan completed state')
+        } else {
+          actions.push('skipped deep scan completion wait')
+        }
       }
     }
     if (await clickByRole(page, 'button', '刷新标的')) {
@@ -807,6 +838,35 @@ const attachListeners = (page) => {
   })
 }
 
+const desktopVisits = [
+  { route: '/dashboard', name: 'dashboard', action: pageActions.dashboard },
+  { route: '/market', name: 'market', action: pageActions.market },
+  { route: '/stock-pool', name: 'stock-pool', action: pageActions.stockPool },
+  { route: '/ai-analysis', name: 'ai-analysis', action: pageActions.aiAnalysis },
+  { route: '/trading', name: 'trading', action: pageActions.trading },
+  { route: '/positions', name: 'positions', action: pageActions.positions },
+  { route: '/orders', name: 'orders', action: pageActions.orders },
+  { route: '/symbol/AAPL.US', name: 'symbol-detail', action: pageActions.symbolDetail },
+  { route: '/kline', name: 'kline', action: pageActions.kline },
+  { route: '/recommendations', name: 'recommendations', action: pageActions.recommendations },
+  { route: '/finance-news', name: 'finance-news', action: pageActions.financeNews },
+  { route: '/strategy', name: 'strategy', action: pageActions.strategy },
+  { route: '/backtest', name: 'backtest', action: pageActions.backtest },
+  { route: '/risk', name: 'risk', action: pageActions.risk },
+  { route: '/profile', name: 'profile', action: pageActions.profile },
+  { route: '/broker-management', name: 'broker-management', action: pageActions.brokers },
+  { route: '/notifications', name: 'notifications', action: pageActions.notifications },
+  { route: '/settings', name: 'settings', action: pageActions.settings },
+  { route: '/user-management', name: 'user-management', action: pageActions.users },
+  { route: '/scheduler-center', name: 'scheduler-center', action: pageActions.scheduler }
+]
+
+const mobileVisits = [
+  { route: '/dashboard', name: 'dashboard', action: pageActions.dashboard },
+  { route: '/market', name: 'market', action: pageActions.market },
+  { route: '/trading', name: 'trading', action: pageActions.trading }
+]
+
 const login = async (page) => {
   const scenario = page === mobilePage ? 'mobile' : 'desktop'
   progress(`login start ${scenario}`)
@@ -854,32 +914,11 @@ if (RUN_MOBILE_SMOKE) {
 
 try {
   await login(desktopPage)
-  await visitPage(desktopPage, '/dashboard', 'dashboard', pageActions.dashboard, 'desktop')
-  await visitPage(desktopPage, '/market', 'market', pageActions.market, 'desktop')
-  await visitPage(desktopPage, '/stock-pool', 'stock-pool', pageActions.stockPool, 'desktop')
-  await visitPage(desktopPage, '/ai-analysis', 'ai-analysis', pageActions.aiAnalysis, 'desktop')
-  await visitPage(desktopPage, '/trading', 'trading', pageActions.trading, 'desktop')
-  await visitPage(desktopPage, '/positions', 'positions', pageActions.positions, 'desktop')
-  await visitPage(desktopPage, '/orders', 'orders', pageActions.orders, 'desktop')
-  await visitPage(desktopPage, '/symbol/AAPL.US', 'symbol-detail', pageActions.symbolDetail, 'desktop')
-  await visitPage(desktopPage, '/kline', 'kline', pageActions.kline, 'desktop')
-  await visitPage(desktopPage, '/recommendations', 'recommendations', pageActions.recommendations, 'desktop')
-  await visitPage(desktopPage, '/finance-news', 'finance-news', pageActions.financeNews, 'desktop')
-  await visitPage(desktopPage, '/strategy', 'strategy', pageActions.strategy, 'desktop')
-  await visitPage(desktopPage, '/backtest', 'backtest', pageActions.backtest, 'desktop')
-  await visitPage(desktopPage, '/risk', 'risk', pageActions.risk, 'desktop')
-  await visitPage(desktopPage, '/profile', 'profile', pageActions.profile, 'desktop')
-  await visitPage(desktopPage, '/broker-management', 'broker-management', pageActions.brokers, 'desktop')
-  await visitPage(desktopPage, '/notifications', 'notifications', pageActions.notifications, 'desktop')
-  await visitPage(desktopPage, '/settings', 'settings', pageActions.settings, 'desktop')
-  await visitPage(desktopPage, '/user-management', 'user-management', pageActions.users, 'desktop')
-  await visitPage(desktopPage, '/scheduler-center', 'scheduler-center', pageActions.scheduler, 'desktop')
+  await visitPages(desktopPage, desktopVisits, 'desktop')
 
   if (RUN_MOBILE_SMOKE && mobilePage) {
     await login(mobilePage)
-    await visitPage(mobilePage, '/dashboard', 'dashboard', pageActions.dashboard, 'mobile')
-    await visitPage(mobilePage, '/market', 'market', pageActions.market, 'mobile')
-    await visitPage(mobilePage, '/trading', 'trading', pageActions.trading, 'mobile')
+    await visitPages(mobilePage, mobileVisits, 'mobile')
   }
 } finally {
   await closeBrowserQuietly(browser)
@@ -890,6 +929,8 @@ const report = {
   baseUrl,
   username,
   mobileIncluded: RUN_MOBILE_SMOKE,
+  aiAnalysisDeepScan: AI_ANALYSIS_DEEP_SCAN,
+  pageFilters: PAGE_FILTERS,
   pages: results,
   errors
 }
@@ -900,6 +941,8 @@ await fs.writeFile(reportFile, JSON.stringify(report, null, 2), 'utf8')
 const summaryLines = [
   `baseUrl=${baseUrl}`,
   `mobileIncluded=${RUN_MOBILE_SMOKE}`,
+  `aiAnalysisDeepScan=${AI_ANALYSIS_DEEP_SCAN}`,
+  `pageFilters=${PAGE_FILTERS.join(',') || 'all'}`,
   `pages=${results.length}`,
   `errors=${errors.length}`
 ]

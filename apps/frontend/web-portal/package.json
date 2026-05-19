@@ -34,6 +34,7 @@
     "desktop:dev": "npm run build && electron ./desktop/main.cjs",
     "desktop:smoke": "npm run build && node ./desktop/smoke.mjs",
     "smoke:web": "node ./scripts/smoke-pages.mjs",
+    "smoke:web:ai": "SMOKE_PAGE_FILTER=ai-analysis SMOKE_AI_ANALYSIS_DEEP=1 node ./scripts/smoke-pages.mjs",
     "scan:contrast": "node ./scripts/contrast-scan.mjs",
     "desktop:mac": "npm run build && electron-builder --mac dir",
     "trade:regression": "node ./scripts/trade-regression.mjs",
