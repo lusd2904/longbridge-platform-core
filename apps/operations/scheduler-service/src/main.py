@@ -216,14 +216,93 @@ def _analysis_summary(payload: Any, session_name: str) -> str:
     return f"自选股 {session_name} 复核已完成，仅生成 AI 建议，不执行交易"[:255]
 
 
-def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
-    now = datetime.now()
-    job_name = f"watchlist_{session_name}_review"
-    _write_job_status(job_name, "running", f"自选股 {session_name} 复核任务执行中")
-    service_token = generate_token(1, "scheduler-service", "admin")
+def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
+    flag_column = "scan_before_open" if session_name == "pre_open" else "scan_after_close"
+    max_users = max(1, min(int(os.getenv("REF_WATCHLIST_REVIEW_MAX_USERS", "50")), 200))
+    try:
+        DbUtil.execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS user_watchlist_stocks (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                symbol VARCHAR(32) NOT NULL,
+                name VARCHAR(255) NOT NULL DEFAULT '',
+                market VARCHAR(16) NOT NULL DEFAULT '',
+                asset_type VARCHAR(32) NOT NULL DEFAULT 'stock',
+                category VARCHAR(255) NOT NULL DEFAULT '',
+                scan_before_open TINYINT(1) NOT NULL DEFAULT 1,
+                scan_after_close TINYINT(1) NOT NULL DEFAULT 1,
+                added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                last_scan_at TIMESTAMP NULL DEFAULT NULL,
+                UNIQUE KEY uniq_user_watchlist_symbol (user_id, symbol),
+                KEY idx_user_watchlist_sessions (user_id, scan_before_open, scan_after_close)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+    except Exception:
+        pass
+
+    users = DbUtil.fetch_all(
+        f"""
+        SELECT
+            u.id,
+            u.username,
+            u.role,
+            COUNT(w.id) AS target_count
+        FROM users u
+        JOIN user_watchlist_stocks w
+          ON w.user_id = u.id
+         AND w.{flag_column} = 1
+        WHERE COALESCE(u.status, 'active') NOT IN ('disabled', 'locked')
+        GROUP BY u.id, u.username, u.role
+        ORDER BY target_count DESC, u.id ASC
+        LIMIT %s
+        """,
+        (max_users,),
+    ) or []
+    if users:
+        return [
+            {
+                "userId": int(row.get("id") or 0),
+                "username": row.get("username") or f"user-{row.get('id')}",
+                "role": row.get("role") or "user",
+                "targetCount": int(row.get("target_count") or 0),
+                "reason": "watchlist-targets",
+            }
+            for row in users
+            if int(row.get("id") or 0) > 0
+        ]
+
+    fallback = DbUtil.fetch_one(
+        """
+        SELECT id, username, role
+        FROM users
+        WHERE COALESCE(status, 'active') NOT IN ('disabled', 'locked')
+        ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END, id ASC
+        LIMIT 1
+        """
+    ) or {}
+    fallback_id = int(fallback.get("id") or 0)
+    if fallback_id <= 0:
+        return []
+    return [{
+        "userId": fallback_id,
+        "username": fallback.get("username") or f"user-{fallback_id}",
+        "role": fallback.get("role") or "user",
+        "targetCount": 0,
+        "reason": "empty-watchlist-fallback",
+    }]
+
+
+def _request_watchlist_review_for_user(session_name: str, user: Dict[str, Any]) -> Dict[str, Any]:
+    user_id = int(user.get("userId") or user.get("id") or 0)
+    if user_id <= 0:
+        raise RuntimeError("watchlist review 用户无效")
+    service_token = generate_token(user_id, str(user.get("username") or "scheduler-service"), str(user.get("role") or "user"))
     payload = {
         "session": session_name,
-        "userId": 1,
+        "userId": user_id,
         "triggerSource": "scheduler",
         "dryRun": True,
     }
@@ -242,27 +321,75 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
     except urlerror.HTTPError as exc:
         response_body = exc.read().decode("utf-8", errors="ignore")
         message = f"HTTP {exc.code}: {response_body[:180] or exc.reason}"
-        _write_job_status(job_name, "failed", message)
         raise RuntimeError(message) from exc
     except urlerror.URLError as exc:
         message = f"analysis-service 不可达: {exc.reason}"
-        _write_job_status(job_name, "failed", message)
         raise RuntimeError(message) from exc
     except Exception as exc:
         message = str(exc)[:220] or "watchlist review 调用失败"
-        _write_job_status(job_name, "failed", message)
-        raise
+        raise RuntimeError(message) from exc
 
     success = bool(result.get("success", True)) if isinstance(result, dict) else True
     if not success:
         failure_message = str(result.get("message") or result.get("error") or "analysis-service 返回失败")[:220]
-        _write_job_status(job_name, "failed", failure_message)
         raise RuntimeError(failure_message)
+    return result if isinstance(result, dict) else {"success": True, "data": result}
 
-    summary = _analysis_summary(result, session_name)
-    result_payload = result.get("data") if isinstance(result.get("data"), dict) else result
-    result_status = str(result_payload.get("status") or "").strip().lower() if isinstance(result_payload, dict) else ""
-    status = "failed" if result_status in {"failed", "degraded", "error"} or bool(result_payload.get("degraded")) else "success"
+
+def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
+    now = datetime.now()
+    job_name = f"watchlist_{session_name}_review"
+    _write_job_status(job_name, "running", f"自选股 {session_name} 复核任务执行中")
+
+    users = _list_watchlist_review_users(session_name)
+    if not users:
+        message = "没有可执行自选股复核的 active 用户"
+        _write_job_status(job_name, "success", message, last_run_date=now.date(), last_run_at=now)
+        return {
+            "success": True,
+            "summary": message,
+            "session": session_name,
+            "userCount": 0,
+            "results": [],
+        }
+
+    results: List[Dict[str, Any]] = []
+    failures: List[Dict[str, Any]] = []
+    for user in users:
+        user_id = int(user.get("userId") or 0)
+        try:
+            result = _request_watchlist_review_for_user(session_name, user)
+            result_payload = result.get("data") if isinstance(result.get("data"), dict) else result
+            result_status = str(result_payload.get("status") or "").strip().lower() if isinstance(result_payload, dict) else ""
+            degraded = bool(result_payload.get("degraded")) if isinstance(result_payload, dict) else False
+            if result_status in {"failed", "degraded", "error"} or degraded:
+                failures.append({
+                    "userId": user_id,
+                    "message": _analysis_summary(result, session_name),
+                    "status": result_status or "failed",
+                })
+            results.append({
+                "userId": user_id,
+                "username": user.get("username"),
+                "targetCount": int(user.get("targetCount") or 0),
+                "reason": user.get("reason"),
+                "result": result,
+            })
+        except Exception as exc:
+            failures.append({"userId": user_id, "message": str(exc)[:220]})
+            results.append({
+                "userId": user_id,
+                "username": user.get("username"),
+                "targetCount": int(user.get("targetCount") or 0),
+                "reason": user.get("reason"),
+                "error": str(exc)[:500],
+            })
+
+    success_count = max(0, len(users) - len(failures))
+    status = "failed" if failures and success_count == 0 else "success"
+    summary = (
+        f"自选股 {session_name} 复核完成，用户 {len(users)} 个，成功 {success_count} 个，失败 {len(failures)} 个；仅生成 AI 建议，不执行交易"
+    )
     _write_job_status(
         job_name,
         status,
@@ -270,7 +397,16 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
         last_run_date=now.date(),
         last_run_at=now,
     )
-    return result if isinstance(result, dict) else {"success": True, "data": result, "summary": summary}
+    return {
+        "success": not failures,
+        "summary": summary,
+        "session": session_name,
+        "userCount": len(users),
+        "successCount": success_count,
+        "failureCount": len(failures),
+        "failures": failures,
+        "results": results,
+    }
 
 
 class ManagedDailyTaskRunner:

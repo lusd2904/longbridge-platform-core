@@ -9,6 +9,7 @@ import json
 from api.auth_routes import login_required, admin_required
 from core.broker.BrokerInterface import get_broker_manager, get_broker
 from core.analysis.MarketInsightService import MarketInsightService
+from core.analysis.AgentRunService import AgentRunService
 from core.analysis.StrategyMonitorService import StrategyMonitorService
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from core.readmodel.AccountAssetSnapshotService import AccountAssetSnapshotService
@@ -1195,6 +1196,9 @@ def _collect_notifications(user_id: int, limit: int = 50, notification_type: str
     if notification_type in {'', 'trade'}:
         items.extend(_list_recent_live_orders(user_id=user_id, limit=max(8, limit // 2)))
 
+    if notification_type in {'', 'agent', 'agent-review', 'agent-risk'}:
+        items.extend(_collect_agent_review_notifications(user_id=user_id, limit=max(8, limit // 2)))
+
     if notification_type in {'', 'system'}:
         login_rows = DbUtil.fetch_all(
             """
@@ -1235,6 +1239,61 @@ def _collect_notifications(user_id: int, limit: int = 50, notification_type: str
         if len(visible_items) >= limit:
             break
     return visible_items
+
+
+def _collect_agent_review_notifications(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    scene_labels = {
+        "watchlist_pre_open_review": "自选股盘前复核",
+        "watchlist_post_close_review": "自选股盘后复核",
+    }
+    try:
+        rows = AgentRunService.list_recent_runs(user_id=user_id, limit=max(1, min(int(limit or 20), 40)), use_primary=True)
+    except Exception as exc:
+        print(f"⚠️ [API] 获取 Agent 复核通知失败: user={user_id} error={exc}")
+        return []
+
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        scene = str(row.get("scene") or "").strip()
+        if scene not in scene_labels:
+            continue
+
+        result = row.get("resultSummary") if isinstance(row.get("resultSummary"), dict) else {}
+        status = str(row.get("status") or "").strip().lower()
+        summary = str(result.get("summary") or row.get("error_summary") or row.get("errorSummary") or "").strip()
+        if not summary:
+            summary = "Agent 复核已生成，请进入任务中心查看结构化信号、风险和建议。"
+
+        review_count = len(result.get("reviewAdvice") or result.get("review_advice") or [])
+        risk_count = len(result.get("riskFlags") or result.get("risk_flags") or [])
+        extra_parts = []
+        if review_count:
+            extra_parts.append(f"{review_count} 条建议")
+        if risk_count:
+            extra_parts.append(f"{risk_count} 条风险")
+        if extra_parts:
+            summary = f"{summary}（{'，'.join(extra_parts)}）"
+
+        status_label = {
+            "succeeded": "已完成",
+            "success": "已完成",
+            "completed": "已完成",
+            "running": "运行中",
+            "queued": "排队中",
+            "failed": "失败",
+            "cancelled": "已取消",
+        }.get(status, "已更新")
+
+        items.append({
+            "notificationKey": f"agent:{row.get('runId') or row.get('run_id')}",
+            "type": "agent",
+            "title": f"{scene_labels[scene]} {status_label}",
+            "message": summary[:500],
+            "time": row.get("finishedAt") or row.get("updatedAt") or row.get("createdAt"),
+            "route": "/scheduler-center",
+        })
+
+    return items[:limit]
 
 
 # ========== 股票池相关接口 ==========

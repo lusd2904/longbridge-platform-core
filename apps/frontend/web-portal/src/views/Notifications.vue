@@ -42,6 +42,7 @@
       <el-radio-group v-model="activeType" size="large">
         <el-radio-button value="">全部</el-radio-button>
         <el-radio-button value="trade">交易</el-radio-button>
+        <el-radio-button value="agent">Agent</el-radio-button>
         <el-radio-button value="risk">风控</el-radio-button>
         <el-radio-button value="system">系统</el-radio-button>
       </el-radio-group>
@@ -225,24 +226,28 @@ const notificationSummary = computed(() => [
 
 const getTypeColor = (type) => ({
   trade: 'linear-gradient(135deg, #4f8cff, #2dd4bf)',
+  agent: 'linear-gradient(135deg, #7c3aed, #22d3ee)',
   risk: 'linear-gradient(135deg, #ff7b72, #ffb36b)',
   system: 'linear-gradient(135deg, #718096, #94a3b8)'
 }[type] || 'linear-gradient(135deg, #718096, #94a3b8)')
 
 const getTypeLabel = (type) => ({
   trade: '交易',
+  agent: 'Agent',
   risk: '风控',
   system: '系统'
 }[type] || '通知')
 
 const getTypeTagType = (type) => ({
   trade: 'primary',
+  agent: 'success',
   risk: 'warning',
   system: 'info'
 }[type] || 'info')
 
 const getTypeIcon = (type) => ({
   trade: Wallet,
+  agent: Bell,
   risk: Warning,
   system: Bell
 }[type] || Bell)
@@ -505,7 +510,7 @@ onMounted(() => {
 
 .notification-tabs.mobile :deep(.el-radio-group) {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   width: 100%;
 }
 

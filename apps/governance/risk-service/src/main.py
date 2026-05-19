@@ -393,21 +393,27 @@ def _build_notifications_bootstrap(
     limit: int,
     notification_type: str,
 ) -> Dict[str, Any]:
-    all_items = _normalize_notifications(collect_notifications(
-        user_id=user_id,
-        limit=max(100, limit),
-        notification_type="",
-    ))
     if notification_type:
-        items = [item for item in all_items if str(item.get("type") or "").lower() == notification_type][:limit]
+        items = _normalize_notifications(collect_notifications(
+            user_id=user_id,
+            limit=limit,
+            notification_type=notification_type,
+        ))
+        summary_items = items
     else:
+        all_items = _normalize_notifications(collect_notifications(
+            user_id=user_id,
+            limit=max(100, limit),
+            notification_type="",
+        ))
         items = all_items[:limit]
+        summary_items = all_items
     return {
         "service": "risk-service",
         "status": "live",
         "type": notification_type or "all",
         "items": items,
-        "summary": _notification_summary(all_items),
+        "summary": _notification_summary(summary_items),
     }
 
 

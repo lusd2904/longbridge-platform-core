@@ -62,6 +62,11 @@ Gemini and NotebookLM both accepted the sidecar PoC direction and agreed on the 
   - get run detail
   - record `acknowledged`
   - reject trade-like override action
+- Dedicated `watchlist_post_close_review` smoke passed:
+  - scheduler manual run returned `200`
+  - generated `agentRunId=11`
+  - agent run detail returned `scene=watchlist_post_close_review`
+  - persisted run status was `succeeded`
 - Browser UI smoke passed for `http://127.0.0.1:3100/scheduler-center`:
   - task center renders
   - Agent review summaries render
@@ -79,5 +84,4 @@ Gemini and NotebookLM both accepted the sidecar PoC direction and agreed on the 
 1. Containerize the Agno sidecar so deployment and rollback do not depend on host `screen`.
 2. Move long Agent runs out of the synchronous request path.
 3. Replace the `user_id=1` bootstrap assumption with explicit multi-user scheduling.
-4. Connect notifications and risk consumption to the structured Agent governance data.
-5. Add a separate successful smoke for `watchlist_post_close_review`; it is registered and uses the same runner as pre-open.
+4. Expand notifications and risk consumption beyond the initial Agent notification feed.

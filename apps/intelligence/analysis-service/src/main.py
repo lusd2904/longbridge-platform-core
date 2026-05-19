@@ -1495,10 +1495,10 @@ async def watchlist_review(
     normalized_session = _normalize_watchlist_session(payload.get("session"))
     scene = _resolve_watchlist_scene(normalized_session)
     raw_user_id = payload.get("userId", payload.get("user_id", auth_session.get("user_id")))
-    try:
-        user_id = int(raw_user_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="userId/user_id 必须是有效整数")
+    user_id = _resolve_agent_run_scope_user_id(
+        session=auth_session,
+        requested_user_id=raw_user_id,
+    )
 
     trigger_source = str(payload.get("triggerSource") or "manual").strip() or "manual"
     dry_run = bool(payload.get("dryRun", True))
