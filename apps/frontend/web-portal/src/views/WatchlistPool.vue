@@ -221,7 +221,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Collection,
@@ -274,6 +274,12 @@ const scanTargetError = ref('')
 const pendingToggleMap = ref({})
 const pendingRemoveMap = ref({})
 let marketApiModulePromise = null
+let isAlive = true
+
+const isFetchAbortLikeError = (error) => {
+  const message = String(error?.message || '')
+  return message.includes('Failed to fetch') || error?.name === 'AbortError'
+}
 
 const fallbackGetWatchlist = (params = {}) => request.get(`${MARKET_API_BASE}/watchlist`, params)
 const fallbackUpdateWatchlist = (payload = {}) => request.put(
@@ -579,10 +585,15 @@ const loadWatchlist = async () => {
     const rawItems = extractList(response, ['watchlist'])
     watchlist.value = rawItems.map(normalizeWatchlistItem).filter((item) => item.symbol)
   } catch (error) {
+    if (!isAlive && isFetchAbortLikeError(error)) {
+      return
+    }
     console.error('加载自选股票池失败:', error)
     ElMessage.error('加载自选股票池失败')
   } finally {
-    loadingWatchlist.value = false
+    if (isAlive) {
+      loadingWatchlist.value = false
+    }
   }
 }
 
@@ -596,12 +607,17 @@ const loadScanTargets = async (session = activeSession.value) => {
     scanTargets.value = rawItems.map(normalizeScanTarget).filter((item) => item.symbol)
     scanTargetUpdatedAt.value = response?.meta?.updatedAt || response?.meta?.updated_at || response?.updatedAt || response?.updated_at || new Date().toISOString()
   } catch (error) {
+    if (!isAlive && isFetchAbortLikeError(error)) {
+      return
+    }
     console.error(`加载 ${session} 扫描目标失败:`, error)
     scanTargets.value = []
     scanTargetError.value = error?.data?.error || error?.message || '获取扫描目标失败'
     ElMessage.error(`${activeSessionLabel.value}扫描目标加载失败`)
   } finally {
-    loadingTargets.value = false
+    if (isAlive) {
+      loadingTargets.value = false
+    }
   }
 }
 
@@ -666,7 +682,12 @@ watch(activeSession, (session) => {
 })
 
 onMounted(() => {
+  isAlive = true
   refreshAll()
+})
+
+onUnmounted(() => {
+  isAlive = false
 })
 </script>
 

@@ -307,7 +307,7 @@ const currentMarketInsight = computed(() => {
   return marketInsights.value.find((item) => item.market === selectedMarket.value) || null
 })
 const streamSymbols = computed(() => {
-  const pageSymbols = pagedQuotesBase.value.map((item) => item.symbol).filter(Boolean)
+  const pageSymbols = quotes.value.map((item) => item.symbol).filter(Boolean)
   const benchmarkSymbols = (currentMarketInsight.value?.benchmarks || []).map((item) => item.symbol).filter(Boolean)
   return Array.from(new Set([...pageSymbols, ...benchmarkSymbols]))
 })
