@@ -118,9 +118,16 @@ class DailyMarketScanService:
             text = fallback_text
 
         title = cls._extract_field(text, "标题") or f"{insight.get('marketLabel', safe_market)}技术扫描"
-        status = cls._extract_field(text, "市场状态") or insight.get("regime", "balanced")
+        status_text = cls._extract_field(text, "市场状态") or insight.get("statusText", "")
+        status = cls._normalize_status(
+            status_text=status_text,
+            regime=insight.get("regime", "balanced"),
+            technical_score=technical_score,
+            breadth_ratio=breadth_ratio,
+        )
         summary = cls._extract_field(text, "一句结论") or text.strip()
         insights = {
+            "statusText": status_text,
             "technicalObservation": cls._extract_field(text, "技术观察"),
             "riskHint": cls._extract_field(text, "风险提示"),
             "rhythm": cls._extract_field(text, "操作节奏"),
@@ -181,6 +188,14 @@ class DailyMarketScanService:
 
     @classmethod
     def _save_result(cls, result: Dict[str, object]) -> None:
+        status = str(result.get("status") or "").strip()
+        if status not in {"偏强", "偏弱", "中性"} or len(status) > 32:
+            status = cls._normalize_status(
+                status_text=status,
+                regime="",
+                technical_score=float(result.get("technicalScore") or 0),
+                breadth_ratio=float(result.get("breadthRatio") or 0),
+            )
         DbUtil.execute_sql(
             f"""
             INSERT INTO {cls.TABLE_NAME} (
@@ -205,7 +220,7 @@ class DailyMarketScanService:
                 result["tradeDate"],
                 result["technicalScore"],
                 result["breadthRatio"],
-                result["status"],
+                status,
                 result.get("modelId"),
                 result.get("modelAlias"),
                 result["headline"],
@@ -250,6 +265,54 @@ class DailyMarketScanService:
             if clean.startswith(alt_prefix):
                 return clean.split("：", 1)[1].strip()
         return ""
+
+    @staticmethod
+    def _normalize_status(
+        *,
+        status_text: str,
+        regime: str,
+        technical_score: float,
+        breadth_ratio: float,
+    ) -> str:
+        raw = str(status_text or "").strip()
+        known = {
+            "risk_on": "偏强",
+            "risk_off": "偏弱",
+            "balanced": "中性",
+            "偏强": "偏强",
+            "偏弱": "偏弱",
+            "中性": "中性",
+            "平衡": "中性",
+        }
+        lowered = raw.lower()
+        if lowered in known:
+            return known[lowered]
+        for marker, normalized in (
+            ("risk_on", "偏强"),
+            ("risk-off", "偏弱"),
+            ("risk_off", "偏弱"),
+            ("偏强", "偏强"),
+            ("强势", "偏强"),
+            ("风险偏好回升", "偏强"),
+            ("偏弱", "偏弱"),
+            ("防守", "偏弱"),
+            ("避险", "偏弱"),
+            ("风险偏好下降", "偏弱"),
+            ("震荡", "中性"),
+            ("平衡", "中性"),
+            ("中性", "中性"),
+        ):
+            if marker in raw:
+                return normalized
+
+        normalized_regime = str(regime or "").strip().lower()
+        if normalized_regime in known:
+            return known[normalized_regime]
+        if technical_score >= 60 and breadth_ratio >= 50:
+            return "偏强"
+        if technical_score <= 40 and breadth_ratio <= 45:
+            return "偏弱"
+        return "中性"
 
     @staticmethod
     def _build_fallback_summary(

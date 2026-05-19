@@ -4,6 +4,9 @@ WORKDIR /app
 
 RUN curl -sSL https://open.longbridge.cn/longbridge/longbridge-terminal/install | sh
 
+COPY requirements.test.txt ./
+RUN pip install --no-cache-dir -r requirements.test.txt
+
 COPY . .
 
 CMD ["scripts/docker_service_entrypoint.sh", "apps/market/market-service/src"]
