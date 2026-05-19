@@ -10,6 +10,7 @@ from apps.governance.risk_shared import (
     upsert_notification_states,
 )
 from core.readmodel.PositionSnapshotService import PositionSnapshotService
+from core.readmodel.QuoteSnapshotService import QuoteSnapshotService
 from core.readmodel.RiskOverviewSnapshotService import RiskOverviewSnapshotService
 from apps.runtime_shared.legacy_runtime import legacy_boundary_status
 from apps.runtime_shared.app import create_service_app
@@ -21,6 +22,7 @@ from utils.DbUtil import DbUtil
 __all__ = [
     "DbUtil",
     "PositionSnapshotService",
+    "QuoteSnapshotService",
     "RiskOverviewSnapshotService",
     "bootstrap_runtime",
     "build_dependency_status",

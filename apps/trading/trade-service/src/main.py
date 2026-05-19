@@ -1349,12 +1349,24 @@ async def get_account_state(
     account_id: int,
     status: Optional[str] = Query(default=None),
     limit: int = Query(default=30, ge=1, le=200),
+    realtime: bool = Query(default=False),
     session: dict = Depends(get_current_session),
 ):
+    user_id = int(session["user_id"])
+    if not realtime:
+        snapshot_state = _build_snapshot_state(user_id=user_id, account_id=account_id)
+        snapshot_ready = bool(
+            snapshot_state.get("snapshotAt")
+            or snapshot_state.get("positionCount")
+            or float(snapshot_state.get("accountInfo", {}).get("total_equity") or 0)
+        )
+        if snapshot_ready:
+            return {"success": True, "data": snapshot_state}
+
     return {
         "success": True,
         "data": _build_account_state(
-            user_id=int(session["user_id"]),
+            user_id=user_id,
             account_id=account_id,
             status=status,
             limit=limit,
@@ -1371,6 +1383,29 @@ async def get_account_snapshot_state(account_id: int, session: dict = Depends(ge
             account_id=account_id,
         ),
     }
+
+
+@app.get("/api/v1/trade/orders")
+async def get_orders(
+    account_id: Optional[int] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    realtime: bool = Query(default=False),
+    session: dict = Depends(get_current_session),
+):
+    user_id = int(session["user_id"])
+    if realtime:
+        trade_user = legacy_trade_service.AuthUser(user_id=user_id, username="", role=str(session.get("role") or "user"))
+        return legacy_trade_service._list_orders(trade_user, account_id, status, limit)
+
+    payload = _list_projected_orders(
+        user_id=user_id,
+        account_id=account_id,
+        status=status,
+        limit=limit,
+        allow_fallback=False,
+    )
+    return {"success": True, "data": payload}
 
 
 @app.get("/api/v1/trade/orders/projection")

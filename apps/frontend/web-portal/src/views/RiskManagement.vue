@@ -458,7 +458,7 @@ const loadOverview = async (forceRealtime = false) => {
     )
 
     if (forceRealtime || !hasSnapshotPayload) {
-      const liveOverviewRes = await getRiskOverview()
+      const liveOverviewRes = await getRiskOverview({ realtime: true })
       payload = liveOverviewRes?.data || payload
     }
 

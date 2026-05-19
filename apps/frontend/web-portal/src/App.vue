@@ -760,13 +760,37 @@ body.native-keyboard-open .mobile-nav {
 }
 
 .el-button {
+  --el-button-text-color: var(--button-secondary-text);
+  --el-button-bg-color: var(--button-secondary-bg);
+  --el-button-border-color: var(--button-secondary-border);
+  --el-button-hover-text-color: var(--button-secondary-text);
+  --el-button-hover-bg-color: var(--button-secondary-bg-hover);
+  --el-button-hover-border-color: var(--control-border-hover);
+  --el-button-active-text-color: var(--button-secondary-text);
+  --el-button-active-bg-color: var(--button-secondary-bg-hover);
+  --el-button-active-border-color: var(--control-border-hover);
+  --el-button-disabled-text-color: color-mix(in srgb, var(--text-secondary) 80%, transparent);
+  --el-button-disabled-bg-color: color-mix(in srgb, var(--surface-soft) 74%, var(--surface-strong) 26%);
+  --el-button-disabled-border-color: color-mix(in srgb, var(--button-secondary-border) 74%, transparent);
   border-radius: 10px;
   font-weight: 700;
 }
 
 .el-button--primary:not(.is-link):not(.is-text) {
+  --el-button-text-color: var(--button-primary-text);
+  --el-button-bg-color: var(--button-primary-solid-bg);
+  --el-button-border-color: var(--button-primary-border);
+  --el-button-hover-text-color: var(--button-primary-text);
+  --el-button-hover-bg-color: var(--button-primary-solid-bg-hover);
+  --el-button-hover-border-color: var(--button-primary-border);
+  --el-button-active-text-color: var(--button-primary-text);
+  --el-button-active-bg-color: var(--button-primary-solid-bg-hover);
+  --el-button-active-border-color: var(--button-primary-border);
+  --el-button-disabled-text-color: color-mix(in srgb, var(--button-primary-text) 72%, transparent);
+  --el-button-disabled-bg-color: color-mix(in srgb, var(--button-primary-solid-bg) 72%, var(--surface-strong) 28%);
+  --el-button-disabled-border-color: color-mix(in srgb, var(--button-primary-border) 72%, transparent);
   color: var(--button-primary-text) !important;
-  border: 1px solid var(--button-primary-border);
+  border: 1px solid var(--button-primary-border) !important;
   background-color: var(--button-primary-solid-bg) !important;
   background-image: var(--button-primary-bg) !important;
   box-shadow: var(--button-primary-shadow);
@@ -776,24 +800,30 @@ body.native-keyboard-open .mobile-nav {
 .el-button--primary:not(.is-link):not(.is-text):focus-visible,
 .el-button--primary:not(.is-link):not(.is-text):active {
   color: var(--button-primary-text) !important;
-  border-color: var(--button-primary-border);
+  border-color: var(--button-primary-border) !important;
   background-color: var(--button-primary-solid-bg-hover) !important;
   background-image: var(--button-primary-bg-hover) !important;
 }
 
 .el-button.is-text:not(.is-link),
+.el-button:not([class*="el-button--"]):not(.is-link):not(.is-text),
+.el-button.is-plain:not(.is-link):not(.is-text),
 .el-button--default:not(.is-link):not(.is-text) {
-  color: var(--button-secondary-text);
-  background: var(--button-secondary-bg);
-  border-color: var(--button-secondary-border);
+  color: var(--button-secondary-text) !important;
+  border-color: var(--button-secondary-border) !important;
+  background: var(--button-secondary-bg) !important;
 }
 
 .el-button.is-text:not(.is-link):hover,
+.el-button:not([class*="el-button--"]):not(.is-link):not(.is-text):hover,
+.el-button:not([class*="el-button--"]):not(.is-link):not(.is-text):focus-visible,
+.el-button.is-plain:not(.is-link):not(.is-text):hover,
+.el-button.is-plain:not(.is-link):not(.is-text):focus-visible,
 .el-button--default:not(.is-link):not(.is-text):hover,
 .el-button--default:not(.is-link):not(.is-text):focus-visible {
-  color: var(--button-secondary-text);
-  background: var(--button-secondary-bg-hover);
-  border-color: var(--control-border-hover);
+  color: var(--button-secondary-text) !important;
+  border-color: var(--control-border-hover) !important;
+  background: var(--button-secondary-bg-hover) !important;
 }
 
 .el-button--primary.is-link,
@@ -844,6 +874,15 @@ body.native-keyboard-open .mobile-nav {
 
 .el-input-group__append .el-button,
 .el-input-group__prepend .el-button {
+  --el-button-text-color: var(--text-primary);
+  --el-button-bg-color: rgba(20, 38, 64, 0.96);
+  --el-button-border-color: var(--control-border);
+  --el-button-hover-text-color: var(--text-primary);
+  --el-button-hover-bg-color: rgba(26, 47, 78, 0.98);
+  --el-button-hover-border-color: var(--control-border-hover);
+  --el-button-active-text-color: var(--text-primary);
+  --el-button-active-bg-color: rgba(26, 47, 78, 0.98);
+  --el-button-active-border-color: var(--control-border-hover);
   color: var(--text-primary) !important;
   background-color: rgba(20, 38, 64, 0.96) !important;
   background-image: none !important;
@@ -854,6 +893,13 @@ body.native-keyboard-open .mobile-nav {
 .el-button.is-disabled,
 .el-button.is-disabled span {
   color: color-mix(in srgb, var(--text-secondary) 78%, transparent) !important;
+}
+
+.el-button.is-disabled:not(.is-link):not(.is-text),
+.el-button.is-disabled.is-plain:not(.is-link):not(.is-text) {
+  border-color: color-mix(in srgb, var(--button-secondary-border) 74%, transparent) !important;
+  background: color-mix(in srgb, var(--surface-soft) 74%, var(--surface-strong) 26%) !important;
+  opacity: 0.82;
 }
 
 .el-card,

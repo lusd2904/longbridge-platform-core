@@ -788,13 +788,14 @@ async function resolveTradeAccountId(accountId = null) {
   }
 }
 
-async function loadTradeState(accountId = null, { status = '', limit = 30 } = {}) {
+async function loadTradeState(accountId = null, { status = '', limit = 30, realtime = false } = {}) {
   const resolvedAccountId = await resolveTradeAccountId(accountId)
   if (!resolvedAccountId) {
     return null
   }
   const res = await serviceGet('trade', `/api/v1/trade/accounts/${encodeURIComponent(resolvedAccountId)}/state`, {
     ...(status ? { status } : {}),
+    ...(realtime ? { realtime: true } : {}),
     limit
   })
   return res?.data || null
@@ -1707,15 +1708,27 @@ export const getOrders = async (params = {}) => {
   const query = {
     ...(params.account_id ? { account_id: params.account_id } : {}),
     ...(params.status ? { status: params.status } : {}),
-    limit: params.limit || 200
+    limit: params.limit || 200,
+    ...(params.realtime ? { realtime: true } : {})
   }
   const res = await serviceGet('trade', '/api/v1/trade/orders', query)
-  const items = Array.isArray(res?.data) ? res.data : Array.isArray(res?.orders) ? res.orders : []
+  const payload = res?.data && typeof res.data === 'object' ? res.data : {}
+  const items = Array.isArray(payload?.list)
+    ? payload.list
+    : Array.isArray(res?.data)
+      ? res.data
+      : Array.isArray(res?.orders)
+        ? res.orders
+        : []
   return {
     ...res,
     data: {
       list: items.map(normalizeOrder),
-      total: Number(res?.count ?? items.length)
+      total: Number(payload?.count ?? res?.count ?? items.length),
+      dataSource: payload?.dataSource || (params.realtime ? 'broker-live' : 'order-projection'),
+      snapshotAt: payload?.snapshotAt || null,
+      warnings: Array.isArray(payload?.warnings) ? payload.warnings : Array.isArray(res?.warnings) ? res.warnings : [],
+      meta: payload?.meta && typeof payload.meta === 'object' ? payload.meta : {}
     }
   }
 }

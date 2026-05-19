@@ -2091,6 +2091,24 @@ onUnmounted(() => {
   --el-button-active-text-color: var(--text-primary);
 }
 
+.trading-page :deep(.el-input-group__append .el-button) {
+  --el-button-text-color: var(--text-primary);
+  --el-button-bg-color: #10253d;
+  --el-button-border-color: var(--control-border-hover);
+  --el-button-hover-text-color: var(--text-primary);
+  --el-button-hover-bg-color: #183452;
+  --el-button-hover-border-color: var(--border-strong);
+  color: var(--text-primary) !important;
+  background-color: #10253d !important;
+  background-image: none !important;
+  border-color: var(--control-border-hover) !important;
+}
+
+.trading-page :deep(.el-input-group__append .el-button span) {
+  color: var(--text-primary) !important;
+  -webkit-text-fill-color: var(--text-primary) !important;
+}
+
 .card-actions {
   display: flex;
   align-items: center;
