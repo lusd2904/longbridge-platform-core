@@ -17,6 +17,7 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from fastapi import Body, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 
 REFACTOR_ROOT = Path(__file__).resolve().parents[4]
@@ -60,6 +61,7 @@ app = create_service_app(
     description="Phase 1 live service for AI model plans, trend scans and recommendation datasets.",
 )
 PORT = service_port("REF_ANALYSIS_SERVICE_PORT", 8103)
+SYNC_ANALYZE_POSITIONS_LIMIT = 12
 AGNO_SIDECAR_BASE_URL = (
     str(os.getenv("REF_AGNO_SIDECAR_URL") or "http://127.0.0.1:3200").strip().rstrip("/")
 )
@@ -68,6 +70,49 @@ _AGENT_RUN_SERVICE_CLASS = None
 _AGENT_RUN_SERVICE_LOADED = False
 _AGENT_RUN_DB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 _AGENT_RUN_OVERRIDE_ACTIONS = {"acknowledged", "needs_review", "dismissed"}
+
+
+def _normalize_position_batch_payload(raw_positions: object, sync_limit: int = SYNC_ANALYZE_POSITIONS_LIMIT) -> Tuple[List[dict], Dict[str, int | bool]]:
+    positions = raw_positions if isinstance(raw_positions, list) else []
+    safe_limit = max(1, int(sync_limit or 1))
+    accepted = [item for item in positions[:safe_limit] if isinstance(item, dict)]
+    requested = len(positions)
+    deferred = max(requested - len(accepted), 0)
+    return accepted, {
+        "requested": requested,
+        "accepted": len(accepted),
+        "deferred": deferred,
+        "syncLimit": safe_limit,
+        "partial": deferred > 0,
+    }
+
+
+def _build_deferred_analysis_placeholders(raw_positions: object, *, model_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    positions = raw_positions if isinstance(raw_positions, list) else []
+    placeholders: List[Dict[str, Any]] = []
+    for item in positions:
+        if not isinstance(item, dict):
+            continue
+        raw_symbol = str(item.get("symbol") or "").strip()
+        if not raw_symbol:
+            continue
+        symbol = HistoricalMarketDataService.normalize_symbol(raw_symbol)
+        placeholders.append(
+            {
+                "symbol": symbol,
+                "name": item.get("name") or item.get("symbol_name") or symbol,
+                "queued": True,
+                "deferred": True,
+                "reason": f"批量分析超过同步上限 {SYNC_ANALYZE_POSITIONS_LIMIT}，已降级为异步/延后处理",
+                "modelPlan": model_plan,
+                "scanLayers": [],
+                "source": "manual_scan",
+                "analysisMode": "manual_deferred_scan",
+                "finalSignal": "warning",
+                "finalDecision": "排队中",
+            }
+        )
+    return placeholders
 
 
 def _normalize_watchlist_session(raw_value: object) -> str:
@@ -1403,6 +1448,34 @@ async def analyze_positions(
     if not positions:
         raise HTTPException(status_code=400, detail="持仓数据不能为空")
 
+    original_positions = positions if isinstance(positions, list) else []
+    positions, batch_meta = _normalize_position_batch_payload(original_positions)
+    if batch_meta["partial"]:
+        response_payload = {
+            "success": True,
+            "data": _build_deferred_analysis_placeholders(original_positions, model_plan=model_plan),
+            "marketSummary": None,
+            "modelPlan": model_plan,
+            "message": f"批量分析请求共 {batch_meta['requested']} 只股票，超过同步上限 {batch_meta['syncLimit']}，已快速接受并延后处理",
+            "duration": time.time() - started_at,
+            "accepted": True,
+            "degraded": True,
+            "syncLimit": batch_meta["syncLimit"],
+            "stats": {
+                "total": batch_meta["requested"],
+                "accepted": 0,
+                "successful": 0,
+                "failed": 0,
+                "deferred": batch_meta["requested"],
+            },
+            "meta": {
+                **batch_meta,
+                "status": "accepted",
+                "executionMode": "deferred",
+            },
+        }
+        return JSONResponse(status_code=202, content=response_payload)
+
     resolved_account_id = _resolve_analysis_account_id(user_id, account_id)
     results = []
     market_snapshot_cache: Dict[str, dict] = {}
@@ -1607,14 +1680,34 @@ async def analyze_positions(
                 )
             )
 
-    return {
+    response_payload = {
         "success": True,
         "data": results,
         "marketSummary": response_market_summary,
         "modelPlan": model_plan,
-        "message": f"成功分析 {len(results)} 只股票",
+        "message": (
+            f"本次同步分析 {batch_meta['accepted']} 只股票，成功分析 {len(results)} 只股票"
+            + (f"；其余 {batch_meta['deferred']} 只已接受但延后处理" if batch_meta["partial"] else "")
+        ),
         "duration": time.time() - started_at,
+        "accepted": True,
+        "degraded": bool(batch_meta["partial"]),
+        "syncLimit": batch_meta["syncLimit"],
+        "stats": {
+            "total": batch_meta["requested"],
+            "accepted": batch_meta["accepted"],
+            "successful": len(results),
+            "failed": len([item for item in results if item.get("error")]),
+            "deferred": batch_meta["deferred"],
+        },
+        "meta": {
+            **batch_meta,
+            "status": "accepted" if batch_meta["partial"] else "completed",
+        },
     }
+    if batch_meta["partial"]:
+        return JSONResponse(status_code=202, content=response_payload)
+    return response_payload
 
 
 @app.get("/api/v1/analysis/trend-scans")

@@ -27,6 +27,7 @@ import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 
 ai_bp = Blueprint('ai', __name__)
+SYNC_BATCH_ANALYZE_LIMIT = 12
 
 BENCHMARKS = {
     'US': [
@@ -321,6 +322,48 @@ def _build_market_snapshot(account_id=None, focus_symbol=None, user_id=None):
         "benchmarks": benchmarks,
         "updated_at": time.time()
     }
+
+
+def _normalize_position_batch_payload(raw_positions, sync_limit=SYNC_BATCH_ANALYZE_LIMIT):
+    positions = raw_positions if isinstance(raw_positions, list) else []
+    safe_limit = max(1, int(sync_limit or 1))
+    total = len(positions)
+    accepted = positions[:safe_limit]
+    dropped = max(total - len(accepted), 0)
+    return accepted, {
+        "requested": total,
+        "accepted": len(accepted),
+        "deferred": dropped,
+        "syncLimit": safe_limit,
+        "partial": dropped > 0,
+    }
+
+
+def _build_deferred_batch_placeholders(raw_positions):
+    positions = raw_positions if isinstance(raw_positions, list) else []
+    placeholders = []
+    for item in positions:
+        if not isinstance(item, dict):
+            continue
+        raw_symbol = str(item.get("symbol") or "").strip()
+        if not raw_symbol:
+            continue
+        symbol = HistoricalMarketDataService.normalize_symbol(raw_symbol)
+        placeholders.append(
+            {
+                "symbol": symbol,
+                "name": item.get("name") or item.get("symbol_name") or symbol,
+                "queued": True,
+                "deferred": True,
+                "reason": f"批量分析超过同步上限 {SYNC_BATCH_ANALYZE_LIMIT}，已快速接受并延后处理",
+                "finalSignal": "warning",
+                "finalDecision": "排队中",
+                "scanLayers": [],
+                "source": "manual_scan",
+                "analysisMode": "manual_deferred_scan",
+            }
+        )
+    return placeholders
 
 
 def _build_real_indicator_context(symbol, current_price, volume, user_id=1):
@@ -1394,8 +1437,44 @@ def batch_analyze_positions():
         if not positions:
             return jsonify({"success": False, "error": "持仓数据不能为空"}), 400
 
-        MonitorLink.log(f"⚡ [批量AI分析] 开始分析 {len(positions)} 只股票")
-        logger.info(f"开始批量分析 {len(positions)} 只股票")
+        original_positions = positions if isinstance(positions, list) else []
+        accepted_positions, batch_meta = _normalize_position_batch_payload(original_positions)
+        if batch_meta["partial"]:
+            duration = time.time() - start_time
+            response_payload = {
+                "success": True,
+                "data": _build_deferred_batch_placeholders(original_positions),
+                "message": f"批量分析请求共 {batch_meta['requested']} 只股票，超过同步上限 {batch_meta['syncLimit']}，已快速接受并延后处理",
+                "duration": duration,
+                "accepted": True,
+                "degraded": True,
+                "syncLimit": batch_meta["syncLimit"],
+                "stats": {
+                    "total": batch_meta["requested"],
+                    "accepted": 0,
+                    "successful": 0,
+                    "failed": 0,
+                    "deferred": batch_meta["requested"],
+                },
+                "meta": {
+                    **batch_meta,
+                    "status": "accepted",
+                    "executionMode": "deferred",
+                }
+            }
+            Logger.log_api_call("/api/ai/batch_analyze_positions", "POST", 202, duration)
+            return jsonify(response_payload), 202
+
+        positions = accepted_positions
+
+        MonitorLink.log(
+            f"⚡ [批量AI分析] 开始分析 {len(positions)} 只股票"
+            + (f"，其余 {batch_meta['deferred']} 只已降级为延后处理" if batch_meta["partial"] else "")
+        )
+        logger.info(
+            f"开始批量分析 {len(positions)} 只股票"
+            + (f"，延后 {batch_meta['deferred']} 只" if batch_meta["partial"] else "")
+        )
         
         # 初始化结果列表
         final_results = []
@@ -1466,17 +1545,32 @@ def batch_analyze_positions():
         duration = time.time() - start_time
         Logger.log_api_call("/api/ai/batch_analyze_positions", "POST", 200, duration)
         
-        return jsonify({
+        response_payload = {
             "success": True,
             "data": final_results,
-            "message": f"成功分析 {len(final_results) - len(error_symbols)} 只股票，{len(error_symbols)} 只股票无行情",
+            "message": (
+                f"本次同步分析 {batch_meta['accepted']} 只股票，成功分析 {len(final_results) - len(error_symbols)} 只股票，"
+                f"{len(error_symbols)} 只股票无行情"
+                + (f"；其余 {batch_meta['deferred']} 只已接受但延后处理" if batch_meta["partial"] else "")
+            ),
             "duration": duration,
+            "accepted": True,
+            "degraded": bool(batch_meta["partial"]),
+            "syncLimit": batch_meta["syncLimit"],
             "stats": {
-                "total": len(positions),
+                "total": batch_meta["requested"],
+                "accepted": batch_meta["accepted"],
                 "successful": len(final_results) - len(error_symbols),
-                "failed": len(error_symbols)
+                "failed": len(error_symbols),
+                "deferred": batch_meta["deferred"],
+            },
+            "meta": {
+                **batch_meta,
+                "status": "accepted" if batch_meta["partial"] else "completed",
             }
-        })
+        }
+        status_code = 202 if batch_meta["partial"] else 200
+        return jsonify(response_payload), status_code
         
     except Exception as e:
         duration = time.time() - start_time
