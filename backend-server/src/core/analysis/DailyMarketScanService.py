@@ -161,7 +161,9 @@ class DailyMarketScanService:
             SELECT *
             FROM {cls.TABLE_NAME}
             ORDER BY trade_date DESC, id DESC
-            """
+            LIMIT %s
+            """,
+            (32,)
         )
         latest: Dict[str, Dict[str, object]] = {}
         for row in rows:

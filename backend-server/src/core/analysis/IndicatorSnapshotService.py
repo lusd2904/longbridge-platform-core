@@ -129,14 +129,17 @@ class IndicatorSnapshotService:
     def get_latest_snapshots(cls, symbol: str) -> Dict[str, Dict[str, object]]:
         cls.ensure_schema()
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+        # Each refresh writes at most one row per timeframe, so we only need a
+        # bounded window of the newest rows to reconstruct the latest snapshot set.
         rows = DbUtil.fetch_all(
             f"""
             SELECT *
             FROM {cls.TABLE_NAME}
             WHERE symbol = %s
             ORDER BY generated_at DESC, id DESC
+            LIMIT %s
             """,
-            (normalized_symbol,)
+            (normalized_symbol, 32)
         )
         latest: Dict[str, Dict[str, object]] = {}
         for row in rows:
