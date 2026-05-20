@@ -213,6 +213,42 @@ class PositionSnapshotService:
             if str(row.get("symbol") or "").strip().upper() != cls.EMPTY_SYMBOL
         ]
 
+    @classmethod
+    def get_latest_count(
+        cls,
+        *,
+        user_id: int,
+        account_id: int,
+        use_primary: bool = False,
+    ) -> int:
+        cls.ensure_schema()
+        fetch_one = DbUtil.fetch_one_primary if use_primary else DbUtil.fetch_one
+        latest = fetch_one(
+            f"""
+            SELECT snapshot_at
+            FROM {cls.TABLE_NAME}
+            WHERE user_id = %s AND account_id = %s
+            ORDER BY snapshot_at DESC, id DESC
+            LIMIT 1
+            """,
+            (int(user_id), int(account_id)),
+        )
+        if not latest or not latest.get("snapshot_at"):
+            return 0
+
+        row = fetch_one(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM {cls.TABLE_NAME}
+            WHERE user_id = %s
+              AND account_id = %s
+              AND snapshot_at = %s
+              AND symbol <> %s
+            """,
+            (int(user_id), int(account_id), latest.get("snapshot_at"), cls.EMPTY_SYMBOL),
+        )
+        return int(row.get("count") or 0) if row else 0
+
     @staticmethod
     def _detect_market(symbol: str, provided: Any = None) -> str:
         market = str(provided or "").strip().upper()

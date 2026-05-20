@@ -50,3 +50,10 @@ def test_trade_fast_order_route_is_registered_before_legacy_mount() -> None:
     route_index = source.index('@app.get("/api/v1/trade/orders")')
     mount_index = source.index('app.mount("/api/v1/trade", legacy_trade_service.app)')
     assert route_index < mount_index
+
+
+def test_trade_dashboard_summary_snapshot_path_avoids_full_snapshot_state() -> None:
+    source = _function_source("apps/trading/trade-service/src/main.py", "get_dashboard_summary")
+
+    assert "_build_snapshot_summary_state(" in source
+    assert "_build_snapshot_state(" not in source

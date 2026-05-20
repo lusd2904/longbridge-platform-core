@@ -294,6 +294,44 @@ def _build_snapshot_state(*, user_id: int, account_id: int) -> Dict[str, Any]:
     }
 
 
+def _build_snapshot_summary_state(*, user_id: int, account_id: int) -> Dict[str, Any]:
+    account = _get_account_or_404(user_id, account_id)
+    account_snapshot = AccountAssetSnapshotService.get_latest(user_id=user_id, account_id=account_id) or {}
+    snapshot_payload = account_snapshot.get("payload") if isinstance(account_snapshot.get("payload"), dict) else {}
+    snapshot_orders = snapshot_payload.get("recentOrders") if isinstance(snapshot_payload.get("recentOrders"), list) else []
+    snapshot_order_count = int(snapshot_payload.get("orderCount") or len(snapshot_orders) or 0)
+    position_count = PositionSnapshotService.get_latest_count(user_id=user_id, account_id=account_id)
+    snapshot_at = account_snapshot.get("snapshotAt")
+    account_info = {
+        "account_id": account.get("account_id") or "",
+        "currency": account_snapshot.get("currency") or "USD",
+        "cash": float(account_snapshot.get("cash") or 0),
+        "market_value": float(account_snapshot.get("marketValue") or 0),
+        "total_equity": float(account_snapshot.get("totalAssets") or 0),
+        "buying_power": float(account_snapshot.get("buyingPower") or 0),
+        "maintenance_margin": float(account_snapshot.get("maintenanceMargin") or 0),
+        "today_pnl": float(account_snapshot.get("todayPnL") or 0),
+        "today_pnl_percent": float(account_snapshot.get("todayPnLPercent") or 0),
+    }
+    return {
+        "account": account,
+        "accountInfo": account_info,
+        "positions": [],
+        "orders": snapshot_orders,
+        "positionCount": position_count,
+        "orderCount": snapshot_order_count,
+        "snapshotAt": snapshot_at,
+        "dataSource": "snapshot",
+        "meta": _build_trade_snapshot_meta(
+            account_snapshot=account_snapshot,
+            positions_snapshot=[],
+            order_count=snapshot_order_count,
+            snapshot_at=snapshot_at,
+            data_source="snapshot",
+        ),
+    }
+
+
 def _build_positions_meta(
     *,
     state: Dict[str, Any],
@@ -332,12 +370,18 @@ def _build_dashboard_summary_payload(
     account_info = state.get("accountInfo") if isinstance(state.get("accountInfo"), dict) else {}
     positions = state.get("positions") if isinstance(state.get("positions"), list) else []
     orders = state.get("orders") if isinstance(state.get("orders"), list) else []
-    total_pnl = sum(float(item.get("pnl") or item.get("unrealized_pnl") or 0) for item in positions)
-    total_cost = sum(
-        float(item.get("avgPrice") or item.get("avg_price") or item.get("average_cost") or 0) * float(item.get("quantity") or 0)
-        for item in positions
+    total_pnl = float(
+        account_info.get("today_pnl")
+        or account_info.get("todayPnL")
+        or sum(float(item.get("pnl") or item.get("unrealized_pnl") or 0) for item in positions)
     )
-    pnl_ratio = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
+    pnl_ratio = float(account_info.get("today_pnl_percent") or account_info.get("todayPnLPercent") or 0)
+    if not pnl_ratio and positions:
+        total_cost = sum(
+            float(item.get("avgPrice") or item.get("avg_price") or item.get("average_cost") or 0) * float(item.get("quantity") or 0)
+            for item in positions
+        )
+        pnl_ratio = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
     state_meta = state.get("meta") if isinstance(state.get("meta"), dict) else {}
     sources = state_meta.get("sources") if isinstance(state_meta.get("sources"), dict) else {}
     snapshot_at = state.get("snapshotAt") or state_meta.get("snapshotAt")
@@ -1294,18 +1338,18 @@ async def get_dashboard_summary(
             ),
         }
 
-    snapshot_state = _build_snapshot_state(user_id=user_id, account_id=account_id)
+    snapshot_summary_state = _build_snapshot_summary_state(user_id=user_id, account_id=account_id)
     snapshot_ready = bool(
-        snapshot_state.get("snapshotAt")
-        or snapshot_state.get("positionCount")
-        or float(snapshot_state.get("accountInfo", {}).get("total_equity") or 0)
+        snapshot_summary_state.get("snapshotAt")
+        or snapshot_summary_state.get("positionCount")
+        or float(snapshot_summary_state.get("accountInfo", {}).get("total_equity") or 0)
     )
     if snapshot_ready:
         return {
             "success": True,
             "data": _build_dashboard_summary_payload(
-                state=snapshot_state,
-                data_source=snapshot_state.get("dataSource") or "snapshot",
+                state=snapshot_summary_state,
+                data_source=snapshot_summary_state.get("dataSource") or "snapshot",
                 default_mode="database",
             ),
         }
