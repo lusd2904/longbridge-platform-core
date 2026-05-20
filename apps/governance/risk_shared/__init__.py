@@ -1,5 +1,6 @@
 from .boundary import (
     build_risk_overview,
+    collect_agent_risk_events,
     collect_notifications,
     ensure_risk_control_tables,
     load_risk_limits,
@@ -10,6 +11,7 @@ from .boundary import (
 
 __all__ = [
     "build_risk_overview",
+    "collect_agent_risk_events",
     "collect_notifications",
     "ensure_risk_control_tables",
     "load_risk_limits",

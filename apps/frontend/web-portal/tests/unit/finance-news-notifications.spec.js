@@ -239,6 +239,35 @@ describe('FinanceNews and Notifications fetch behavior', () => {
     expect(pushMock).toHaveBeenCalledWith('/scheduler-center?agentRunId=run-20260520-001&scene=watchlist_pre_open_review')
   })
 
+  it('labels agent risk notifications distinctly', async () => {
+    getNotificationsBootstrapMock.mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            notificationKey: 'agent:run-20260520-003',
+            type: 'agent-risk',
+            title: '自选股盘前复核 已完成',
+            message: '发现 1 条风险',
+            time: '2026-05-20T08:35:00Z',
+            read: true,
+            route: '/scheduler-center?agentRunId=run-20260520-003&scene=watchlist_pre_open_review',
+            runId: 'run-20260520-003',
+            scene: 'watchlist_pre_open_review'
+          }
+        ],
+        summary: { unreadCount: 0 }
+      }
+    })
+    const { default: Notifications } = await import('../../src/views/Notifications.vue')
+    const wrapper = shallowMount(Notifications, mountOptions)
+
+    await flushPromises()
+
+    expect(wrapper.vm.filteredNotifications[0].type).toBe('agent-risk')
+    expect(wrapper.vm.getTypeLabel('agent-risk')).toBe('Agent 风险')
+    expect(wrapper.vm.getTypeTagType('agent-risk')).toBe('warning')
+  })
+
   it('supports separate route query payloads for agent notifications', async () => {
     getNotificationsBootstrapMock.mockResolvedValueOnce({
       data: {

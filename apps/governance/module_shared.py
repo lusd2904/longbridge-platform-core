@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from apps.governance.risk_shared import (
     build_risk_overview,
+    collect_agent_risk_events,
     collect_notifications,
     ensure_risk_control_tables,
     load_risk_limits,
@@ -28,6 +29,7 @@ __all__ = [
     "build_dependency_status",
     "build_health_payload",
     "build_risk_overview",
+    "collect_agent_risk_events",
     "collect_notifications",
     "create_service_app",
     "ensure_risk_control_tables",

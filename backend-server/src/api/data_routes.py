@@ -1001,15 +1001,143 @@ def _compute_asset_drawdown(user_id: int) -> float:
     return round(abs(max_drawdown) * 100, 2)
 
 
+AGENT_REVIEW_SCENE_LABELS = {
+    "watchlist_pre_open_review": "自选股盘前复核",
+    "watchlist_post_close_review": "自选股盘后复核",
+}
+
+
+def _coerce_agent_list(value: Any) -> List[Any]:
+    if isinstance(value, list):
+        return [item for item in value if item not in (None, "")]
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def _first_agent_text(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            text = "，".join(str(item).strip() for item in value if str(item or "").strip())
+        elif isinstance(value, dict):
+            text = str(value.get("summary") or value.get("message") or value.get("title") or "").strip()
+        else:
+            text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _normalize_agent_risk_level(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if any(token in text for token in ("critical", "severe", "high", "高", "严重")):
+        return "high"
+    if any(token in text for token in ("medium", "moderate", "中")):
+        return "medium"
+    return "low"
+
+
+def _extract_agent_risk_symbols(item: Any) -> List[str]:
+    if not isinstance(item, dict):
+        return []
+    raw_symbols = item.get("symbols") or item.get("symbol") or item.get("tickers") or item.get("ticker")
+    if isinstance(raw_symbols, list):
+        values = raw_symbols
+    else:
+        values = [raw_symbols]
+    symbols = []
+    for value in values:
+        symbol = str(value or "").strip().upper()
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+    return symbols
+
+
+def _collect_agent_risk_events(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+    try:
+        rows = AgentRunService.list_recent_runs(
+            user_id=user_id,
+            limit=max(1, min(int(limit or 20), 80)),
+            use_primary=True,
+        )
+    except Exception as exc:
+        print(f"⚠️ [API] 获取 Agent 风险事件失败: user={user_id} error={exc}")
+        return []
+
+    events: List[Dict[str, Any]] = []
+    for row in rows:
+        run_id = row.get("runId") or row.get("run_id") or row.get("id")
+        scene = str(row.get("scene") or "").strip()
+        if not run_id or scene not in AGENT_REVIEW_SCENE_LABELS:
+            continue
+
+        result = row.get("resultSummary") if isinstance(row.get("resultSummary"), dict) else {}
+        risk_flags = _coerce_agent_list(result.get("riskFlags") or result.get("risk_flags"))
+        if not risk_flags:
+            continue
+
+        timestamp = row.get("finishedAt") or row.get("updatedAt") or row.get("createdAt")
+        route_query = urlencode({"agentRunId": str(run_id), "scene": scene})
+        for index, risk_flag in enumerate(risk_flags, start=1):
+            if isinstance(risk_flag, dict):
+                level = _normalize_agent_risk_level(
+                    risk_flag.get("severity")
+                    or risk_flag.get("level")
+                    or risk_flag.get("riskLevel")
+                    or risk_flag.get("risk_level")
+                )
+                symbols = _extract_agent_risk_symbols(risk_flag)
+                message = _first_agent_text(
+                    risk_flag.get("message"),
+                    risk_flag.get("summary"),
+                    risk_flag.get("description"),
+                    risk_flag.get("title"),
+                    risk_flag.get("reason"),
+                )
+                evidence = _coerce_agent_list(risk_flag.get("evidence") or risk_flag.get("evidenceRefs"))
+            else:
+                level = "medium"
+                symbols = []
+                message = _first_agent_text(risk_flag)
+                evidence = []
+
+            if not message:
+                message = "Agent 复核识别到结构化风险，请进入任务中心查看证据和复核建议。"
+
+            events.append({
+                "id": f"agent:{run_id}:risk:{index}",
+                "level": level,
+                "type": f"{AGENT_REVIEW_SCENE_LABELS[scene]} Agent 风险",
+                "symbol": symbols[0] if symbols else None,
+                "symbols": symbols,
+                "message": message[:500],
+                "timestamp": timestamp,
+                "source": "agent-review",
+                "route": f"/scheduler-center?{route_query}",
+                "runId": run_id,
+                "run_id": run_id,
+                "scene": scene,
+                "evidence": evidence[:5],
+            })
+            if len(events) >= limit:
+                return events
+
+    events.sort(key=lambda item: _parse_datetime_value(item.get("timestamp")), reverse=True)
+    return events[:limit]
+
+
 def _build_risk_overview(user_id: int, account_id: Optional[int] = None) -> Dict[str, Any]:
     limits = _load_risk_limits(user_id)
     alerts = StrategyMonitorService.get_alerts(user_id=user_id, limit=50)
+    agent_risk_events = _collect_agent_risk_events(user_id=user_id, limit=20)
     stop_loss_orders = _load_risk_orders(user_id=user_id, order_type='stop_loss', account_id=account_id)
     take_profit_orders = _load_risk_orders(user_id=user_id, order_type='take_profit', account_id=account_id)
     positions = list(_load_position_snapshot(user_id=user_id, account_id=account_id).values())
 
     high_risk_count = len([item for item in alerts if item.get('severity') == 'high'])
+    high_risk_count += len([item for item in agent_risk_events if item.get('level') == 'high'])
     medium_risk_count = len([item for item in alerts if item.get('severity') == 'medium'])
+    medium_risk_count += len([item for item in agent_risk_events if item.get('level') == 'medium'])
     max_weight = max((float(item.get('weight') or 0) for item in positions), default=0.0)
     drawdown = _compute_asset_drawdown(user_id)
     protection_count = len(stop_loss_orders) + len(take_profit_orders)
@@ -1040,6 +1168,8 @@ def _build_risk_overview(user_id: int, account_id: Optional[int] = None) -> Dict
             "message": f"{alert.get('message') or ''}，建议动作: {action}",
             "timestamp": alert.get("createdAt")
         })
+    events.extend(agent_risk_events)
+    events.sort(key=lambda item: _parse_datetime_value(item.get("timestamp")), reverse=True)
 
     return {
         "config": limits,
@@ -1231,6 +1361,12 @@ def _collect_notifications(user_id: int, limit: int = 50, notification_type: str
                 "time": alert.get("createdAt"),
                 "route": "/risk"
             })
+        if notification_type == 'risk':
+            items.extend(_collect_agent_review_notifications(
+                user_id=user_id,
+                limit=max(8, limit // 2),
+                risk_only=True,
+            ))
 
     if notification_type in {'', 'trade'}:
         trade_limit = max(8, limit // 2)
@@ -1240,7 +1376,11 @@ def _collect_notifications(user_id: int, limit: int = 50, notification_type: str
         items.extend(trade_items)
 
     if notification_type in {'', 'agent', 'agent-review', 'agent-risk'}:
-        items.extend(_collect_agent_review_notifications(user_id=user_id, limit=max(8, limit // 2)))
+        items.extend(_collect_agent_review_notifications(
+            user_id=user_id,
+            limit=max(8, limit // 2),
+            risk_only=notification_type == 'agent-risk',
+        ))
 
     if notification_type in {'', 'system'}:
         login_rows = DbUtil.fetch_all(
@@ -1284,11 +1424,7 @@ def _collect_notifications(user_id: int, limit: int = 50, notification_type: str
     return visible_items
 
 
-def _collect_agent_review_notifications(user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
-    scene_labels = {
-        "watchlist_pre_open_review": "自选股盘前复核",
-        "watchlist_post_close_review": "自选股盘后复核",
-    }
+def _collect_agent_review_notifications(user_id: int, limit: int = 20, risk_only: bool = False) -> List[Dict[str, Any]]:
     try:
         rows = AgentRunService.list_recent_runs(user_id=user_id, limit=max(1, min(int(limit or 20), 40)), use_primary=True)
     except Exception as exc:
@@ -1302,7 +1438,7 @@ def _collect_agent_review_notifications(user_id: int, limit: int = 20) -> List[D
             continue
 
         scene = str(row.get("scene") or "").strip()
-        if scene not in scene_labels:
+        if scene not in AGENT_REVIEW_SCENE_LABELS:
             continue
 
         result = row.get("resultSummary") if isinstance(row.get("resultSummary"), dict) else {}
@@ -1313,6 +1449,8 @@ def _collect_agent_review_notifications(user_id: int, limit: int = 20) -> List[D
 
         review_count = len(result.get("reviewAdvice") or result.get("review_advice") or [])
         risk_count = len(result.get("riskFlags") or result.get("risk_flags") or [])
+        if risk_only and risk_count <= 0:
+            continue
         extra_parts = []
         if review_count:
             extra_parts.append(f"{review_count} 条建议")
@@ -1329,19 +1467,23 @@ def _collect_agent_review_notifications(user_id: int, limit: int = 20) -> List[D
             "queued": "排队中",
             "failed": "失败",
             "cancelled": "已取消",
+            "skipped": "已跳过",
         }.get(status, "已更新")
 
         route_query = urlencode({"agentRunId": str(run_id), "scene": scene})
+        item_type = "agent-risk" if risk_count else "agent"
         items.append({
             "notificationKey": f"agent:{run_id}",
-            "type": "agent",
-            "title": f"{scene_labels[scene]} {status_label}",
+            "type": item_type,
+            "title": f"{AGENT_REVIEW_SCENE_LABELS[scene]} {status_label}",
             "message": summary[:500],
             "time": row.get("finishedAt") or row.get("updatedAt") or row.get("createdAt"),
             "route": f"/scheduler-center?{route_query}",
             "runId": run_id,
             "run_id": run_id,
             "scene": scene,
+            "riskCount": risk_count,
+            "reviewCount": review_count,
         })
 
     return items[:limit]

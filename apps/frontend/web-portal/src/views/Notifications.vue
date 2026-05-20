@@ -254,6 +254,7 @@ const notificationSummary = computed(() => [
 const getTypeColor = (type) => ({
   trade: 'linear-gradient(135deg, #4f8cff, #2dd4bf)',
   agent: 'linear-gradient(135deg, #7c3aed, #22d3ee)',
+  'agent-risk': 'linear-gradient(135deg, #b45309, #ef4444)',
   risk: 'linear-gradient(135deg, #ff7b72, #ffb36b)',
   system: 'linear-gradient(135deg, #718096, #94a3b8)'
 }[type] || 'linear-gradient(135deg, #718096, #94a3b8)')
@@ -261,6 +262,7 @@ const getTypeColor = (type) => ({
 const getTypeLabel = (type) => ({
   trade: '交易',
   agent: 'Agent',
+  'agent-risk': 'Agent 风险',
   risk: '风控',
   system: '系统'
 }[type] || '通知')
@@ -268,6 +270,7 @@ const getTypeLabel = (type) => ({
 const getTypeTagType = (type) => ({
   trade: 'primary',
   agent: 'success',
+  'agent-risk': 'warning',
   risk: 'warning',
   system: 'info'
 }[type] || 'info')
@@ -275,6 +278,7 @@ const getTypeTagType = (type) => ({
 const getTypeIcon = (type) => ({
   trade: Wallet,
   agent: Bell,
+  'agent-risk': Warning,
   risk: Warning,
   system: Bell
 }[type] || Bell)

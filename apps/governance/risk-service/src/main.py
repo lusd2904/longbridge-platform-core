@@ -20,6 +20,7 @@ from apps.governance.module_shared import (
     build_dependency_status,
     build_health_payload,
     build_risk_overview,
+    collect_agent_risk_events,
     collect_notifications,
     create_service_app,
     ensure_risk_control_tables,
@@ -328,6 +329,11 @@ def _build_enabled_risk_strategy_payload(user_id: int, account_id: Optional[int]
 
 def _build_risk_bootstrap(user_id: int, account_id: Optional[int]) -> Dict[str, Any]:
     risk_payload = build_risk_overview(user_id=user_id, account_id=account_id)
+    risk_payload = _merge_agent_risk_events(
+        risk_payload,
+        user_id=user_id,
+        agent_events=_extract_existing_agent_risk_events(risk_payload),
+    )
     recent_notifications = _normalize_notifications(collect_notifications(
         user_id=user_id,
         limit=12,
@@ -349,6 +355,60 @@ def _build_risk_bootstrap(user_id: int, account_id: Optional[int]) -> Dict[str, 
             "refactor-v2/backend-server/src/core/platform/TradeAuditService.py",
         ],
     }
+
+
+def _parse_datetime_sort_value(value: Any) -> str:
+    return str(value or "")
+
+
+def _extract_existing_agent_risk_events(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    events = payload.get("events") if isinstance(payload.get("events"), list) else []
+    return [dict(item) for item in events if item.get("source") == "agent-review"]
+
+
+def _merge_agent_risk_events(
+    payload: Dict[str, Any],
+    *,
+    user_id: int,
+    agent_events: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    if agent_events is None:
+        agent_events = collect_agent_risk_events(user_id=user_id, limit=20)
+    if not agent_events:
+        return payload
+
+    merged_payload = dict(payload or {})
+    existing_events = merged_payload.get("events") if isinstance(merged_payload.get("events"), list) else []
+    events_by_id: Dict[str, Dict[str, Any]] = {}
+    for event in [*agent_events, *existing_events]:
+        event_id = str(event.get("id") or "").strip()
+        if not event_id:
+            event_id = f"{event.get('source') or 'risk'}:{event.get('type') or ''}:{event.get('symbol') or ''}:{event.get('timestamp') or ''}"
+        if event_id not in events_by_id:
+            events_by_id[event_id] = dict(event)
+
+    merged_events = list(events_by_id.values())
+    merged_events.sort(key=lambda item: _parse_datetime_sort_value(item.get("timestamp")), reverse=True)
+    agent_event_count = len([item for item in merged_events if item.get("source") == "agent-review"])
+
+    overview = dict(merged_payload.get("overview") or {})
+    overview["agentRiskCount"] = agent_event_count
+    overview["riskEventCount"] = len(merged_events)
+    if agent_event_count:
+        description = str(overview.get("scoreDescription") or "").strip()
+        agent_suffix = f"Agent 风险 {agent_event_count} 条"
+        if agent_suffix not in description:
+            overview["scoreDescription"] = f"{description}，{agent_suffix}" if description else agent_suffix
+
+    meta = dict(merged_payload.get("meta") or {})
+    meta["agentRiskEventCount"] = agent_event_count
+    meta["eventCount"] = len(merged_events)
+
+    merged_payload["events"] = merged_events
+    merged_payload["overview"] = overview
+    if meta:
+        merged_payload["meta"] = meta
+    return merged_payload
 
 
 def _build_risk_snapshot_meta(
@@ -477,6 +537,11 @@ def _build_risk_snapshot_payload(
             data_source="snapshot",
         ),
     }
+    payload = _merge_agent_risk_events(payload, user_id=user_id)
+    payload["meta"] = {
+        **(payload.get("meta") or {}),
+        "eventCount": len(payload.get("events") or []),
+    }
     if warning:
         payload["warning"] = warning[:180]
     return payload
@@ -581,6 +646,11 @@ async def risk_overview(
         payload = build_risk_overview(
             user_id=user_id,
             account_id=safe_account_id,
+        )
+        payload = _merge_agent_risk_events(
+            payload,
+            user_id=user_id,
+            agent_events=_extract_existing_agent_risk_events(payload),
         )
         payload["meta"] = _build_risk_snapshot_meta(
             user_id=user_id,

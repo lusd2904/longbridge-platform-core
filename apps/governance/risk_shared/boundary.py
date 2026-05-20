@@ -26,6 +26,13 @@ def collect_notifications(
     )
 
 
+def collect_agent_risk_events(user_id: int, *, limit: int = 20) -> List[Dict[str, Any]]:
+    return data_routes()._collect_agent_risk_events(  # noqa: SLF001
+        user_id=user_id,
+        limit=limit,
+    )
+
+
 def upsert_notification_states(
     user_id: int,
     keys: List[str],
