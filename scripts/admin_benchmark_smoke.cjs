@@ -3,7 +3,8 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { resolveBaseUrl } = require('./base_url_helper.cjs')
 
-const DEFAULT_OUTPUT_PATH = '.omx/artifacts/benchmarks/admin-benchmark.json'
+const ROOT_DIR = path.resolve(__dirname, '..')
+const DEFAULT_OUTPUT_PATH = path.join(ROOT_DIR, '.omx/artifacts/benchmarks/admin-benchmark.json')
 const HELP_TEXT = `Admin benchmark smoke script
 
 Usage:
