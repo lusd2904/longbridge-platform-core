@@ -103,9 +103,89 @@ def _serialize_account(account: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _build_account_runtime_hints(account: Dict[str, Any], row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    broker_type = str((row or {}).get("broker_type") or account.get("broker_type") or "").strip().lower()
+    display_name = " ".join(
+        [
+            str(account.get("display_name") or ""),
+            str(account.get("name") or ""),
+            str(account.get("broker_name") or ""),
+            str(account.get("account_id") or ""),
+        ]
+    ).upper()
+
+    trading_mode = "unknown"
+    account_mode_label = "待确认"
+    safety_level = "warning"
+    safety_message = "请先确认当前券商环境与账户模式，再提交委托。"
+
+    if broker_type == "tiger":
+        env = str((row or {}).get("tiger_env") or "").strip().upper()
+        if env and env != "PROD":
+            trading_mode = "paper"
+            account_mode_label = f"Tiger {env}"
+            safety_level = "info"
+            safety_message = "当前为 Tiger 模拟/非生产环境，下单仅用于演练，请勿将结果视为真实成交。"
+        elif env == "PROD":
+            trading_mode = "live"
+            account_mode_label = "Tiger 实盘"
+            safety_level = "danger"
+            safety_message = "当前为 Tiger 实盘账户，请再次确认价格、数量与市场状态。"
+    elif broker_type == "longbridge":
+        config = build_masked_broker_config(row or {}, broker_type) if row else {}
+        cli_channel = str(config.get("cli_account_channel") or "").strip().upper()
+        if bool(config.get("has_cli_auth")) or any(keyword in cli_channel for keyword in ("SIM", "PAPER", "DEMO")):
+            trading_mode = "paper"
+            account_mode_label = "长桥模拟"
+            safety_level = "info"
+            safety_message = "当前为长桥模拟账户，页面中的委托与订单变化仅用于演练。"
+        elif row:
+            trading_mode = "live"
+            account_mode_label = "长桥实盘"
+            safety_level = "danger"
+            safety_message = "当前为长桥实盘账户，请确认参考报价、数量与交易时段。"
+
+    if trading_mode == "unknown":
+        if any(keyword in display_name for keyword in ("PAPER", "SIM", "SIMULAT", "DEMO", "SANDBOX", "模拟")):
+            trading_mode = "paper"
+            account_mode_label = "模拟账户"
+            safety_level = "info"
+            safety_message = "当前账户看起来是模拟/演练环境，请勿将页面结果视为真实成交。"
+        elif row:
+            trading_mode = "live"
+            account_mode_label = "实盘账户"
+            safety_level = "danger"
+            safety_message = "当前账户已接入可交易券商，请确认价格与数量后再提交。"
+
+    return {
+        "trading_mode": trading_mode,
+        "tradingMode": trading_mode,
+        "is_paper": trading_mode == "paper",
+        "isPaper": trading_mode == "paper",
+        "account_mode_label": account_mode_label,
+        "accountModeLabel": account_mode_label,
+        "safety_level": safety_level,
+        "safetyLevel": safety_level,
+        "safety_message": safety_message,
+        "safetyMessage": safety_message,
+    }
+
+
 def _get_accounts(user_id: int) -> List[Dict[str, Any]]:
     manager = get_broker_manager()
-    return [_serialize_account(item) for item in (manager.list_accounts(user_id) or [])]
+    accounts: List[Dict[str, Any]] = []
+    for item in (manager.list_accounts(user_id) or []):
+        payload = _serialize_account(item)
+        row = None
+        account_row_id = int(payload.get("id") or 0)
+        if account_row_id > 0:
+            try:
+                row = get_user_broker_account(account_row_id, user_id)
+            except Exception:
+                row = None
+        payload.update(_build_account_runtime_hints(payload, row))
+        accounts.append(payload)
+    return accounts
 
 
 def _get_account_or_404(user_id: int, account_id: int) -> Dict[str, Any]:
@@ -172,7 +252,15 @@ def _build_account_state(
         return state
     except Exception as exc:
         snapshot_state = _build_snapshot_state(user_id=user_id, account_id=account_id)
-        snapshot_state["warning"] = str(exc)[:180]
+        warning = str(exc)[:180]
+        snapshot_state["warning"] = warning
+        snapshot_state["meta"] = {
+            **(snapshot_state.get("meta") if isinstance(snapshot_state.get("meta"), dict) else {}),
+            "warnings": [warning],
+            "degraded": True,
+            "fallbackSource": "snapshot",
+            "requestedMode": "live",
+        }
         return snapshot_state
 
 
@@ -232,6 +320,8 @@ def _build_trade_snapshot_meta(
     order_count: int,
     snapshot_at: Optional[str],
     data_source: str = "snapshot",
+    warnings: Optional[List[str]] = None,
+    degraded: bool = False,
 ) -> Dict[str, Any]:
     account_snapshot_at = account_snapshot.get("snapshotAt") if isinstance(account_snapshot, dict) else None
     position_snapshot_at = positions_snapshot[0].get("snapshotAt") if positions_snapshot else None
@@ -251,6 +341,8 @@ def _build_trade_snapshot_meta(
         "positionCount": len(positions_snapshot),
         "orderCount": int(order_count or 0),
         "realtimeOverlay": ["quotes", "order-stream"],
+        "warnings": [str(item) for item in (warnings or []) if str(item or "").strip()],
+        "degraded": bool(degraded),
     }
 
 
@@ -290,6 +382,8 @@ def _build_snapshot_state(*, user_id: int, account_id: int) -> Dict[str, Any]:
             order_count=snapshot_order_count,
             snapshot_at=snapshot_at,
             data_source="snapshot",
+            warnings=[],
+            degraded=False,
         ),
     }
 
@@ -328,6 +422,8 @@ def _build_snapshot_summary_state(*, user_id: int, account_id: int) -> Dict[str,
             order_count=snapshot_order_count,
             snapshot_at=snapshot_at,
             data_source="snapshot",
+            warnings=[],
+            degraded=False,
         ),
     }
 
@@ -417,6 +513,8 @@ def _build_dashboard_summary_payload(
             "positionCount": int(state.get("positionCount") or len(positions)),
             "orderCount": int(state.get("orderCount") or len(orders)),
             "realtimeOverlay": state_meta.get("realtimeOverlay") or (["broker"] if is_live_source else ["quotes", "order-stream"]),
+            "warnings": list(state_meta.get("warnings") or []),
+            "degraded": bool(state_meta.get("degraded") or str(data_source or "").endswith("fallback")),
         },
     }
 
@@ -1367,8 +1465,8 @@ async def get_dashboard_summary(
         return {
             "success": True,
             "data": _build_dashboard_summary_payload(
-                state=snapshot_state,
-                data_source=snapshot_state.get("dataSource") or "snapshot",
+                state=snapshot_summary_state,
+                data_source=snapshot_summary_state.get("dataSource") or "snapshot",
                 default_mode="database",
             ),
         }

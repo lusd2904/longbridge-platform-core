@@ -119,7 +119,7 @@
                 @keyup.enter="searchSymbol"
               >
                 <template #append>
-                  <el-button :loading="quoteLoading" @click="searchSymbol">搜索</el-button>
+                  <el-button class="trade-surface-button trade-search-button" :loading="quoteLoading" @click="searchSymbol">搜索</el-button>
                 </template>
               </el-input>
             </el-form-item>
@@ -201,6 +201,7 @@
 
             <el-form-item>
               <el-button
+                class="trade-submit-button"
                 size="large"
                 style="width: 100%"
                 :type="orderForm.action === 'buy' ? 'success' : 'danger'"
@@ -212,6 +213,15 @@
               </el-button>
             </el-form-item>
           </el-form>
+
+          <section class="trade-safety-panel" :class="`is-${tradeSafetyTone}`">
+            <div class="trade-safety-head">
+              <span class="feedback-kicker">交易安全提示</span>
+              <el-tag size="small" :type="tradeSafetyTagType">{{ tradeSafetyTagText }}</el-tag>
+            </div>
+            <strong>{{ tradeSafetyHeadline }}</strong>
+            <p>{{ tradeSafetyMessage }}</p>
+          </section>
 
           <div class="order-intelligence-grid">
             <article class="order-intelligence-card emphasis">
@@ -390,6 +400,9 @@
                   <el-tag size="small" :type="hasLivePushQuote ? 'success' : 'warning'">
                     {{ currentQuoteSourceLabel }}
                   </el-tag>
+                  <el-tag v-if="quoteDataStatusTag" size="small" type="info">
+                    {{ quoteDataStatusTag }}
+                  </el-tag>
                   <el-tag v-if="quoteFetchStatusTag" size="small" :type="quoteFetchStatusTagType">
                     {{ quoteFetchStatusTag }}
                   </el-tag>
@@ -426,19 +439,19 @@
             <div class="quote-details">
               <div class="detail-item">
                 <span class="label">昨收</span>
-                <span class="value">{{ formatMarketPrice(currentQuote?.prevClose) }}</span>
+                <span class="value">{{ formatQuoteDetailPrice(currentQuote?.prevClose) }}</span>
               </div>
               <div class="detail-item">
                 <span class="label">今开</span>
-                <span class="value">{{ formatMarketPrice(currentQuote?.open) }}</span>
+                <span class="value">{{ formatQuoteDetailPrice(currentQuote?.open) }}</span>
               </div>
               <div class="detail-item">
                 <span class="label">最高</span>
-                <span class="value">{{ formatMarketPrice(currentQuote?.high) }}</span>
+                <span class="value">{{ formatQuoteDetailPrice(currentQuote?.high) }}</span>
               </div>
               <div class="detail-item">
                 <span class="label">最低</span>
-                <span class="value">{{ formatMarketPrice(currentQuote?.low) }}</span>
+                <span class="value">{{ formatQuoteDetailPrice(currentQuote?.low) }}</span>
               </div>
               <div class="detail-item">
                 <span class="label">成交量</span>
@@ -727,6 +740,7 @@
         <small>{{ orderReferenceSummary }}</small>
       </div>
       <el-button
+        class="trade-submit-button"
         size="large"
         :type="orderForm.action === 'buy' ? 'success' : 'danger'"
         :disabled="!canTradeLive || submittingOrder"
@@ -768,6 +782,7 @@
         <div class="trade-confirm-actions">
           <el-button @click="mobileConfirmVisible = false">再检查一下</el-button>
           <el-button
+            class="trade-submit-button"
             :type="orderForm.action === 'buy' ? 'success' : 'danger'"
             :loading="submittingOrder"
             @click="confirmSubmitOrder"
@@ -956,6 +971,39 @@ const latestQuantSignal = computed(() => {
 })
 const canTradeLive = computed(() => Boolean(getAccess()?.canTradeLive ?? accounts.value.length))
 const selectedAccountName = computed(() => accounts.value.find((account) => account.id === selectedAccount.value)?.name || '未选择账户')
+const selectedAccountRecord = computed(() => accounts.value.find((account) => account.id === selectedAccount.value) || null)
+const selectedAccountTradingMode = computed(() => String(selectedAccountRecord.value?.tradingMode || selectedAccountRecord.value?.trading_mode || '').trim().toLowerCase())
+const isPaperTradingAccount = computed(() => Boolean(
+  selectedAccountRecord.value?.isPaper ??
+  selectedAccountRecord.value?.is_paper ??
+  selectedAccountTradingMode.value === 'paper'
+))
+const tradeSafetyTone = computed(() => {
+  if (!selectedAccount.value) return 'warning'
+  if (isPaperTradingAccount.value) return 'info'
+  return canTradeLive.value ? 'danger' : 'warning'
+})
+const tradeSafetyTagType = computed(() => (
+  tradeSafetyTone.value === 'danger' ? 'danger' : tradeSafetyTone.value === 'info' ? 'info' : 'warning'
+))
+const tradeSafetyTagText = computed(() => {
+  if (!selectedAccount.value) return '未选择账户'
+  return selectedAccountRecord.value?.accountModeLabel || selectedAccountRecord.value?.account_mode_label || (isPaperTradingAccount.value ? '模拟账户' : '交易账户')
+})
+const tradeSafetyHeadline = computed(() => {
+  if (!selectedAccount.value) return '选择账户后再提交委托'
+  if (isPaperTradingAccount.value) return '当前为模拟/演练环境'
+  if (!canTradeLive.value) return '当前用户未开通真实交易'
+  return '当前委托将进入真实交易链路'
+})
+const tradeSafetyMessage = computed(() => {
+  if (!selectedAccount.value) return '请先确认券商账户、交易环境和标的代码，避免在错误账户上下单。'
+  return selectedAccountRecord.value?.safetyMessage
+    || selectedAccountRecord.value?.safety_message
+    || (isPaperTradingAccount.value
+      ? '当前账户为模拟环境，订单与订单状态仅用于演练。'
+      : '当前账户为可交易环境，请再次确认价格、数量、交易时段和市场来源。')
+})
 
 const selectedMarketInsight = computed(() => {
   const targetMarket = detectMarket(currentQuote.value?.symbol || orderForm.value.symbol)
@@ -1007,6 +1055,14 @@ const currentQuoteSourceLabel = computed(() => {
   if (sourceKey.includes('symbol-overview')) return '标的概览'
   if (currentQuoteReady.value) return 'Longbridge Pull'
   return '等待行情'
+})
+const quoteDataStatusTag = computed(() => {
+  const status = String(currentQuote.value?.dataStatus || currentQuote.value?.data_status || '').trim().toLowerCase()
+  if (!status) return ''
+  if (status === 'stale') return '快照待更新'
+  if (status === 'zero') return '报价为 0'
+  if (status === 'empty') return '暂无成交'
+  return ''
 })
 const quoteFetchStatusTag = computed(() => {
   if (quoteFetchStatus.value === 'degraded') return 'Quote 降级'
@@ -1601,6 +1657,16 @@ const normalizeQuote = (raw = {}) => {
     raw.snapshotAt ||
     raw.quoteSnapshotAt
   )
+  const hasAnyQuoteValue = Boolean(
+    Number.isFinite(price) ||
+    Number.isFinite(prevClose) ||
+    raw.timestamp ||
+    raw.snapshotAt ||
+    raw.quoteSnapshotAt
+  )
+  const dataStatus = raw.dataStatus || raw.data_status || (
+    hasQuoteBase ? 'ready' : hasAnyQuoteValue ? 'zero' : 'empty'
+  )
   return {
     ...raw,
     symbol,
@@ -1617,7 +1683,8 @@ const normalizeQuote = (raw = {}) => {
     quoteSource: raw.quoteSource || raw.quote_source || raw.source || '',
     quote_source: raw.quoteSource || raw.quote_source || raw.source || '',
     quoteReady: raw.quoteReady ?? raw.quote_ready ?? hasQuoteBase,
-    timestamp: raw.timestamp || raw.snapshotAt || raw.quoteSnapshotAt || ''
+    timestamp: raw.timestamp || raw.snapshotAt || raw.quoteSnapshotAt || '',
+    dataStatus
   }
 }
 
@@ -1747,7 +1814,8 @@ const searchSymbol = async () => {
           ...quotePayload,
           symbol,
           name: currentQuote.value?.name || fallbackPosition?.name || symbol,
-          source: quotePayload?.quoteSource || quotePayload?.quote_source || snapshot?.sources?.quote || 'longbridge-cli'
+          source: quotePayload?.quoteSource || quotePayload?.quote_source || snapshot?.sources?.quote || 'longbridge-cli',
+          dataStatus: quotePayload && Object.keys(quotePayload).length ? undefined : 'empty'
         })
         quotePullFallback.value = normalizedQuote
         currentQuote.value = normalizedQuote
@@ -2052,6 +2120,20 @@ const formatReferencePrice = (value) => {
   return amount > 0 ? formatMarketPrice(amount) : '--'
 }
 
+const formatQuoteDetailPrice = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return '--'
+  }
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) {
+    return '--'
+  }
+  if (amount === 0) {
+    return '0.00'
+  }
+  return formatMarketPrice(amount)
+}
+
 const formatReferencePriceSource = (value) => {
   const key = String(value || '').toLowerCase()
   if (key === 'request') return '手动输入'
@@ -2331,17 +2413,32 @@ onUnmounted(() => {
   --el-button-active-text-color: var(--text-primary);
 }
 
+.trade-search-button,
+.trade-submit-button {
+  --el-button-text-color: var(--text-primary);
+  --el-button-hover-text-color: var(--text-primary);
+}
+
+.trade-submit-button {
+  --el-button-bg-color: color-mix(in srgb, var(--surface-strong) 82%, var(--accent) 18%);
+  --el-button-border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent));
+  --el-button-hover-bg-color: color-mix(in srgb, var(--surface-strong) 68%, var(--accent) 32%);
+  --el-button-hover-border-color: color-mix(in srgb, var(--border-strong) 48%, var(--accent));
+  --el-button-active-bg-color: color-mix(in srgb, var(--surface-strong) 62%, var(--accent) 38%);
+  --el-button-active-border-color: color-mix(in srgb, var(--border-strong) 36%, var(--accent));
+}
+
 .trading-page :deep(.el-input-group__append .el-button) {
   --el-button-text-color: var(--text-primary);
-  --el-button-bg-color: #10253d;
-  --el-button-border-color: var(--control-border-hover);
+  --el-button-bg-color: color-mix(in srgb, var(--surface-strong) 90%, transparent);
+  --el-button-border-color: var(--border-strong);
   --el-button-hover-text-color: var(--text-primary);
-  --el-button-hover-bg-color: #183452;
+  --el-button-hover-bg-color: color-mix(in srgb, var(--surface-strong) 78%, var(--accent) 22%);
   --el-button-hover-border-color: var(--border-strong);
   color: var(--text-primary) !important;
-  background-color: #10253d !important;
+  background-color: color-mix(in srgb, var(--surface-strong) 90%, transparent) !important;
   background-image: none !important;
-  border-color: var(--control-border-hover) !important;
+  border-color: var(--border-strong) !important;
 }
 
 .trading-page :deep(.el-input-group__append .el-button span) {
@@ -2726,6 +2823,43 @@ onUnmounted(() => {
   background: var(--surface-soft);
   display: grid;
   gap: 14px;
+}
+
+.trade-safety-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--control-border);
+  background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
+  display: grid;
+  gap: 8px;
+}
+
+.trade-safety-panel strong {
+  color: var(--text-primary);
+}
+
+.trade-safety-panel p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.trade-safety-panel.is-danger {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--control-border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-soft));
+}
+
+.trade-safety-panel.is-info {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--control-border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+}
+
+.trade-safety-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .order-feedback-panel.success {

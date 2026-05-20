@@ -295,7 +295,15 @@ function normalizeQuoteRowForState(row = {}, previousQuote = {}, options = {}) {
     pre_market_price: resolveFirstQuoteNumber([row.pre_market_price, previousQuote.pre_market_price], 0),
     post_market_price: resolveFirstQuoteNumber([row.post_market_price, previousQuote.post_market_price], 0),
     after_hours_price: resolveFirstQuoteNumber([row.after_hours_price, previousQuote.after_hours_price], 0),
-    session: row.session ?? row.trade_session ?? previousQuote.session ?? ''
+    session: row.session ?? row.trade_session ?? previousQuote.session ?? '',
+    quoteReady: Boolean(
+      hasQuoteValue(row.quoteReady)
+        ? row.quoteReady
+        : hasQuoteValue(previousQuote.quoteReady)
+          ? previousQuote.quoteReady
+          : timestamp
+    ),
+    dataStatus: row.dataStatus || row.data_status || previousQuote.dataStatus || previousQuote.data_status || 'ready',
   }
 }
 

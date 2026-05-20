@@ -60,3 +60,22 @@ def test_snapshot_summary_state_avoids_loading_full_positions(monkeypatch) -> No
     assert payload["total_assets"] == 4600.75
     assert payload["meta"]["positionCount"] == 3
     assert payload["meta"]["orderCount"] == 7
+
+
+def test_empty_snapshot_summary_can_still_build_fallback_payload(monkeypatch) -> None:
+    module = _load_trade_service_module()
+
+    monkeypatch.setattr(module, "_get_account_or_404", lambda user_id, account_id: {"id": account_id, "account_id": "ACC-1"})
+    monkeypatch.setattr(module.AccountAssetSnapshotService, "get_latest", lambda user_id, account_id: {})
+    monkeypatch.setattr(module.PositionSnapshotService, "get_latest_count", lambda user_id, account_id: 0)
+
+    state = module._build_snapshot_summary_state(user_id=9, account_id=11)
+    payload = module._build_dashboard_summary_payload(
+        state=state,
+        data_source=state.get("dataSource") or "snapshot",
+        default_mode="database",
+    )
+
+    assert payload["source"] == "snapshot"
+    assert payload["total_assets"] == 0
+    assert payload["meta"]["positionCount"] == 0
