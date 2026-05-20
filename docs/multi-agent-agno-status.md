@@ -1,6 +1,6 @@
 # Multi-Agent Agno Status
 
-Date: 2026-05-19
+Date: 2026-05-20
 
 ## Summary
 
@@ -31,6 +31,8 @@ This integration is intentionally advisory. It must not place orders, cancel ord
   - `POST /api/v1/analysis/agent/runs/{run_id}/override`
   - `POST /api/v1/analysis/agent/watchlist-review`
 - Task center UI displays latest Agent review summaries, opens a result drawer, and records human review actions.
+- Watchlist reviews now resolve users from `user_watchlist_stocks` for the selected session flag (`scan_before_open` / `scan_after_close`) and skip cleanly when there are no eligible targets. They no longer fall back to a fixed bootstrap user.
+- System market AI scans no longer call `DailyMarketScanService.refresh_all_markets(user_id=1)` from scheduler-service. Manual runs use the requesting user, and background runs resolve an explicit task execution user from policy/env/active-user fallback instead of a hardcoded id.
 
 ## Safety Boundary
 
@@ -49,10 +51,16 @@ Gemini and NotebookLM both accepted the sidecar PoC direction and agreed on the 
 - Keep the first phase review-only.
 - Preserve the governance and human review trail.
 - Do not turn the Agent chain into a trade execution path.
-- Next focus areas are async execution, sidecar containerization, multi-user scheduling, and notification/risk consumption.
+- Next focus areas are sidecar containerization, broader notification/risk consumption, and replacing the remaining legacy scheduler defaults that still use bootstrap ids outside the Agno watchlist path.
 
 ## Verification
 
+- `tests/python/test_agent_watchlist_scope.py` covers:
+  - requested watchlist users are resolved through the authenticated session scope;
+  - empty watchlists skip before creating Agent runs or workers;
+  - scheduler watchlist user selection uses the session flag, excludes disabled/locked users, orders by target count, and has no empty-watchlist fallback;
+  - listed watchlist users are called one by one;
+  - market AI scan scheduler paths no longer hardcode `user_id=1`.
 - Python compile passed for the touched backend modules.
 - Frontend production build passed.
 - Frontend unit tests passed: 15 files, 49 tests.
@@ -82,6 +90,5 @@ Gemini and NotebookLM both accepted the sidecar PoC direction and agreed on the 
 ## Remaining Work
 
 1. Containerize the Agno sidecar so deployment and rollback do not depend on host `screen`.
-2. Move long Agent runs out of the synchronous request path.
-3. Replace the `user_id=1` bootstrap assumption with explicit multi-user scheduling.
-4. Expand notifications and risk consumption beyond the initial Agent notification feed.
+2. Expand notifications and risk consumption beyond the initial Agent notification feed.
+3. Audit the remaining non-Agno legacy scheduler classes (`FinanceBriefingScheduler`, `MarketInsightScheduler`, `RecommendationScheduler`, and similar host-era runners) for bootstrap-id defaults. The scheduler-service market AI scan path has been moved off `user_id=1`; the remaining legacy classes are outside the current Agno watchlist integration.

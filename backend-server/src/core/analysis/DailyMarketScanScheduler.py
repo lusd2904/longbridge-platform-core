@@ -1,5 +1,7 @@
 import logging
+import os
 import threading
+from typing import Any, Dict, Optional
 from datetime import date, datetime
 
 from core.analysis.DailyMarketScanService import DailyMarketScanService
@@ -51,13 +53,89 @@ class DailyMarketScanScheduler:
 
     def _run_job(self):
         self._update_job('running', '市场 AI 技术扫描启动中')
-        result = DailyMarketScanService.refresh_all_markets(user_id=1)
+        execution_user = self._resolve_execution_user()
+        if not execution_user:
+            self._update_job(
+                'skipped',
+                '市场 AI 技术扫描已跳过：没有可用的执行用户',
+                last_run_date=datetime.now().date(),
+                last_run_at=datetime.now()
+            )
+            return
+
+        result = DailyMarketScanService.refresh_all_markets(user_id=int(execution_user["userId"]))
         self._update_job(
             'success',
-            f"已完成 {len(result.get('markets', []))} 个市场技术扫描",
+            f"已完成 {len(result.get('markets', []))} 个市场技术扫描，执行用户 {execution_user.get('username') or execution_user.get('userId')}",
             last_run_date=datetime.now().date(),
             last_run_at=datetime.now()
         )
+
+    def _resolve_execution_user(self) -> Optional[Dict[str, Any]]:
+        policy = SystemTaskService.get_policy(self.JOB_NAME) or {}
+        settings = policy.get("settings") or {}
+        configured_user_id = self._coerce_positive_int(
+            settings.get("executionUserId")
+            or settings.get("schedulerUserId")
+            or settings.get("userId")
+            or os.getenv(f"REF_{self.JOB_NAME.upper()}_EXECUTION_USER_ID")
+            or os.getenv("REF_SYSTEM_TASK_EXECUTION_USER_ID")
+        )
+
+        if configured_user_id:
+            configured_user = self._load_active_user(configured_user_id)
+            if configured_user:
+                configured_user["reason"] = "task-policy"
+                return configured_user
+
+        row = DbUtil.fetch_one(
+            """
+            SELECT id, username, role
+            FROM users
+            WHERE COALESCE(status, 'active') NOT IN ('disabled', 'locked')
+            ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END, id ASC
+            LIMIT 1
+            """
+        )
+        if not row:
+            return None
+        return {
+            "userId": int(row.get("id") or 0),
+            "username": row.get("username") or f"user-{row.get('id')}",
+            "role": row.get("role") or "user",
+            "reason": "active-user-fallback",
+        }
+
+    @staticmethod
+    def _coerce_positive_int(value) -> Optional[int]:
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    @classmethod
+    def _load_active_user(cls, user_id: Any) -> Optional[Dict[str, Any]]:
+        normalized_user_id = cls._coerce_positive_int(user_id)
+        if normalized_user_id is None:
+            return None
+        row = DbUtil.fetch_one(
+            """
+            SELECT id, username, role
+            FROM users
+            WHERE id = %s
+              AND COALESCE(status, 'active') NOT IN ('disabled', 'locked')
+            LIMIT 1
+            """,
+            (normalized_user_id,)
+        )
+        if not row:
+            return None
+        return {
+            "userId": int(row.get("id") or normalized_user_id),
+            "username": row.get("username") or f"user-{normalized_user_id}",
+            "role": row.get("role") or "user",
+        }
 
     def _ensure_job_table(self):
         DbUtil.execute_sql(
