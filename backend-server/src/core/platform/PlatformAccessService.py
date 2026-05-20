@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import copy
 import json
 import threading
-from typing import Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.DbUtil import DbUtil
 
@@ -10,6 +12,9 @@ from utils.DbUtil import DbUtil
 class PlatformAccessService:
     _schema_ready = False
     _lock = threading.Lock()
+    _bootstrap_cache_lock = threading.Lock()
+    _bootstrap_cache: Dict[int, Dict[str, Any]] = {}
+    BOOTSTRAP_CACHE_TTL_SECONDS = 15
     DEFAULT_ROLE_CODE = "user"
     OBSOLETE_ROLE_CODES = {"analyst", "viewer"}
 
@@ -625,6 +630,7 @@ class PlatformAccessService:
                 )
             )
 
+        cls.invalidate_bootstrap_cache()
         role_map = {item.get("roleCode"): item for item in cls.list_roles()}
         return role_map.get(normalized_role_code) or {}
 
@@ -664,9 +670,7 @@ class PlatformAccessService:
         )
 
     @classmethod
-    def get_user_capabilities(cls, user_id: int) -> Dict[str, object]:
-        cls.ensure_schema()
-        record = cls.get_user_record(user_id)
+    def _build_user_capabilities(cls, user_id: int, record: Optional[Dict[str, object]]) -> Dict[str, object]:
         if not record:
             return {
                 "roleCode": cls.DEFAULT_ROLE_CODE,
@@ -728,9 +732,12 @@ class PlatformAccessService:
         }
 
     @classmethod
-    def get_user_menus(cls, user_id: int) -> List[Dict[str, object]]:
+    def get_user_capabilities(cls, user_id: int) -> Dict[str, object]:
         cls.ensure_schema()
-        access = cls.get_user_capabilities(user_id)
+        return cls._build_user_capabilities(user_id, cls.get_user_record(user_id))
+
+    @classmethod
+    def _build_user_menus(cls, access: Dict[str, object]) -> List[Dict[str, object]]:
         role_code = str(access.get("roleCode") or cls.DEFAULT_ROLE_CODE).strip() or cls.DEFAULT_ROLE_CODE
         capabilities = set(access.get("capabilities") or [])
 
@@ -786,6 +793,11 @@ class PlatformAccessService:
         return menus
 
     @classmethod
+    def get_user_menus(cls, user_id: int) -> List[Dict[str, object]]:
+        cls.ensure_schema()
+        return cls._build_user_menus(cls.get_user_capabilities(user_id))
+
+    @classmethod
     def get_user_subsystems(cls, user_id: int, menus: Optional[List[Dict[str, object]]] = None) -> List[Dict[str, object]]:
         cls.ensure_schema()
         visible_menus = menus if menus is not None else cls.get_user_menus(user_id)
@@ -832,11 +844,60 @@ class PlatformAccessService:
         return subsystems
 
     @classmethod
-    def build_user_bootstrap(cls, user_id: int) -> Dict[str, object]:
-        cls.ensure_schema()
+    def _bootstrap_cache_now(cls) -> float:
+        return time.monotonic()
+
+    @classmethod
+    def invalidate_bootstrap_cache(cls, user_id: Optional[int] = None) -> None:
+        with cls._bootstrap_cache_lock:
+            if user_id is None:
+                cls._bootstrap_cache.clear()
+                return
+            cls._bootstrap_cache.pop(int(user_id), None)
+
+    @classmethod
+    def _get_cached_bootstrap_bundle(
+        cls,
+        user_id: int,
+    ) -> Optional[Tuple[Dict[str, object], Dict[str, object]]]:
+        now = cls._bootstrap_cache_now()
+        with cls._bootstrap_cache_lock:
+            entry = cls._bootstrap_cache.get(int(user_id))
+            if not entry:
+                return None
+            if float(entry.get("expires_at") or 0) <= now:
+                cls._bootstrap_cache.pop(int(user_id), None)
+                return None
+            return (
+                copy.deepcopy(entry.get("payload") or {}),
+                copy.deepcopy(entry.get("record") or {}),
+            )
+
+    @classmethod
+    def _set_cached_bootstrap_bundle(
+        cls,
+        user_id: int,
+        payload: Dict[str, object],
+        record: Dict[str, object],
+    ) -> None:
+        ttl = max(int(cls.BOOTSTRAP_CACHE_TTL_SECONDS or 0), 0)
+        if ttl <= 0:
+            return
+        with cls._bootstrap_cache_lock:
+            cls._bootstrap_cache[int(user_id)] = {
+                "payload": copy.deepcopy(payload),
+                "record": copy.deepcopy(record),
+                "expires_at": cls._bootstrap_cache_now() + ttl,
+            }
+
+    @classmethod
+    def _build_user_bootstrap_bundle_uncached(
+        cls,
+        user_id: int,
+    ) -> Tuple[Dict[str, object], Dict[str, object]]:
         record = cls.get_user_record(user_id) or {}
-        access = cls.get_user_capabilities(user_id)
-        menus = cls.get_user_menus(user_id)
+        access = cls._build_user_capabilities(user_id, record)
+        menus = cls._build_user_menus(access)
         subsystems = cls.get_user_subsystems(user_id, menus=menus)
         preferred_subsystem_code = str(record.get("preferred_subsystem_code") or access.get("preferredSubsystemCode") or "workspace").strip() or "workspace"
         visible_subsystem_codes = {item.get("code") for item in subsystems}
@@ -844,7 +905,7 @@ class PlatformAccessService:
             preferred_subsystem_code = subsystems[0].get("code") if subsystems else "workspace"
         home_path = menus[0].get("path") if menus else "/dashboard"
 
-        return {
+        return ({
             "user": {
                 "id": int(record.get("id") or user_id),
                 "username": record.get("username") or "",
@@ -864,7 +925,30 @@ class PlatformAccessService:
                 "homePath": home_path,
                 "preferredSubsystemCode": preferred_subsystem_code
             }
-        }
+        }, record)
+
+    @classmethod
+    def build_user_bootstrap_bundle(
+        cls,
+        user_id: int,
+        *,
+        use_cache: bool = True,
+    ) -> Tuple[Dict[str, object], Dict[str, object]]:
+        cls.ensure_schema()
+        normalized_user_id = int(user_id)
+        if use_cache:
+            cached = cls._get_cached_bootstrap_bundle(normalized_user_id)
+            if cached is not None:
+                return cached
+        payload, record = cls._build_user_bootstrap_bundle_uncached(normalized_user_id)
+        if use_cache and record:
+            cls._set_cached_bootstrap_bundle(normalized_user_id, payload, record)
+        return payload, record
+
+    @classmethod
+    def build_user_bootstrap(cls, user_id: int) -> Dict[str, object]:
+        payload, _ = cls.build_user_bootstrap_bundle(user_id)
+        return payload
 
     @classmethod
     def update_user_access(
@@ -900,6 +984,7 @@ class PlatformAccessService:
             f"UPDATE users SET {', '.join(updates)} WHERE id = %s",
             tuple(params)
         )
+        cls.invalidate_bootstrap_cache(user_id)
 
     @staticmethod
     def _json_load(raw_value) -> List[str]:

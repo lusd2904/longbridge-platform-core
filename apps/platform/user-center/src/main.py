@@ -319,6 +319,7 @@ async def update_profile(
         """,
         (username, email or None, phone or None, nickname or username, user_id),
     )
+    PlatformAccessService.invalidate_bootstrap_cache(user_id)
 
     return {
         "success": True,
@@ -367,6 +368,7 @@ async def change_password(
 
     password_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     DbUtil.execute("UPDATE users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
+    PlatformAccessService.invalidate_bootstrap_cache(user_id)
     return {"success": True, "message": "密码修改成功"}
 
 
@@ -656,6 +658,7 @@ async def create_user(
             preferred_subsystem_code,
         ),
     )
+    PlatformAccessService.invalidate_bootstrap_cache()
     return {"success": True, "message": "用户创建成功"}
 
 
@@ -703,6 +706,7 @@ async def update_user(
 
     params.append(user_id)
     DbUtil.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = %s", tuple(params))
+    PlatformAccessService.invalidate_bootstrap_cache(user_id)
     return {"success": True, "message": "用户信息更新成功"}
 
 
@@ -712,6 +716,7 @@ async def delete_user(user_id: int, session: dict = Depends(get_current_session)
     if int(bootstrap.get("user", {}).get("id") or 0) == user_id:
         raise ValueError("不能删除当前登录用户")
     DbUtil.execute("DELETE FROM users WHERE id = %s", (user_id,))
+    PlatformAccessService.invalidate_bootstrap_cache(user_id)
     return {"success": True, "message": "用户已删除"}
 
 
@@ -727,6 +732,7 @@ async def admin_reset_user_password(
         raise ValueError("密码至少 6 位")
     password_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     DbUtil.execute("UPDATE users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
+    PlatformAccessService.invalidate_bootstrap_cache(user_id)
     return {"success": True, "message": "密码已重置"}
 
 

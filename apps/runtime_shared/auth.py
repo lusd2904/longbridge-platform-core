@@ -89,15 +89,8 @@ def _serialize_datetime(value: Any) -> Optional[str]:
 
 def build_bootstrap_payload(user_id: int) -> Dict[str, Any]:
     PlatformAccessService.ensure_schema()
-    bootstrap = PlatformAccessService.build_user_bootstrap(user_id) or {}
-    row = DbUtil.fetch_one(
-        """
-        SELECT id, username, email, phone, nickname, avatar, role, status,
-               last_login_time, created_at
-        FROM users WHERE id = %s
-        """,
-        (user_id,),
-    )
+    bootstrap, record = PlatformAccessService.build_user_bootstrap_bundle(user_id)
+    row = record or {}
     if not row:
         raise HTTPException(status_code=404, detail="用户不存在")
 
@@ -117,7 +110,7 @@ def build_bootstrap_payload(user_id: int) -> Dict[str, Any]:
 
     return {
         **bootstrap,
-        "homePath": bootstrap.get("homePath") or "/dashboard",
+        "homePath": bootstrap.get("homePath") or (bootstrap.get("navigation") or {}).get("homePath") or "/dashboard",
         "user": user_payload,
     }
 
@@ -153,6 +146,7 @@ def authenticate_user(username: str, password: str, client_ip: Optional[str] = N
         "UPDATE users SET last_login_time = NOW(), last_login_ip = %s WHERE id = %s",
         (client_ip, user_id),
     )
+    PlatformAccessService.invalidate_bootstrap_cache(user_id)
     _log_login(user_id, clean_username, "success", client_ip)
 
     return {
