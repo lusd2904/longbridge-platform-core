@@ -387,6 +387,7 @@ const tradeSnapshotsFallback = ref([])
 const quoteApiFallback = ref({})
 const originalContentDrawerVisible = ref(false)
 const activeOriginalContent = ref(null)
+const detailLoadVersion = ref(0)
 
 const routeSymbol = computed(() => String(props.symbol || route.params.symbol || route.query.symbol || 'AAPL.US').toUpperCase())
 const isStandaloneDetailPage = computed(() => !props.symbol)
@@ -875,24 +876,39 @@ const applyLiveSnapshot = (snapshot = {}) => {
   tradeSnapshotsFallback.value = Array.isArray(snapshot?.trades) ? snapshot.trades : []
 }
 
-const loadDetail = async ({ refreshContent = false } = {}) => {
-  loading.value = true
-  try {
-    const [detailRes, snapshotRes] = await Promise.allSettled([
-      getSymbolOverview(routeSymbol.value),
-      getLongbridgeSnapshot(routeSymbol.value, { count: 18 })
-    ])
-
-    if (detailRes.status !== 'fulfilled') {
-      throw detailRes.reason
-    }
-
-    const data = detailRes.value?.data || {}
-    overview.value = data
+const applyOverviewData = (data = {}, { includeDeferred = true } = {}) => {
+  overview.value = {
+    ...overview.value,
+    ...data,
+    history: data.history || overview.value?.history || { items: [], summary: {} },
+    snapshots: data.snapshots || overview.value?.snapshots || {},
+    fundamentals: data.fundamentals || overview.value?.fundamentals || {}
+  }
+  if (includeDeferred) {
     latestAiAnalysis.value = data.latestAiAnalysis || null
     marketInsight.value = data.marketInsight || null
     marketScan.value = data.marketScan || null
     applyContentBundle(data.contentCache || {}, 'content-cache')
+  }
+}
+
+const loadDetail = async ({ refreshContent = false } = {}) => {
+  const loadVersion = detailLoadVersion.value + 1
+  detailLoadVersion.value = loadVersion
+  const requestedSymbol = routeSymbol.value
+  loading.value = true
+  try {
+    const [coreRes, snapshotRes] = await Promise.allSettled([
+      getSymbolOverview(requestedSymbol, { include: 'core' }),
+      getLongbridgeSnapshot(requestedSymbol, { count: 18 })
+    ])
+
+    if (detailLoadVersion.value !== loadVersion || requestedSymbol !== routeSymbol.value) return
+    if (coreRes.status !== 'fulfilled') {
+      throw coreRes.reason
+    }
+
+    applyOverviewData(coreRes.value?.data || {}, { includeDeferred: false })
     if (snapshotRes.status === 'fulfilled') {
       applyLiveSnapshot(snapshotRes.value?.data?.payload || snapshotRes.value?.data || {})
     } else {
@@ -901,9 +917,25 @@ const loadDetail = async ({ refreshContent = false } = {}) => {
       tradeSnapshotsFallback.value = []
     }
 
-    if (refreshContent || !contentCacheReady.value) {
-      await refreshContentFeeds()
-    }
+    loading.value = false
+
+    getSymbolOverview(requestedSymbol)
+      .then((res) => {
+        if (detailLoadVersion.value !== loadVersion || requestedSymbol !== routeSymbol.value) return null
+        applyOverviewData(res?.data || {}, { includeDeferred: true })
+        if (refreshContent || !contentCacheReady.value) {
+          return refreshContentFeeds()
+        }
+        return null
+      })
+      .catch((error) => {
+        if (detailLoadVersion.value !== loadVersion || requestedSymbol !== routeSymbol.value) return null
+        console.warn('加载标的扩展详情失败:', error)
+        if (refreshContent || !contentCacheReady.value) {
+          return refreshContentFeeds().catch(() => {})
+        }
+        return null
+      })
   } catch (error) {
     console.error('加载标的详情失败:', error)
     ElMessage.error('加载标的详情失败')
@@ -958,6 +990,7 @@ const openOriginalContent = (item) => {
 }
 
 watch(routeSymbol, () => {
+  detailLoadVersion.value += 1
   originalContentDrawerVisible.value = false
   activeOriginalContent.value = null
   quoteApiFallback.value = {}

@@ -538,12 +538,15 @@ describe('market shell pages', () => {
   })
 
   it('uses shared page shell components in symbol detail view', async () => {
+    marketApiMocks.getSymbolOverview.mockClear()
     const wrapper = shallowMount(SymbolDetail, mountOptions)
     await flushPromises()
 
     expect(wrapper.find('page-hero-stub').exists()).toBe(true)
     expect(wrapper.find('metric-strip-stub').exists()).toBe(true)
     expect(wrapper.findAll('section-card-header-stub').length).toBeGreaterThanOrEqual(4)
+    expect(marketApiMocks.getSymbolOverview).toHaveBeenNthCalledWith(1, 'AAPL.US', { include: 'core' })
+    expect(marketApiMocks.getSymbolOverview).toHaveBeenNthCalledWith(2, 'AAPL.US')
   })
 
   it('uses shared page shell components in kline view', async () => {

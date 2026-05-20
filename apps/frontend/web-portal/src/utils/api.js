@@ -1243,7 +1243,9 @@ export const getMarketScans = async () => {
 }
 
 export const getPlatformMarketScans = getMarketScans
-export const getSymbolOverview = (symbol) => serviceGet('market', `/api/v1/market/symbols/${encodeURIComponent(symbol)}/overview`)
+export const getSymbolOverview = (symbol, params = {}) => (
+  serviceGet('market', `/api/v1/market/symbols/${encodeURIComponent(symbol)}/overview`, params)
+)
 
 export const getUsers = (params = {}) => serviceGet('user', '/api/v1/admin/users', params)
 export const createUser = (data = {}) => servicePost('user', '/api/v1/admin/users', data)

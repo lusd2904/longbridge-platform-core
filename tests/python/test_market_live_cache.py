@@ -110,6 +110,93 @@ def test_live_snapshot_reuses_component_cache(monkeypatch) -> None:
     ])
 
 
+def test_symbol_overview_core_mode_defers_heavy_sections(monkeypatch) -> None:
+    calls = []
+
+    def fake_symbol_overview(symbol, user_id=1, allow_refresh=True):
+        calls.append(("overview", symbol, user_id, allow_refresh))
+        return {
+            "symbol": symbol,
+            "market": "US",
+            "fundamentals": {"name": "Apple"},
+            "snapshots": {},
+        }
+
+    def fail_heavy_section(*_args, **_kwargs):
+        raise AssertionError("core overview must not load deferred sections")
+
+    monkeypatch.setattr(market_service.IndicatorSnapshotService, "get_symbol_overview", fake_symbol_overview)
+    monkeypatch.setattr(market_service.HistoricalMarketDataService, "get_history", fail_heavy_section)
+    monkeypatch.setattr(market_service.MarketInsightService, "get_latest_snapshots", fail_heavy_section)
+    monkeypatch.setattr(market_service.DailyMarketScanService, "get_latest_scans", fail_heavy_section)
+    monkeypatch.setattr(market_service.DailySymbolTrendScanService, "get_latest_for_symbol", fail_heavy_section)
+    monkeypatch.setattr(market_service, "_content_cache_bundle", fail_heavy_section)
+    monkeypatch.setattr(
+        market_service.QuoteSnapshotService,
+        "get_latest",
+        lambda symbol, max_age_minutes=20: {"symbol": symbol, "price": 190, "snapshotAt": "2026-05-20T10:00:00Z"},
+    )
+    monkeypatch.setattr(
+        market_service,
+        "get_persistence_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("core overview must not load AI analysis")),
+    )
+    with market_service._LIVE_MARKET_CACHE_LOCK:
+        market_service._LIVE_MARKET_CACHE.clear()
+
+    payload = market_service.asyncio.run(
+        market_service.symbol_overview("aapl.us", include="core", session={"user_id": 9})
+    )
+
+    data = payload["data"]
+    assert calls == [("overview", "AAPL.US", 9, False)]
+    assert data["meta"]["responseMode"] == "core"
+    assert data["meta"]["historyStatus"] == "deferred"
+    assert "history" in data["meta"]["deferredSections"]
+    assert data["history"] == {"items": [], "summary": {}}
+    assert data["latestAiAnalysis"] is None
+    assert data["contentCache"]["totalCount"] == 0
+
+
+def test_symbol_overview_cache_separates_core_and_full_modes(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(
+        market_service.IndicatorSnapshotService,
+        "get_symbol_overview",
+        lambda symbol, user_id=1, allow_refresh=True: calls.append((symbol, allow_refresh)) or {
+            "symbol": symbol,
+            "market": "US",
+            "fundamentals": {},
+            "snapshots": {},
+        },
+    )
+    monkeypatch.setattr(market_service.QuoteSnapshotService, "get_latest", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(market_service.HistoricalMarketDataService, "get_history", lambda *_args, **_kwargs: {"items": [], "summary": {}})
+    monkeypatch.setattr(market_service.MarketInsightService, "get_latest_snapshots", lambda **_kwargs: [])
+    monkeypatch.setattr(market_service.DailyMarketScanService, "get_latest_scans", lambda: [])
+    monkeypatch.setattr(market_service.DailySymbolTrendScanService, "get_latest_for_symbol", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(market_service, "_content_cache_bundle", lambda *_args, **_kwargs: market_service._empty_content_cache_bundle("content-cache"))
+    monkeypatch.setattr(
+        market_service,
+        "get_persistence_manager",
+        lambda: type("FakePersistence", (), {"get_latest_ai_analysis": lambda *_args, **_kwargs: None})(),
+    )
+    with market_service._LIVE_MARKET_CACHE_LOCK:
+        market_service._LIVE_MARKET_CACHE.clear()
+
+    core_payload = market_service.asyncio.run(
+        market_service.symbol_overview("AAPL.US", include="core", session={"user_id": 1})
+    )
+    full_payload = market_service.asyncio.run(
+        market_service.symbol_overview("AAPL.US", include="all", session={"user_id": 1})
+    )
+
+    assert core_payload["data"]["meta"]["responseMode"] == "core"
+    assert full_payload["data"]["meta"]["responseMode"] == "all"
+    assert calls == [("AAPL.US", False), ("AAPL.US", True)]
+
+
 def test_history_backfill_endpoint_runs_single_symbol_and_clears_cache(monkeypatch) -> None:
     calls = []
 

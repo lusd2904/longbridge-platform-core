@@ -191,10 +191,10 @@ class IndicatorSnapshotService:
         return snapshot
 
     @classmethod
-    def get_symbol_overview(cls, symbol: str, user_id: int = 1) -> Dict[str, object]:
+    def get_symbol_overview(cls, symbol: str, user_id: int = 1, allow_refresh: bool = True) -> Dict[str, object]:
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         latest = cls.get_latest_snapshots(normalized_symbol)
-        if not latest:
+        if not latest and allow_refresh:
             try:
                 cls.refresh_symbol(normalized_symbol, user_id=user_id)
             except Exception:

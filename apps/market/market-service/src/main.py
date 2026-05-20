@@ -1747,6 +1747,8 @@ def _build_symbol_overview_meta(
     market_scan: Optional[Dict[str, Any]],
     quote_snapshot: Optional[Dict[str, Any]],
     content_cache: Dict[str, Any],
+    response_mode: str = "all",
+    deferred_sections: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     snapshots = overview.get("snapshots") if isinstance(overview.get("snapshots"), dict) else {}
     daily_snapshot = snapshots.get("daily") if isinstance(snapshots.get("daily"), dict) else {}
@@ -1768,6 +1770,10 @@ def _build_symbol_overview_meta(
         "readModel": "market-symbol-overview",
         "defaultMode": "database",
         "dataSource": "snapshot",
+        "responseMode": response_mode,
+        "deferredSections": deferred_sections or [],
+        "historyStatus": "deferred" if "history" in (deferred_sections or []) else "loaded",
+        "snapshotState": "ready" if snapshots else "missing",
         "snapshotAt": snapshot_at,
         "sources": {
             "fundamentals": "market_universe",
@@ -1786,6 +1792,17 @@ def _build_symbol_overview_meta(
         "hasTrendScan": bool(latest_trend_scan),
         "contentCount": int(content_cache.get("totalCount") or 0),
         "realtimeOverlay": ["quote", "depth", "trades"],
+    }
+
+
+def _empty_content_cache_bundle(data_source: str = "deferred") -> Dict[str, Any]:
+    return {
+        "dataSource": data_source,
+        "updatedAt": "",
+        "totalCount": 0,
+        "announcements": {"items": []},
+        "news": {"items": []},
+        "topics": {"items": []},
     }
 
 
@@ -2484,15 +2501,67 @@ async def remove_stock_from_pool(
 
 
 @app.get("/api/v1/market/symbols/{symbol}/overview")
-async def symbol_overview(symbol: str, session: dict = Depends(get_current_session)):
+async def symbol_overview(
+    symbol: str,
+    include: str = Query(default="all", pattern="^(all|core)$"),
+    session: dict = Depends(get_current_session),
+):
     user_id = int(session["user_id"])
     normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
-    cache_key = ("symbol-overview", user_id, normalized_symbol)
+    response_mode = "core" if str(include or "all").lower() == "core" else "all"
+    cache_key = ("symbol-overview", response_mode, user_id, normalized_symbol)
     cached_payload = _live_cache_get(cache_key)
     if cached_payload:
         return cached_payload
 
-    overview = IndicatorSnapshotService.get_symbol_overview(normalized_symbol, user_id=user_id)
+    overview = IndicatorSnapshotService.get_symbol_overview(
+        normalized_symbol,
+        user_id=user_id,
+        allow_refresh=response_mode != "core",
+    )
+    if response_mode == "core":
+        history = {"items": [], "summary": {}}
+        latest_ai_payload = None
+        latest_trend_scan = None
+        market_insight = None
+        market_scan = None
+        quote_snapshot = QuoteSnapshotService.get_latest(normalized_symbol, max_age_minutes=20)
+        content_cache = _empty_content_cache_bundle()
+        deferred_sections = [
+            "history",
+            "latestAiAnalysis",
+            "latestTrendScan",
+            "marketInsight",
+            "marketScan",
+            "contentCache",
+        ]
+        payload = {
+            "success": True,
+            "data": {
+                **overview,
+                "history": history,
+                "latestAiAnalysis": latest_ai_payload,
+                "latestTrendScan": latest_trend_scan,
+                "marketInsight": market_insight,
+                "marketScan": market_scan,
+                "quoteSnapshot": quote_snapshot,
+                "contentCache": content_cache,
+                "meta": _build_symbol_overview_meta(
+                    overview=overview,
+                    history=history,
+                    latest_ai_payload=latest_ai_payload,
+                    latest_trend_scan=latest_trend_scan,
+                    market_insight=market_insight,
+                    market_scan=market_scan,
+                    quote_snapshot=quote_snapshot,
+                    content_cache=content_cache,
+                    response_mode="core",
+                    deferred_sections=deferred_sections,
+                ),
+            },
+        }
+        return _live_cache_set(cache_key, payload, _SYMBOL_OVERVIEW_CACHE_TTL_SECONDS)
+
     history = HistoricalMarketDataService.get_history(
         normalized_symbol,
         timeframe="daily",
