@@ -19,7 +19,8 @@ const MENU_TITLE_MAP = {
   Backtest: '策略回测',
   MarketData: '实时行情',
   FinanceNews: '财经快讯',
-  BrokerManagement: '券商连接'
+  BrokerManagement: '券商连接',
+  Settings: '系统设置中心'
 };
 const login = (d) => loginPure(d);
 const logout = () => clearAuth();

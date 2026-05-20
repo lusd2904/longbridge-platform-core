@@ -9,7 +9,7 @@
         <el-button class="settings-secondary-button" @click="refreshLogs(false)">
           <el-icon><Refresh /></el-icon> 同步日志
         </el-button>
-        <el-button type="primary" @click="saveAISettings">保存 AI 路由</el-button>
+        <el-button type="primary" @click="saveAISettings">保存 AI 设置</el-button>
       </template>
     </PageHero>
 
@@ -26,45 +26,84 @@
     <el-tabs v-model="activeTab" type="border-card" class="settings-tabs">
       <el-tab-pane label="基础设置" name="basic" lazy>
         <div class="settings-tab-panel">
-          <SectionCardHeader
-            title="基础设置"
-          />
-          <el-form :model="basicSettings" label-width="150px" class="settings-form">
-          <el-form-item label="系统名称">
-            <el-input v-model="basicSettings.systemName" />
-          </el-form-item>
-          <el-form-item label="默认市场">
-            <el-select v-model="basicSettings.defaultMarket" style="width: 100%">
-              <el-option label="美股" value="US" />
-              <el-option label="A股" value="CN" />
-              <el-option label="港股" value="HK" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="默认货币">
-            <el-select v-model="basicSettings.defaultCurrency" style="width: 100%">
-              <el-option label="美元 (USD)" value="USD" />
-              <el-option label="人民币 (CNY)" value="CNY" />
-              <el-option label="港币 (HKD)" value="HKD" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="语言">
-            <el-select v-model="basicSettings.language" style="width: 100%">
-              <el-option label="简体中文" value="zh-CN" />
-              <el-option label="繁体中文" value="zh-TW" />
-              <el-option label="English" value="en" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="时区">
-            <el-select v-model="basicSettings.timezone" style="width: 100%">
-              <el-option label="北京时间 (UTC+8)" value="Asia/Shanghai" />
-              <el-option label="纽约时间 (UTC-5)" value="America/New_York" />
-              <el-option label="伦敦时间 (UTC+0)" value="Europe/London" />
-            </el-select>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="saveBasicSettings">保存设置</el-button>
-          </el-form-item>
-          </el-form>
+          <div class="settings-section-stack">
+            <section class="settings-section-card">
+              <SectionCardHeader title="基础设置" />
+              <el-form :model="basicSettings" label-width="150px" class="settings-form">
+                <el-form-item label="系统名称">
+                  <el-input v-model="basicSettings.systemName" />
+                </el-form-item>
+                <el-form-item label="默认市场">
+                  <el-select v-model="basicSettings.defaultMarket" style="width: 100%">
+                    <el-option label="美股" value="US" />
+                    <el-option label="A股" value="CN" />
+                    <el-option label="港股" value="HK" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="默认货币">
+                  <el-select v-model="basicSettings.defaultCurrency" style="width: 100%">
+                    <el-option label="美元 (USD)" value="USD" />
+                    <el-option label="人民币 (CNY)" value="CNY" />
+                    <el-option label="港币 (HKD)" value="HKD" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="语言">
+                  <el-select v-model="basicSettings.language" style="width: 100%">
+                    <el-option label="简体中文" value="zh-CN" />
+                    <el-option label="繁体中文" value="zh-TW" />
+                    <el-option label="English" value="en" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="时区">
+                  <el-select v-model="basicSettings.timezone" style="width: 100%">
+                    <el-option label="北京时间 (UTC+8)" value="Asia/Shanghai" />
+                    <el-option label="纽约时间 (UTC-5)" value="America/New_York" />
+                    <el-option label="伦敦时间 (UTC+0)" value="Europe/London" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" @click="saveBasicSettings">保存基础设置</el-button>
+                </el-form-item>
+              </el-form>
+            </section>
+
+            <section class="settings-section-card">
+              <SectionCardHeader
+                title="通知偏好"
+                :badge="notificationSettings.enabled ? '已开启' : '已关闭'"
+                :badge-type="notificationSettings.enabled ? 'success' : 'info'"
+              />
+              <el-form :model="notificationSettings" label-width="150px" class="settings-form">
+                <el-form-item label="启用通知">
+                  <el-switch v-model="notificationSettings.enabled" />
+                </el-form-item>
+                <el-form-item label="交易通知">
+                  <el-checkbox-group v-model="notificationSettings.tradeNotifications">
+                    <el-checkbox value="order_filled">订单成交</el-checkbox>
+                    <el-checkbox value="order_cancelled">订单取消</el-checkbox>
+                    <el-checkbox value="stop_loss_triggered">止损触发</el-checkbox>
+                  </el-checkbox-group>
+                </el-form-item>
+                <el-form-item label="风控通知">
+                  <el-checkbox-group v-model="notificationSettings.riskNotifications">
+                    <el-checkbox value="risk_alert">风险预警</el-checkbox>
+                    <el-checkbox value="drawdown_warning">回撤警告</el-checkbox>
+                    <el-checkbox value="position_limit">仓位限制</el-checkbox>
+                  </el-checkbox-group>
+                </el-form-item>
+                <el-form-item label="通知方式">
+                  <el-checkbox-group v-model="notificationSettings.channels">
+                    <el-checkbox value="email">邮件</el-checkbox>
+                    <el-checkbox value="sms">短信</el-checkbox>
+                    <el-checkbox value="push">推送</el-checkbox>
+                  </el-checkbox-group>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" @click="saveNotificationSettings">保存通知设置</el-button>
+                </el-form-item>
+              </el-form>
+            </section>
+          </div>
         </div>
       </el-tab-pane>
 
@@ -79,6 +118,15 @@
               <el-button class="settings-secondary-button" @click="handleTestAIConnection">测试连接</el-button>
             </template>
           </SectionCardHeader>
+
+          <el-alert
+            class="ai-runtime-alert"
+            type="info"
+            :closable="false"
+            show-icon
+            :title="aiRuntimeSummaryTitle"
+            :description="aiRuntimeSummaryDescription"
+          />
 
           <div class="ai-layout">
             <el-form :model="aiSettings" label-width="160px" class="settings-form ai-form">
@@ -217,356 +265,312 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="通知设置" name="notification" lazy>
+      <el-tab-pane label="日志/数据管理" name="operations" lazy>
         <div class="settings-tab-panel">
-          <SectionCardHeader
-            title="通知设置"
-            :badge="notificationSettings.enabled ? '已开启' : '已关闭'"
-            :badge-type="notificationSettings.enabled ? 'success' : 'info'"
-          />
-          <el-form :model="notificationSettings" label-width="150px" class="settings-form">
-          <el-form-item label="启用通知">
-            <el-switch v-model="notificationSettings.enabled" />
-          </el-form-item>
-          <el-form-item label="交易通知">
-            <el-checkbox-group v-model="notificationSettings.tradeNotifications">
-              <el-checkbox value="order_filled">订单成交</el-checkbox>
-              <el-checkbox value="order_cancelled">订单取消</el-checkbox>
-              <el-checkbox value="stop_loss_triggered">止损触发</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="风控通知">
-            <el-checkbox-group v-model="notificationSettings.riskNotifications">
-              <el-checkbox value="risk_alert">风险预警</el-checkbox>
-              <el-checkbox value="drawdown_warning">回撤警告</el-checkbox>
-              <el-checkbox value="position_limit">仓位限制</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="通知方式">
-            <el-checkbox-group v-model="notificationSettings.channels">
-              <el-checkbox value="email">邮件</el-checkbox>
-              <el-checkbox value="sms">短信</el-checkbox>
-              <el-checkbox value="push">推送</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="saveNotificationSettings">保存设置</el-button>
-          </el-form-item>
-          </el-form>
-        </div>
-      </el-tab-pane>
-
-      <el-tab-pane label="数据管理" name="data" lazy>
-        <div class="settings-tab-panel">
-          <SectionCardHeader
-            title="数据管理"
-          />
-
-          <div class="data-grid">
-          <section class="data-section">
-            <h4>数据备份</h4>
-            <div class="section-actions">
-              <el-button type="primary" @click="backupData">
-                <el-icon><Download /></el-icon> 立即备份
-              </el-button>
-              <el-button @click="scheduleBackup">设置自动备份</el-button>
-            </div>
-          </section>
-
-          <section class="data-section">
-            <h4>数据恢复</h4>
-            <el-upload
-              action="/api/upload"
-              :auto-upload="false"
-              :on-change="handleBackupFile"
-              accept=".json,.sql"
-            >
-              <el-button type="primary">
-                <el-icon><Upload /></el-icon> 选择备份文件
-              </el-button>
-            </el-upload>
-          </section>
-
-          <section class="data-section">
-            <h4>数据清理</h4>
-            <el-form :inline="true">
-              <el-form-item label="清理范围">
-                <el-select v-model="cleanupRange" placeholder="选择范围">
-                  <el-option label="30天前" value="30" />
-                  <el-option label="90天前" value="90" />
-                  <el-option label="1年前" value="365" />
-                </el-select>
-              </el-form-item>
-              <el-form-item>
-                <el-button type="danger" @click="cleanupData">清理数据</el-button>
-              </el-form-item>
-            </el-form>
-          </section>
-          </div>
-
-          <section v-if="showTradeOutboxAdmin" class="outbox-admin-panel">
-            <SectionCardHeader
-              title="Trade Outbox 治理"
-              :badge="tradeOutboxStatusText"
-              :badge-type="tradeOutboxStatusTone === 'success' ? 'success' : 'info'"
-            >
+          <section class="settings-section-card">
+            <SectionCardHeader title="系统日志" :badge="`${filteredLogs.length} 条`">
               <template #actions>
-                <div class="section-actions">
-                  <el-button :loading="tradeOutboxLoading" @click="refreshTradeOutbox()">
-                    <el-icon><Refresh /></el-icon> 刷新
-                  </el-button>
-                  <el-button type="warning" :loading="tradeOutboxActionLoading" @click="runTradeOutboxRepair">
-                    运行修复
-                  </el-button>
-                </div>
+                <el-button class="settings-secondary-button" @click="refreshLogs">
+                  <el-icon><Refresh /></el-icon> 刷新日志
+                </el-button>
               </template>
             </SectionCardHeader>
-
-            <el-alert
-              v-if="tradeOutboxAvailabilityMessage"
-              class="outbox-alert"
-              type="info"
-              :closable="false"
-              show-icon
-              :title="tradeOutboxAvailabilityMessage"
-            />
-
-            <div class="outbox-stats">
-              <article v-for="item in tradeOutboxCards" :key="item.label" class="outbox-stat-card">
-                <span class="stat-label">{{ item.label }}</span>
-                <strong>{{ item.value }}</strong>
-                <small>{{ item.hint }}</small>
-              </article>
+            <div class="logs-header">
+              <el-radio-group v-model="logLevel" size="small" @change="refreshLogs(false)">
+                <el-radio-button value="all">全部</el-radio-button>
+                <el-radio-button value="info">信息</el-radio-button>
+                <el-radio-button value="warning">警告</el-radio-button>
+                <el-radio-button value="error">错误</el-radio-button>
+              </el-radio-group>
             </div>
-
-            <div class="outbox-toolbar">
-              <div class="outbox-toolbar-group">
-                <el-select v-model="tradeOutboxFilter.status" :disabled="!tradeOutboxCanOperate" style="width: 160px">
-                  <el-option label="全部状态" value="" />
-                  <el-option label="待投递" value="pending" />
-                  <el-option label="投递失败" value="failed" />
-                  <el-option label="已发布" value="published" />
-                  <el-option label="死信" value="dead_letter" />
-                </el-select>
-                <el-input
-                  v-model="tradeOutboxFilter.sagaId"
-                  :disabled="!tradeOutboxSupportsEventData"
-                  clearable
-                  placeholder="按 Saga ID 过滤"
-                  style="width: 260px"
-                />
-                <el-input
-                  v-model="tradeOutboxFilter.eventType"
-                  :disabled="!tradeOutboxSupportsEventData"
-                  clearable
-                  placeholder="按事件类型过滤"
-                  style="width: 240px"
-                />
-                <el-input-number v-model="tradeOutboxFilter.limit" :disabled="!tradeOutboxCanOperate" :min="10" :max="200" :step="10" style="width: 140px" />
-                <el-switch v-model="tradeOutboxFilter.includePayload" :disabled="!tradeOutboxSupportsEventData" />
-                <span class="inline-tip">显示 payload</span>
+            <div class="logs-content">
+              <div v-for="log in filteredLogs" :key="log.id" class="log-item" :class="log.level">
+                <span class="log-time">{{ log.time }}</span>
+                <el-tag :type="getLogType(log.level)" size="small">{{ log.level }}</el-tag>
+                <el-tag size="small" effect="plain">{{ log.module || 'system' }}</el-tag>
+                <span class="log-message">{{ log.message }}</span>
               </div>
-              <div class="outbox-toolbar-group">
-                <el-button type="primary" :disabled="!tradeOutboxCanOperate" :loading="tradeOutboxLoading" @click="refreshTradeOutbox()">
-                  应用筛选
-                </el-button>
-              </div>
-            </div>
-
-            <div class="outbox-panels">
-              <section class="outbox-panel">
-              <div class="outbox-panel-head">
-                <div>
-                  <h5>事件列表</h5>
-                    <p>
-                      {{ tradeOutboxSupportsEventData ? `${tradeOutboxEvents.length} 条记录` : '当前环境未开放事件明细接口' }}
-                    </p>
-                </div>
-                <div class="outbox-table-actions">
-                  <el-button
-                    type="warning"
-                    plain
-                    size="small"
-                      :disabled="!tradeOutboxSupportsEventData || !selectedReplayableEventIds.length || tradeOutboxActionLoading"
-                    @click="requeueSelectedTradeOutboxEvents"
-                  >
-                    重放所选事件
-                  </el-button>
-                  <el-button
-                    type="danger"
-                    plain
-                    size="small"
-                      :disabled="!tradeOutboxSupportsEventData || !selectedDeadLetterEventIds.length || tradeOutboxActionLoading"
-                    @click="purgeSelectedTradeDeadLetters"
-                  >
-                    清理所选死信
-                  </el-button>
-                </div>
-              </div>
-
-              <el-table
-                :data="tradeOutboxEvents"
-                v-loading="tradeOutboxLoading"
-                style="width: 100%"
-                max-height="420"
-                  empty-text="当前环境未返回事件列表"
-                @selection-change="handleTradeOutboxEventSelectionChange"
-              >
-                  <el-table-column v-if="tradeOutboxSupportsEventData" type="selection" width="48" />
-                <el-table-column prop="eventId" label="事件 ID" min-width="180" show-overflow-tooltip />
-                <el-table-column prop="sagaId" label="Saga ID" min-width="180" show-overflow-tooltip />
-                <el-table-column prop="eventType" label="事件类型" min-width="180" show-overflow-tooltip />
-                <el-table-column prop="publishStatus" label="状态" width="110">
-                  <template #default="{ row }">
-                    <el-tag size="small" :type="getOutboxStatusTagType(row.publishStatus)">
-                      {{ getOutboxStatusText(row.publishStatus) }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="retryCount" label="重试" width="80" />
-                <el-table-column prop="deadLetterAt" label="死信时间" width="170" />
-                <el-table-column prop="createdAt" label="创建时间" width="170" />
-                <el-table-column v-if="tradeOutboxFilter.includePayload" label="Payload" min-width="260">
-                  <template #default="{ row }">
-                    <code class="payload-preview">{{ formatOutboxPayload(row.payload) }}</code>
-                  </template>
-                </el-table-column>
-                <el-table-column label="操作" width="180" fixed="right">
-                  <template #default="{ row }">
-                    <el-button
-                        v-if="tradeOutboxSupportsEventData && ['failed', 'dead_letter'].includes(row.publishStatus)"
-                      type="warning"
-                      size="small"
-                      link
-                      @click="requeueTradeOutboxEvent(row)"
-                    >
-                      重放
-                    </el-button>
-                    <el-button
-                        v-if="tradeOutboxSupportsEventData && row.publishStatus === 'dead_letter'"
-                      type="danger"
-                      size="small"
-                      link
-                      @click="purgeTradeDeadLetterRow(row)"
-                    >
-                      清理
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-              </section>
-
-              <section class="outbox-panel">
-              <div class="outbox-panel-head">
-                <div>
-                  <h5>Saga 聚合</h5>
-                    <p>
-                      {{ tradeOutboxSupportsSagaData ? `${tradeOutboxSagas.length} 条 Saga` : '当前环境未开放 Saga 聚合接口' }}
-                    </p>
-                </div>
-                <div class="outbox-table-actions">
-                  <el-button
-                    type="warning"
-                    plain
-                    size="small"
-                      :disabled="!tradeOutboxSupportsSagaData || !selectedTradeOutboxSagaIds.length || tradeOutboxActionLoading"
-                    @click="requeueSelectedTradeOutboxSagas"
-                  >
-                    按 Saga 重放
-                  </el-button>
-                  <el-button
-                    type="danger"
-                    plain
-                    size="small"
-                      :disabled="!tradeOutboxSupportsSagaData || !selectedDeadLetterSagaIds.length || tradeOutboxActionLoading"
-                    @click="purgeSelectedTradeDeadLettersBySaga"
-                  >
-                    按 Saga 清理死信
-                  </el-button>
-                </div>
-              </div>
-
-              <el-table
-                :data="tradeOutboxSagas"
-                v-loading="tradeOutboxLoading"
-                style="width: 100%"
-                max-height="420"
-                  empty-text="当前环境未返回 Saga 聚合数据"
-                @selection-change="handleTradeOutboxSagaSelectionChange"
-              >
-                  <el-table-column v-if="tradeOutboxSupportsSagaData" type="selection" width="48" />
-                <el-table-column prop="sagaId" label="Saga ID" min-width="220" show-overflow-tooltip />
-                <el-table-column prop="eventCount" label="事件数" width="90" />
-                <el-table-column prop="publishedCount" label="已发布" width="90" />
-                <el-table-column prop="failedCount" label="失败" width="80" />
-                <el-table-column prop="deadLetterCount" label="死信" width="80" />
-                <el-table-column prop="lastCreatedAt" label="最近创建" width="170" />
-                <el-table-column label="操作" width="180" fixed="right">
-                  <template #default="{ row }">
-                      <el-button
-                        v-if="tradeOutboxSupportsEventData"
-                        type="primary"
-                        size="small"
-                        link
-                        @click="inspectSagaEvents(row)"
-                      >
-                      查看事件
-                      </el-button>
-                    <el-button
-                        v-if="tradeOutboxSupportsSagaData && (row.deadLetterCount > 0 || row.failedCount > 0)"
-                      type="warning"
-                      size="small"
-                      link
-                      @click="requeueTradeOutboxSaga(row)"
-                    >
-                      重放
-                    </el-button>
-                    <el-button
-                        v-if="tradeOutboxSupportsSagaData && row.deadLetterCount > 0"
-                      type="danger"
-                      size="small"
-                      link
-                      @click="purgeTradeDeadLettersForSaga(row)"
-                    >
-                      清理
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-              </section>
             </div>
           </section>
-        </div>
-      </el-tab-pane>
 
-      <el-tab-pane label="系统日志" name="logs" lazy>
-        <div class="settings-tab-panel">
-          <SectionCardHeader
-            title="系统日志"
-            :badge="`${filteredLogs.length} 条`"
-          >
-            <template #actions>
-              <el-button type="primary" link @click="refreshLogs">
-                <el-icon><Refresh /></el-icon> 刷新
-              </el-button>
-            </template>
-          </SectionCardHeader>
-          <div class="logs-header">
-            <el-radio-group v-model="logLevel" size="small" @change="refreshLogs(false)">
-              <el-radio-button value="all">全部</el-radio-button>
-              <el-radio-button value="info">信息</el-radio-button>
-              <el-radio-button value="warning">警告</el-radio-button>
-              <el-radio-button value="error">错误</el-radio-button>
-            </el-radio-group>
-          </div>
-          <div class="logs-content">
-            <div v-for="log in filteredLogs" :key="log.id" class="log-item" :class="log.level">
-              <span class="log-time">{{ log.time }}</span>
-              <el-tag :type="getLogType(log.level)" size="small">{{ log.level }}</el-tag>
-              <el-tag size="small" effect="plain">{{ log.module || 'system' }}</el-tag>
-              <span class="log-message">{{ log.message }}</span>
+          <section class="settings-section-card">
+            <SectionCardHeader title="数据管理" />
+
+            <div class="data-grid">
+              <section class="data-section">
+                <h4>数据备份</h4>
+                <div class="section-actions">
+                  <el-button type="primary" @click="backupData">
+                    <el-icon><Download /></el-icon> 立即备份
+                  </el-button>
+                  <el-button class="settings-secondary-button" @click="scheduleBackup">设置自动备份</el-button>
+                </div>
+              </section>
+
+              <section class="data-section">
+                <h4>数据恢复</h4>
+                <el-upload
+                  action="/api/upload"
+                  :auto-upload="false"
+                  :on-change="handleBackupFile"
+                  accept=".json,.sql"
+                >
+                  <el-button type="primary">
+                    <el-icon><Upload /></el-icon> 选择备份文件
+                  </el-button>
+                </el-upload>
+              </section>
+
+              <section class="data-section">
+                <h4>数据清理</h4>
+                <el-form :inline="true">
+                  <el-form-item label="清理范围">
+                    <el-select v-model="cleanupRange" placeholder="选择范围">
+                      <el-option label="30天前" value="30" />
+                      <el-option label="90天前" value="90" />
+                      <el-option label="1年前" value="365" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item>
+                    <el-button type="danger" @click="cleanupData">清理数据</el-button>
+                  </el-form-item>
+                </el-form>
+              </section>
             </div>
-          </div>
+
+            <section v-if="showTradeOutboxAdmin" class="outbox-admin-panel">
+              <SectionCardHeader
+                title="Trade Outbox 治理"
+                :badge="tradeOutboxStatusText"
+                :badge-type="tradeOutboxStatusTone === 'success' ? 'success' : 'info'"
+              >
+                <template #actions>
+                  <div class="section-actions">
+                    <el-button class="settings-secondary-button" :loading="tradeOutboxLoading" @click="refreshTradeOutbox()">
+                      <el-icon><Refresh /></el-icon> 刷新
+                    </el-button>
+                    <el-button type="warning" :loading="tradeOutboxActionLoading" @click="runTradeOutboxRepair">
+                      运行修复
+                    </el-button>
+                  </div>
+                </template>
+              </SectionCardHeader>
+
+              <el-alert
+                v-if="tradeOutboxAvailabilityMessage"
+                class="outbox-alert"
+                type="info"
+                :closable="false"
+                show-icon
+                :title="tradeOutboxAvailabilityMessage"
+              />
+
+              <div class="outbox-stats">
+                <article v-for="item in tradeOutboxCards" :key="item.label" class="outbox-stat-card">
+                  <span class="stat-label">{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                  <small>{{ item.hint }}</small>
+                </article>
+              </div>
+
+              <div class="outbox-toolbar">
+                <div class="outbox-toolbar-group">
+                  <el-select v-model="tradeOutboxFilter.status" :disabled="!tradeOutboxCanOperate" style="width: 160px">
+                    <el-option label="全部状态" value="" />
+                    <el-option label="待投递" value="pending" />
+                    <el-option label="投递失败" value="failed" />
+                    <el-option label="已发布" value="published" />
+                    <el-option label="死信" value="dead_letter" />
+                  </el-select>
+                  <el-input
+                    v-model="tradeOutboxFilter.sagaId"
+                    :disabled="!tradeOutboxSupportsEventData"
+                    clearable
+                    placeholder="按 Saga ID 过滤"
+                    style="width: 260px"
+                  />
+                  <el-input
+                    v-model="tradeOutboxFilter.eventType"
+                    :disabled="!tradeOutboxSupportsEventData"
+                    clearable
+                    placeholder="按事件类型过滤"
+                    style="width: 240px"
+                  />
+                  <el-input-number v-model="tradeOutboxFilter.limit" :disabled="!tradeOutboxCanOperate" :min="10" :max="200" :step="10" style="width: 140px" />
+                  <el-switch v-model="tradeOutboxFilter.includePayload" :disabled="!tradeOutboxSupportsEventData" />
+                  <span class="inline-tip">显示 payload</span>
+                </div>
+                <div class="outbox-toolbar-group">
+                  <el-button type="primary" :disabled="!tradeOutboxCanOperate" :loading="tradeOutboxLoading" @click="refreshTradeOutbox()">
+                    应用筛选
+                  </el-button>
+                </div>
+              </div>
+
+              <div class="outbox-panels">
+                <section class="outbox-panel">
+                  <div class="outbox-panel-head">
+                    <div>
+                      <h5>事件列表</h5>
+                      <p>
+                        {{ tradeOutboxSupportsEventData ? `${tradeOutboxEvents.length} 条记录` : '当前环境未开放事件明细接口' }}
+                      </p>
+                    </div>
+                    <div class="outbox-table-actions">
+                      <el-button
+                        type="warning"
+                        plain
+                        size="small"
+                        :disabled="!tradeOutboxSupportsEventData || !selectedReplayableEventIds.length || tradeOutboxActionLoading"
+                        @click="requeueSelectedTradeOutboxEvents"
+                      >
+                        重放所选事件
+                      </el-button>
+                      <el-button
+                        type="danger"
+                        plain
+                        size="small"
+                        :disabled="!tradeOutboxSupportsEventData || !selectedDeadLetterEventIds.length || tradeOutboxActionLoading"
+                        @click="purgeSelectedTradeDeadLetters"
+                      >
+                        清理所选死信
+                      </el-button>
+                    </div>
+                  </div>
+
+                  <el-table
+                    :data="tradeOutboxEvents"
+                    v-loading="tradeOutboxLoading"
+                    style="width: 100%"
+                    max-height="420"
+                    empty-text="当前环境未返回事件列表"
+                    @selection-change="handleTradeOutboxEventSelectionChange"
+                  >
+                    <el-table-column v-if="tradeOutboxSupportsEventData" type="selection" width="48" />
+                    <el-table-column prop="eventId" label="事件 ID" min-width="180" show-overflow-tooltip />
+                    <el-table-column prop="sagaId" label="Saga ID" min-width="180" show-overflow-tooltip />
+                    <el-table-column prop="eventType" label="事件类型" min-width="180" show-overflow-tooltip />
+                    <el-table-column prop="publishStatus" label="状态" width="110">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="getOutboxStatusTagType(row.publishStatus)">
+                          {{ getOutboxStatusText(row.publishStatus) }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="retryCount" label="重试" width="80" />
+                    <el-table-column prop="deadLetterAt" label="死信时间" width="170" />
+                    <el-table-column prop="createdAt" label="创建时间" width="170" />
+                    <el-table-column v-if="tradeOutboxFilter.includePayload" label="Payload" min-width="260">
+                      <template #default="{ row }">
+                        <code class="payload-preview">{{ formatOutboxPayload(row.payload) }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="180" fixed="right">
+                      <template #default="{ row }">
+                        <el-button
+                          v-if="tradeOutboxSupportsEventData && ['failed', 'dead_letter'].includes(row.publishStatus)"
+                          type="warning"
+                          size="small"
+                          link
+                          @click="requeueTradeOutboxEvent(row)"
+                        >
+                          重放
+                        </el-button>
+                        <el-button
+                          v-if="tradeOutboxSupportsEventData && row.publishStatus === 'dead_letter'"
+                          type="danger"
+                          size="small"
+                          link
+                          @click="purgeTradeDeadLetterRow(row)"
+                        >
+                          清理
+                        </el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </section>
+
+                <section class="outbox-panel">
+                  <div class="outbox-panel-head">
+                    <div>
+                      <h5>Saga 聚合</h5>
+                      <p>
+                        {{ tradeOutboxSupportsSagaData ? `${tradeOutboxSagas.length} 条 Saga` : '当前环境未开放 Saga 聚合接口' }}
+                      </p>
+                    </div>
+                    <div class="outbox-table-actions">
+                      <el-button
+                        type="warning"
+                        plain
+                        size="small"
+                        :disabled="!tradeOutboxSupportsSagaData || !selectedTradeOutboxSagaIds.length || tradeOutboxActionLoading"
+                        @click="requeueSelectedTradeOutboxSagas"
+                      >
+                        按 Saga 重放
+                      </el-button>
+                      <el-button
+                        type="danger"
+                        plain
+                        size="small"
+                        :disabled="!tradeOutboxSupportsSagaData || !selectedDeadLetterSagaIds.length || tradeOutboxActionLoading"
+                        @click="purgeSelectedTradeDeadLettersBySaga"
+                      >
+                        按 Saga 清理死信
+                      </el-button>
+                    </div>
+                  </div>
+
+                  <el-table
+                    :data="tradeOutboxSagas"
+                    v-loading="tradeOutboxLoading"
+                    style="width: 100%"
+                    max-height="420"
+                    empty-text="当前环境未返回 Saga 聚合数据"
+                    @selection-change="handleTradeOutboxSagaSelectionChange"
+                  >
+                    <el-table-column v-if="tradeOutboxSupportsSagaData" type="selection" width="48" />
+                    <el-table-column prop="sagaId" label="Saga ID" min-width="220" show-overflow-tooltip />
+                    <el-table-column prop="eventCount" label="事件数" width="90" />
+                    <el-table-column prop="publishedCount" label="已发布" width="90" />
+                    <el-table-column prop="failedCount" label="失败" width="80" />
+                    <el-table-column prop="deadLetterCount" label="死信" width="80" />
+                    <el-table-column prop="lastCreatedAt" label="最近创建" width="170" />
+                    <el-table-column label="操作" width="180" fixed="right">
+                      <template #default="{ row }">
+                        <el-button
+                          v-if="tradeOutboxSupportsEventData"
+                          type="primary"
+                          size="small"
+                          link
+                          @click="inspectSagaEvents(row)"
+                        >
+                          查看事件
+                        </el-button>
+                        <el-button
+                          v-if="tradeOutboxSupportsSagaData && (row.deadLetterCount > 0 || row.failedCount > 0)"
+                          type="warning"
+                          size="small"
+                          link
+                          @click="requeueTradeOutboxSaga(row)"
+                        >
+                          重放
+                        </el-button>
+                        <el-button
+                          v-if="tradeOutboxSupportsSagaData && row.deadLetterCount > 0"
+                          type="danger"
+                          size="small"
+                          link
+                          @click="purgeTradeDeadLettersForSaga(row)"
+                        >
+                          清理
+                        </el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </section>
+              </div>
+            </section>
+          </section>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -783,6 +787,11 @@ const settingsOverviewItems = computed(() => ([
     note: '后台推荐刷新周期'
   },
   {
+    label: 'API Base URL',
+    value: aiSettings.value.baseUrl || SUB2API_BASE_URL,
+    note: '当前 sub2api 本地网关'
+  },
+  {
     label: 'Outbox',
     value: tradeOutboxStatusText.value,
     tone: tradeOutboxStatusTone.value,
@@ -792,9 +801,7 @@ const settingsOverviewItems = computed(() => ([
 const settingsMobileSections = computed(() => ([
   { value: 'basic', label: '基础', note: '系统参数' },
   { value: 'ai', label: 'AI', note: providerLabel.value },
-  { value: 'notification', label: '通知', note: '提醒策略' },
-  { value: 'data', label: '数据', note: '备份治理' },
-  ...(showTradeOutboxAdmin.value ? [{ value: 'logs', label: '日志', note: '运行记录' }] : [])
+  { value: 'operations', label: '运维', note: '日志与数据' }
 ]))
 
 const outboxRuntimeStatus = computed(() => tradeOutboxSummary.value?.outbox || {})
@@ -907,6 +914,12 @@ const modelCatalogBadge = computed(() => (
 ))
 const modelCatalogSummary = computed(() => (
   `${modelOptions.value.length ? modelCatalogCountLabel.value : '已配置模型'} · 当前通道 ${providerLabel.value}`
+))
+const aiRuntimeSummaryTitle = computed(() => (
+  `当前 AI 网关：${aiSettings.value.baseUrl || SUB2API_BASE_URL}`
+))
+const aiRuntimeSummaryDescription = computed(() => (
+  `默认使用 ${aiSettings.value.model || DEFAULT_AI_SETTINGS.model}，低延迟模型优先 ${aiSettings.value.scanPulseModel || DEFAULT_AI_SETTINGS.scanPulseModel} / ${aiSettings.value.scanRiskModel || DEFAULT_AI_SETTINGS.scanRiskModel}。`
 ))
 
 const fastModelOptions = computed(() => {
@@ -1563,6 +1576,16 @@ onMounted(async () => {
   gap: 10px;
 }
 
+.settings-section-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-section-card {
+  display: grid;
+  gap: 10px;
+}
+
 .settings-tabs {
   border: 1px solid var(--panel-edge);
   border-radius: 10px;
@@ -1640,6 +1663,24 @@ onMounted(async () => {
   --el-button-disabled-border-color: color-mix(in srgb, var(--border-soft) 88%, transparent);
   --el-button-disabled-text-color: color-mix(in srgb, var(--text-primary) 48%, transparent);
   font-weight: 600;
+  background: var(--el-button-bg-color);
+  border-color: var(--el-button-border-color);
+  color: var(--el-button-text-color);
+}
+
+.settings-page :deep(.el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--warning):not(.is-link)) {
+  --el-button-bg-color: color-mix(in srgb, var(--surface-soft) 86%, var(--surface-emphasis) 14%);
+  --el-button-border-color: color-mix(in srgb, var(--accent) 42%, var(--border-soft) 58%);
+  --el-button-text-color: var(--text-primary);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--accent) 18%, var(--surface-soft) 82%);
+  --el-button-hover-border-color: color-mix(in srgb, var(--accent) 58%, var(--border-soft) 42%);
+  --el-button-hover-text-color: var(--text-primary);
+  --el-button-active-bg-color: color-mix(in srgb, var(--accent) 24%, var(--surface-soft) 76%);
+  --el-button-active-border-color: color-mix(in srgb, var(--accent) 64%, var(--border-soft) 36%);
+  --el-button-active-text-color: var(--text-primary);
+  background: var(--el-button-bg-color);
+  border-color: var(--el-button-border-color);
+  color: var(--el-button-text-color);
 }
 
 .settings-form:not(.ai-form) {
@@ -1689,6 +1730,10 @@ onMounted(async () => {
   margin-left: 8px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.ai-runtime-alert {
+  border-radius: 8px;
 }
 
 .model-catalog {

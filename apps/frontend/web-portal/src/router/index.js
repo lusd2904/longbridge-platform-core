@@ -183,7 +183,7 @@ const routes = [
         path: 'settings',
         name: 'Settings',
         component: Settings,
-        meta: { title: '系统设置', icon: 'Setting', group: 'system', subsystem: 'platform', capability: 'settings.manage' }
+        meta: { title: '系统设置中心', icon: 'Setting', group: 'system', subsystem: 'platform', capability: 'settings.manage' }
       },
       {
         path: 'user-management',
