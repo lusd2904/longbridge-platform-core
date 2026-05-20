@@ -447,3 +447,66 @@ def test_history_coverage_name_search_keeps_full_query_path(monkeypatch) -> None
         }
     ]
     assert payload["total"] == 0
+
+
+def test_backfill_status_exposes_operational_progress(monkeypatch) -> None:
+    def fake_fetch_one(sql, params=None):
+        if "total_universe_symbols" in sql:
+            return {"total_universe_symbols": 10}
+        if "COUNT(DISTINCT symbol)" in sql:
+            return {"synced_symbols": 4, "latest_trade_date": date(2026, 5, 19)}
+        if "FROM scheduled_jobs" in sql:
+            return {
+                "job_name": "market_history_universe_backfill",
+                "last_run_date": date(2026, 5, 20),
+                "last_run_at": datetime(2026, 5, 20, 21, 5, 0),
+                "status": "running",
+                "message": "慢补数启动中",
+            }
+        return {}
+
+    def fake_fetch_all(sql, params=None):
+        return [{"market": "US", "row_count": 1200}]
+
+    monkeypatch.setattr(market_service.HistoricalMarketDataService, "_BACKFILL_STATUS_CACHE", {"expires_at": 0.0, "payload": None})
+    monkeypatch.setattr(market_service.HistoricalMarketDataService, "_estimate_history_total_rows", lambda: 1200)
+    monkeypatch.setattr(
+        market_service.HistoricalMarketDataService,
+        "_ensure_backfill_status_schema",
+        lambda: None,
+    )
+    history_module = sys.modules[market_service.HistoricalMarketDataService.__module__]
+    monkeypatch.setattr(history_module.DbUtil, "fetch_one", fake_fetch_one)
+    monkeypatch.setattr(history_module.DbUtil, "fetch_all", fake_fetch_all)
+    from core.platform.SystemTaskService import SystemTaskService
+
+    monkeypatch.setattr(
+        SystemTaskService,
+        "get_policy",
+        lambda task_key: {
+            "enabled": True,
+            "intervalSeconds": 900,
+            "batchSize": 2,
+            "maxRequestsPerMinute": 4,
+            "settings": {
+                "cursor": 42,
+                "currentSymbol": "TSLA.US",
+                "currentBatchSymbols": ["TSLA.US", "AAPL.US"],
+                "processedInRun": ["TSLA.US"],
+                "failedInRun": [{"symbol": "XYZ.US", "error": "not found"}],
+                "lastProcessedSymbols": ["NVDL.US"],
+                "lastFailedCount": 1,
+                "lastRunAt": "2026-05-20 21:04:00",
+            },
+        },
+    )
+
+    payload = market_service.HistoricalMarketDataService.get_backfill_status()
+
+    progress = payload["task"]["progress"]
+    assert payload["coverageRate"] == 40.0
+    assert progress["isRunning"] is True
+    assert progress["cursor"] == 42
+    assert progress["currentSymbol"] == "TSLA.US"
+    assert progress["currentBatchSymbols"] == ["TSLA.US", "AAPL.US"]
+    assert progress["failedInRun"] == [{"symbol": "XYZ.US", "error": "not found"}]

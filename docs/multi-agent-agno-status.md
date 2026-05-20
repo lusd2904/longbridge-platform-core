@@ -90,5 +90,7 @@ Gemini and NotebookLM both accepted the sidecar PoC direction and agreed on the 
 ## Remaining Work
 
 1. Containerize the Agno sidecar so deployment and rollback do not depend on host `screen`.
-2. Expand notifications and risk consumption beyond the initial Agent notification feed.
-3. Audit the remaining non-Agno legacy scheduler classes (`FinanceBriefingScheduler`, `MarketInsightScheduler`, `RecommendationScheduler`, and similar host-era runners) for bootstrap-id defaults. The scheduler-service market AI scan path has been moved off `user_id=1`; the remaining legacy classes are outside the current Agno watchlist integration.
+2. Replace the in-process analysis-service worker with a durable queue or add stranded-run recovery/cleanup for queued and running Agent runs after process restarts.
+3. Add scheduler idempotency and notification de-duplication for repeated manual watchlist review triggers within the same time window.
+4. Expand notifications and risk consumption beyond the initial Agent notification feed, including persistent projection, review deadlines, and cross-entry status consistency.
+5. Audit the remaining non-Agno legacy scheduler classes (`FinanceBriefingScheduler`, `MarketInsightScheduler`, `RecommendationScheduler`, and similar host-era runners) for bootstrap-id defaults. The scheduler-service market AI scan path has been moved off `user_id=1`; the remaining legacy classes are outside the current Agno watchlist integration.

@@ -42,6 +42,23 @@ const marketApiMocks = vi.hoisted(() => ({
         filteredTotal: 3,
         totalRows: 1280,
         lastUpdated: '2026-05-20T00:41:56',
+        task: {
+          status: 'running',
+          message: '慢补数启动中',
+          intervalSeconds: 900,
+          batchSize: 2,
+          lastRunAt: '2026-05-20 20:58:00',
+          progress: {
+            isRunning: true,
+            cursor: 42,
+            batchSize: 2,
+            intervalSeconds: 900,
+            currentSymbol: 'TSLA.US',
+            currentBatchSymbols: ['TSLA.US', 'AAPL.US'],
+            failedInRun: [{ symbol: 'XYZ.US', error: 'not found' }],
+            lastProcessedSymbols: ['NVDL.US']
+          }
+        },
         markets: [
           {
             market: 'US',
@@ -519,11 +536,13 @@ const mountOptions = {
 }
 
 describe('market shell pages', () => {
-  it('uses shared page shell components in recommendations view', async () => {
+  it('uses compact recommendation controls and shared metrics', async () => {
     const wrapper = shallowMount(Recommendations, mountOptions)
     await flushPromises()
 
-    expect(wrapper.find('page-hero-stub').exists()).toBe(true)
+    expect(wrapper.find('.recommendation-control-panel').exists()).toBe(true)
+    expect(wrapper.text()).toContain('智能化推荐')
+    expect(wrapper.text()).toContain('立即刷新')
     expect(wrapper.find('metric-strip-stub').exists()).toBe(true)
     expect(wrapper.findAll('section-card-header-stub').length).toBeGreaterThanOrEqual(3)
   })
@@ -622,6 +641,10 @@ describe('market shell pages', () => {
     expect(wrapper.text()).toContain('NVDL.US')
     expect(wrapper.text()).toContain('610')
     expect(wrapper.text()).toContain('待补优先')
+    expect(wrapper.text()).toContain('后台慢补数')
+    expect(wrapper.text()).toContain('正在处理 TSLA.US')
+    expect(wrapper.text()).toContain('AAPL.US')
+    expect(wrapper.text()).toContain('XYZ.US：not found')
     expect(wrapper.text()).toContain('TSLA.US')
     expect(wrapper.text()).toContain('22')
     expect(marketApiMocks.getMarketHistoryCoverage).toHaveBeenCalledWith(expect.objectContaining({

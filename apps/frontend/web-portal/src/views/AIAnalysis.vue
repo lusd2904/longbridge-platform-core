@@ -1373,22 +1373,25 @@ onBeforeUnmount(() => {
 }
 
 .toolbar-actions :deep(.refresh-targets-button.is-disabled) {
-  opacity: 0.62;
-  color: var(--text-secondary) !important;
+  border-color: color-mix(in srgb, var(--border-soft) 72%, transparent) !important;
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent) !important;
+  color: var(--text-muted) !important;
+  opacity: 1;
 }
 
 .analysis-scan-status {
   display: grid;
   gap: 4px;
-  margin-top: 14px;
-  padding: 14px 16px;
-  border-radius: 20px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
   border: 1px solid var(--ai-border);
-  background: var(--ai-surface);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-strong);
 }
 
 .analysis-scan-status span {
-  color: var(--ai-text-muted);
+  color: var(--text-muted);
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1400,23 +1403,35 @@ onBeforeUnmount(() => {
 }
 
 .analysis-scan-status small {
-  color: var(--ai-text-secondary);
+  color: var(--text-secondary);
   line-height: 1.5;
 }
 
 .analysis-scan-status.is-running {
-  border-color: color-mix(in srgb, var(--el-color-primary) 36%, var(--ai-border));
-  background: color-mix(in srgb, var(--el-color-primary-light-9) 55%, var(--ai-surface));
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
+}
+
+.analysis-scan-status.is-running strong {
+  color: var(--text-emphasis);
 }
 
 .analysis-scan-status.is-complete {
-  border-color: color-mix(in srgb, var(--el-color-success) 32%, var(--ai-border));
-  background: color-mix(in srgb, var(--el-color-success-light-9) 58%, var(--ai-surface));
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border-soft));
+  background: color-mix(in srgb, var(--success) 12%, var(--surface-strong));
+}
+
+.analysis-scan-status.is-complete strong {
+  color: var(--success);
 }
 
 .analysis-scan-status.is-error {
-  border-color: color-mix(in srgb, var(--el-color-danger) 32%, var(--ai-border));
-  background: color-mix(in srgb, var(--el-color-danger-light-9) 60%, var(--ai-surface));
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-soft));
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface-strong));
+}
+
+.analysis-scan-status.is-error strong {
+  color: var(--danger);
 }
 
 .search-input :deep(.el-input__wrapper) {

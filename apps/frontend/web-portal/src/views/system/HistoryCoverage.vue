@@ -30,6 +30,44 @@
 
     <MetricStrip :items="summaryMetrics" />
 
+    <section class="backfill-progress-panel">
+      <div class="progress-head">
+        <div>
+          <strong>后台慢补数</strong>
+          <span>{{ backfillProgress.statusLabel }}</span>
+        </div>
+        <em :class="{ running: backfillProgress.isRunning }">{{ backfillProgress.statusText }}</em>
+      </div>
+      <div class="progress-metrics">
+        <div
+          v-for="item in backfillProgress.metrics"
+          :key="item.label"
+          class="progress-metric"
+        >
+          <span>{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+        </div>
+      </div>
+      <div class="progress-body">
+        <div class="progress-list">
+          <span>{{ backfillProgress.batchTitle }}</span>
+          <div v-if="backfillProgress.batchSymbols.length" class="symbol-chip-row">
+            <i v-for="symbol in backfillProgress.batchSymbols" :key="symbol">{{ symbol }}</i>
+          </div>
+          <small v-else>{{ backfillProgress.emptyBatchText }}</small>
+        </div>
+        <div class="progress-list">
+          <span>{{ backfillProgress.failureTitle }}</span>
+          <div v-if="backfillProgress.failures.length" class="failure-list">
+            <small v-for="item in backfillProgress.failures" :key="`${item.symbol}-${item.error}`">
+              {{ item.symbol || '未知标的' }}{{ item.error ? `：${item.error}` : '' }}
+            </small>
+          </div>
+          <small v-else>最近没有失败记录</small>
+        </div>
+      </div>
+    </section>
+
     <section
       v-if="operationState"
       class="operation-feedback-panel"
@@ -275,8 +313,14 @@ const deriveMissingEstimate = (item = {}) => {
 }
 
 const normalizeSummary = (payload = {}) => {
-  const task = payload?.task && typeof payload.task === 'object' ? payload.task : {}
   const backendSummary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : {}
+  const task = payload?.task && typeof payload.task === 'object'
+    ? payload.task
+    : backendSummary.task && typeof backendSummary.task === 'object'
+      ? backendSummary.task
+      : backendSummary.backfillTask && typeof backendSummary.backfillTask === 'object'
+        ? backendSummary.backfillTask
+        : {}
   const counts = backendSummary.counts && typeof backendSummary.counts === 'object' ? backendSummary.counts : {}
   const items = Array.isArray(payload?.items)
     ? payload.items
@@ -464,6 +508,87 @@ const summaryMetrics = computed(() => {
     { label: '缺失估算', value: formatCount(missingEstimate), tone: missingEstimate > 0 ? 'warning' : 'info' }
   ]
 })
+
+const normalizeSymbolList = (value = []) => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => String(item || '').trim().toUpperCase())
+    .filter(Boolean)
+    .slice(0, 12)
+}
+
+const normalizeFailureList = (value = []) => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => {
+      if (item && typeof item === 'object') {
+        return {
+          symbol: String(item.symbol || '').trim().toUpperCase(),
+          error: String(item.error || item.message || '').trim()
+        }
+      }
+      return { symbol: String(item || '').trim().toUpperCase(), error: '' }
+    })
+    .filter((item) => item.symbol || item.error)
+    .slice(0, 6)
+}
+
+const backfillProgress = computed(() => {
+  const task = summary.value.task || {}
+  const progress = task.progress && typeof task.progress === 'object' ? task.progress : {}
+  const state = String(task.status || 'idle').trim().toLowerCase()
+  const isRunning = Boolean(progress.isRunning) || state === 'running'
+  const runningBatch = normalizeSymbolList(progress.currentBatchSymbols)
+  const lastProcessed = normalizeSymbolList(progress.lastProcessedSymbols || task.settings?.lastProcessedSymbols)
+  const processedInRun = normalizeSymbolList(progress.processedInRun)
+  const batchSymbols = isRunning
+    ? (runningBatch.length ? runningBatch : processedInRun)
+    : lastProcessed
+  const failures = normalizeFailureList(
+    isRunning
+      ? (progress.failedInRun || progress.lastFailures || task.settings?.lastFailures)
+      : (progress.lastFailures || task.settings?.lastFailures)
+  )
+  const currentSymbol = String(progress.currentSymbol || '').trim().toUpperCase()
+  const statusText = isRunning ? (currentSymbol ? `正在处理 ${currentSymbol}` : '运行中') : taskStateText(state)
+  const lastRunAt = progress.lastRunAt || task.lastRunAt || '--'
+
+  return {
+    isRunning,
+    statusLabel: task.message || '按任务中心设置慢速补齐全市场历史行情',
+    statusText,
+    batchTitle: isRunning ? '当前批次' : '上次处理',
+    failureTitle: isRunning ? '本轮失败' : '最近失败',
+    emptyBatchText: isRunning ? '等待调度器写入当前批次' : '暂无处理记录',
+    batchSymbols,
+    failures,
+    metrics: [
+      { label: '游标', value: formatCount(progress.cursor ?? 0) },
+      { label: '批次', value: formatCount(progress.batchSize || task.batchSize || 0) },
+      { label: '间隔', value: formatDuration(progress.intervalSeconds || task.intervalSeconds || 0) },
+      { label: '最近执行', value: lastRunAt }
+    ]
+  }
+})
+
+const taskStateText = (state = '') => ({
+  idle: '空闲',
+  success: '正常',
+  running: '运行中',
+  skipped: '已跳过',
+  failed: '失败',
+  paused: '已暂停'
+}[String(state || 'idle').toLowerCase()] || '未知')
+
+const formatDuration = (value) => {
+  const seconds = toNumber(value, 0)
+  if (seconds <= 0) return '--'
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.round(minutes / 60)
+  return `${hours} 小时`
+}
 
 const statusOptions = computed(() => {
   return ['complete', 'partial', 'missing'].map((key) => ({
@@ -663,6 +788,136 @@ defineExpose({
   border: 1px solid var(--border-soft);
   background: var(--surface-strong);
   box-shadow: var(--shadow-strong);
+}
+
+.backfill-progress-panel {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-strong);
+  color: var(--text-primary);
+  padding: 12px;
+}
+
+.progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.progress-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.progress-head strong {
+  color: var(--text-emphasis);
+  font-size: 14px;
+}
+
+.progress-head span {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-head em {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--border-soft) 72%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  color: var(--text-emphasis);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 10px;
+}
+
+.progress-head em.running {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border-soft));
+  background: color-mix(in srgb, var(--success) 14%, var(--surface-soft));
+  color: var(--success);
+}
+
+.progress-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.progress-metric {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 90%, transparent);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.progress-metric span,
+.progress-list > span,
+.progress-list small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.progress-metric strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-emphasis);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.progress-list {
+  min-height: 58px;
+  border: 1px solid color-mix(in srgb, var(--border-soft) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+  padding: 8px 10px;
+}
+
+.symbol-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.symbol-chip-row i {
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-soft));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+  color: var(--text-emphasis);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 8px;
+}
+
+.failure-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 7px;
+  max-height: 74px;
+  overflow: auto;
+}
+
+.failure-list small {
+  color: var(--danger);
 }
 
 .operation-feedback-panel {
@@ -905,6 +1160,11 @@ defineExpose({
 
 @media (max-width: 960px) {
   .coverage-focus-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-metrics,
+  .progress-body {
     grid-template-columns: 1fr;
   }
 

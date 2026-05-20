@@ -1,24 +1,38 @@
 <template>
   <div class="recommendations-page">
-    <PageHero
-      title="智能化推荐"
-      :chips="recommendationHeroChips"
-      :metrics="recommendationHeroMetrics"
-    >
-      <template #actions>
+    <section class="recommendation-control-panel glass-card">
+      <div class="recommendation-control-main">
+        <div class="recommendation-title">
+          <strong>智能化推荐</strong>
+          <div class="recommendation-chip-row">
+            <span
+              v-for="chip in recommendationHeroChips"
+              :key="chip.text"
+              :class="chip.tone"
+            >
+              {{ chip.text }}
+            </span>
+          </div>
+        </div>
         <div class="hero-actions">
-          <el-radio-group v-model="recommendType" size="large">
+          <el-radio-group v-model="recommendType" size="large" class="recommend-type-switch">
             <el-radio-button value="growth">成长型</el-radio-button>
             <el-radio-button value="value">价值型</el-radio-button>
             <el-radio-button value="dividend">稳健收益型</el-radio-button>
             <el-radio-button value="momentum">动量型</el-radio-button>
           </el-radio-group>
-          <el-button type="primary" :icon="Refresh" :loading="loading" @click="handleRefresh">
+          <el-button class="primary-action-button" :icon="Refresh" :loading="loading" @click="handleRefresh">
             立即刷新
           </el-button>
         </div>
-      </template>
-    </PageHero>
+      </div>
+      <div class="recommendation-control-metrics">
+        <article v-for="metric in recommendationHeroMetrics" :key="metric.label">
+          <span>{{ metric.label }}</span>
+          <strong>{{ metric.value }}</strong>
+        </article>
+      </div>
+    </section>
 
     <MetricStrip :items="recommendationOverviewMetrics" />
 
@@ -92,8 +106,8 @@
               <span>评分 {{ formatDecimal(stock.aiScore) }}</span>
               <span>{{ stock.market }} / {{ stock.assetType === 'etf' ? 'ETF' : '股票' }}</span>
               <div class="spotlight-actions">
-                <el-button type="primary" size="small" @click="addToPool(stock)">加入股票池</el-button>
-                <el-button size="small" @click="quickTrade(stock)">去交易</el-button>
+                <el-button class="pool-button" size="small" @click="addToPool(stock)">加入股票池</el-button>
+                <el-button class="trade-button" size="small" @click="quickTrade(stock)">去交易</el-button>
               </div>
             </div>
           </article>
@@ -222,7 +236,6 @@ import { buildRecommendationReadModelSummary, formatQuoteCoverageLabel } from '.
 import ReadModelSourceStrip from '../components/common/ReadModelSourceStrip.vue'
 import { useRouter } from 'vue-router'
 import { useTheme } from '../composables/useTheme.js'
-import PageHero from '../components/common/PageHero.vue'
 import MetricStrip from '../components/common/MetricStrip.vue'
 import SectionCardHeader from '../components/common/SectionCardHeader.vue'
 
@@ -633,47 +646,106 @@ onUnmounted(() => {
 .recommendations-page {
   padding: 8px;
   display: grid;
-  gap: 18px;
+  gap: 10px;
 }
 
-.hero-panel,
-.meta-chip {
-  border-radius: 28px;
+.glass-card {
   border: 1px solid var(--border-soft);
-  background: var(--surface-soft);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-strong);
 }
 
-.hero-panel {
+.recommendation-control-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.28fr);
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.recommendation-control-main {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 22px 24px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.hero-copy {
-  max-width: 760px;
+.recommendation-title {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
 
-  .eyebrow {
-    display: inline-block;
-    margin-bottom: 10px;
-    color: var(--text-muted);
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-  }
+.recommendation-title strong {
+  color: var(--text-emphasis);
+  font-size: 16px;
+}
 
-  h2 {
-    margin: 0 0 10px;
-    font-size: 30px;
-    color: var(--text-primary);
-  }
+.recommendation-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
-  p {
-    margin: 0;
-    color: var(--text-secondary);
-    line-height: 1.6;
-  }
+.recommendation-chip-row span {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 76%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.recommendation-chip-row span.healthy,
+.recommendation-chip-row span.success {
+  border-color: color-mix(in srgb, var(--success) 36%, var(--border-soft));
+  background: color-mix(in srgb, var(--success) 12%, var(--surface-soft));
+  color: var(--success);
+}
+
+.recommendation-chip-row span.warning {
+  border-color: color-mix(in srgb, var(--warning) 36%, var(--border-soft));
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface-soft));
+  color: var(--warning);
+}
+
+.recommendation-chip-row span.info {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+  color: color-mix(in srgb, var(--accent-strong, var(--accent)) 88%, white 12%);
+}
+
+.recommendation-control-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.recommendation-control-metrics article {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border-soft) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 86%, transparent);
+  padding: 7px 8px;
+}
+
+.recommendation-control-metrics span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.recommendation-control-metrics strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-emphasis);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .summary-block,
@@ -702,42 +774,65 @@ onUnmounted(() => {
 
 .hero-actions {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
-.meta-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+.recommend-type-switch :deep(.el-radio-button__inner) {
+  border-color: color-mix(in srgb, var(--border-soft) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
+  color: var(--text-primary);
+  min-height: 34px;
+  font-weight: 700;
 }
 
-.meta-chip {
-  padding: 14px 18px;
+.recommend-type-switch :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  border-color: color-mix(in srgb, var(--accent) 56%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent-strong, var(--accent)) 74%, var(--surface-strong));
+  color: var(--button-primary-text, #fff);
+  box-shadow: none;
+}
 
-  span {
-    display: block;
-    color: var(--text-muted);
-    font-size: 12px;
-    margin-bottom: 8px;
-  }
+.primary-action-button,
+.pool-button,
+.trade-button {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-soft)) !important;
+  background: color-mix(in srgb, var(--accent-strong, var(--accent)) 72%, var(--surface-strong)) !important;
+  color: var(--button-primary-text, #fff) !important;
+  font-weight: 700;
+}
 
-  strong {
-    color: var(--text-primary);
-    font-size: 18px;
-  }
+.primary-action-button:hover,
+.pool-button:hover,
+.trade-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border-soft)) !important;
+  background: color-mix(in srgb, var(--accent-strong, var(--accent)) 84%, var(--surface-strong)) !important;
+  color: var(--button-primary-text, #fff) !important;
+}
+
+.trade-button {
+  background: color-mix(in srgb, var(--surface-soft) 82%, var(--accent) 12%) !important;
+  color: var(--text-emphasis) !important;
+}
+
+.trade-button:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-soft)) !important;
+  color: var(--text-emphasis) !important;
 }
 
 .stats-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 8px;
 }
 
 .stat-card {
-  border-radius: 24px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-strong);
 }
 
 .stat-content {
@@ -773,18 +868,21 @@ onUnmounted(() => {
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
-  gap: 18px;
+  gap: 10px;
 }
 
 .spotlight-card,
 .recommendations-table,
 .chart-card {
-  border-radius: 28px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-strong);
 }
 
 .side-panels {
   display: grid;
-  gap: 18px;
+  gap: 10px;
 }
 
 .card-header {
@@ -813,11 +911,11 @@ onUnmounted(() => {
 .spotlight-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 180px;
-  gap: 18px;
-  padding: 18px;
-  border-radius: 22px;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 10px;
   border: 1px solid var(--panel-stroke);
-  background: var(--surface-soft);
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
 }
 
 .symbol-row {
@@ -918,8 +1016,9 @@ onUnmounted(() => {
 
 @media (max-width: 1180px) {
   .content-grid,
-  .meta-strip,
-  .stats-row {
+  .stats-row,
+  .recommendation-control-panel,
+  .recommendation-control-metrics {
     grid-template-columns: 1fr;
   }
 

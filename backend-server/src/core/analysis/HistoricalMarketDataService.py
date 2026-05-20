@@ -42,7 +42,7 @@ class HistoricalMarketDataService:
     TABLE_NAME = 'market_price_history_daily'
     SUPPORTED_TIMEFRAMES = {'daily', 'weekly', 'monthly', 'quarterly', 'yearly'}
     _BACKFILL_STATUS_CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
-    _BACKFILL_STATUS_TTL_SECONDS = 300
+    _BACKFILL_STATUS_TTL_SECONDS = 30
     _BACKFILL_STATUS_SCHEMA_READY = False
 
     @classmethod
@@ -282,6 +282,15 @@ class HistoricalMarketDataService:
         latest_trade_date = history_row.get('latest_trade_date')
         last_run_date = task_status.get('last_run_date')
         last_run_at = task_status.get('last_run_at')
+        settings = policy.get('settings') or {}
+        task_state = str(task_status.get('status') or 'idle').strip().lower() or 'idle'
+        progress = cls._build_backfill_progress_payload(
+            settings=settings,
+            task_state=task_state,
+            interval_seconds=int(policy.get('intervalSeconds') or 0),
+            batch_size=int(policy.get('batchSize') or 0),
+            last_run_at=last_run_at.strftime('%Y-%m-%d %H:%M:%S') if last_run_at else None,
+        )
 
         payload = {
             "totalUniverseSymbols": total_universe_symbols,
@@ -298,12 +307,13 @@ class HistoricalMarketDataService:
                 "batchSize": int(policy.get('batchSize') or 0),
                 "maxRequestsPerMinute": int(policy.get('maxRequestsPerMinute') or 0),
                 "backfillStartDate": str(
-                    (policy.get('settings') or {}).get('startDate')
+                    settings.get('startDate')
                     or AppConfig.get('HISTORICAL_BACKFILL_START_DATE', default='2020-01-01')
                     or '2020-01-01'
                 ),
-                "settings": policy.get('settings') or {},
-                "status": task_status.get('status') or 'idle',
+                "settings": settings,
+                "progress": progress,
+                "status": task_state,
                 "message": task_status.get('message') or '',
                 "lastRunDate": last_run_date.strftime('%Y-%m-%d') if last_run_date else None,
                 "lastRunAt": last_run_at.strftime('%Y-%m-%d %H:%M:%S') if last_run_at else None
@@ -314,6 +324,82 @@ class HistoricalMarketDataService:
             "payload": dict(payload),
         }
         return payload
+
+    @classmethod
+    def clear_backfill_status_cache(cls) -> None:
+        cls._BACKFILL_STATUS_CACHE = {"expires_at": 0.0, "payload": None}
+
+    @classmethod
+    def _build_backfill_progress_payload(
+        cls,
+        *,
+        settings: Dict[str, Any],
+        task_state: str,
+        interval_seconds: int,
+        batch_size: int,
+        last_run_at: Optional[str],
+    ) -> Dict[str, object]:
+        def safe_int(value, fallback=0):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return fallback
+
+        def string_list(value, limit=12):
+            if not isinstance(value, list):
+                return []
+            items = []
+            for item in value:
+                text = str(item or '').strip().upper()
+                if text:
+                    items.append(text)
+                if len(items) >= limit:
+                    break
+            return items
+
+        def failure_list(value, limit=12):
+            if not isinstance(value, list):
+                return []
+            failures = []
+            for item in value:
+                if isinstance(item, dict):
+                    symbol = str(item.get('symbol') or '').strip().upper()
+                    error = str(item.get('error') or item.get('message') or '').strip()
+                else:
+                    symbol = str(item or '').strip().upper()
+                    error = ''
+                if symbol or error:
+                    failures.append({"symbol": symbol, "error": error[:180]})
+                if len(failures) >= limit:
+                    break
+            return failures
+
+        current_batch = string_list(settings.get('currentBatchSymbols'), limit=max(1, batch_size or 12))
+        processed_in_run = string_list(settings.get('processedInRun'), limit=12)
+        failed_in_run = failure_list(settings.get('failedInRun'), limit=12)
+        last_processed = string_list(settings.get('lastProcessedSymbols'), limit=12)
+        last_failures = failure_list(settings.get('lastFailures'), limit=12)
+        current_symbol = str(settings.get('currentSymbol') or '').strip().upper()
+        cursor = safe_int(settings.get('cursor'), 0)
+        last_next_cursor = safe_int(settings.get('lastNextCursor'), cursor)
+
+        return {
+            "isRunning": task_state == 'running',
+            "cursor": cursor,
+            "nextCursor": last_next_cursor,
+            "batchSize": batch_size,
+            "intervalSeconds": interval_seconds,
+            "currentSymbol": current_symbol,
+            "currentBatchSymbols": current_batch,
+            "processedInRun": processed_in_run,
+            "failedInRun": failed_in_run,
+            "lastProcessedSymbols": last_processed,
+            "lastFailures": last_failures,
+            "lastFailedCount": safe_int(settings.get('lastFailedCount'), len(last_failures)),
+            "lastRunProcessedCount": safe_int(settings.get('lastRunProcessedCount'), len(last_processed)),
+            "runningStartedAt": settings.get('runningStartedAt') or None,
+            "lastRunAt": settings.get('lastRunAt') or last_run_at,
+        }
 
     @classmethod
     def _ensure_backfill_status_schema(cls) -> None:

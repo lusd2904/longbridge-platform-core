@@ -1939,6 +1939,14 @@ async def market_history_coverage(
         )
         payload = _set_history_coverage_cache(cache_key, payload)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    backfill_status = await asyncio.to_thread(HistoricalMarketDataService.get_backfill_status)
+    backfill_task = backfill_status.get("task") if isinstance(backfill_status, dict) else {}
+    if isinstance(backfill_task, dict):
+        summary = {
+            **summary,
+            "task": backfill_task,
+            "backfillTask": backfill_task,
+        }
     total = int(payload.get("total") or 0)
     return {
         "success": True,

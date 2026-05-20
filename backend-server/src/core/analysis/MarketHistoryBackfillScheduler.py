@@ -84,6 +84,7 @@ class MarketHistoryBackfillScheduler:
         ).strip()
         end_date = min(date.today(), HistoricalMarketDataService._coerce_date(settings.get('endDate')) or date.today())
 
+        run_started_at = datetime.now()
         self._update_job_status('running', f'慢补数启动中，cursor={cursor} batch={batch_size} start={start_date}')
         execution_user = resolve_task_execution_user(self.JOB_NAME)
         if not execution_user:
@@ -113,12 +114,42 @@ class MarketHistoryBackfillScheduler:
             wrapped = True
             universe = IndicatorSnapshotService._collect_universe_symbols(limit=batch_size, offset=0)
 
+        current_batch_symbols = [
+            str(item.get('symbol') or '').strip().upper()
+            for item in universe
+            if item.get('symbol')
+        ]
+        self._update_policy_settings({
+            **settings,
+            "cursor": cursor,
+            "startDate": start_date,
+            "endDate": end_date.strftime('%Y-%m-%d'),
+            "runningStartedAt": run_started_at.strftime('%Y-%m-%d %H:%M:%S'),
+            "currentBatchSymbols": current_batch_symbols,
+            "processedInRun": [],
+            "failedInRun": [],
+            "currentSymbol": ""
+        })
+        HistoricalMarketDataService.clear_backfill_status_cache()
+
         processed_symbols = []
         failed = []
         for index, item in enumerate(universe):
             symbol = item.get('symbol')
             if not symbol:
                 continue
+            self._update_policy_settings({
+                **settings,
+                "cursor": cursor,
+                "startDate": start_date,
+                "endDate": end_date.strftime('%Y-%m-%d'),
+                "runningStartedAt": run_started_at.strftime('%Y-%m-%d %H:%M:%S'),
+                "currentBatchSymbols": current_batch_symbols,
+                "processedInRun": processed_symbols[:12],
+                "failedInRun": failed[:12],
+                "currentSymbol": str(symbol).strip().upper()
+            })
+            HistoricalMarketDataService.clear_backfill_status_cache()
             try:
                 result = HistoricalMarketDataService.backfill_symbol_history(
                     symbol,
@@ -144,19 +175,22 @@ class MarketHistoryBackfillScheduler:
         next_settings = {
             **settings,
             "cursor": next_cursor,
+            "lastNextCursor": next_cursor,
             "startDate": start_date,
             "endDate": end_date.strftime('%Y-%m-%d'),
             "lastProcessedSymbols": processed_symbols[:12],
+            "lastFailures": failed[:12],
             "lastFailedCount": len(failed),
+            "lastRunProcessedCount": len(processed_symbols),
             "lastRunAt": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
-        SystemTaskService.update_policy(
-            self.JOB_NAME,
-            {
-                "settings": next_settings,
-                "description": "后台慢速补全全市场股票与 ETF 历史行情及指标。"
-            }
-        )
+        next_settings.pop("currentSymbol", None)
+        next_settings.pop("currentBatchSymbols", None)
+        next_settings.pop("processedInRun", None)
+        next_settings.pop("failedInRun", None)
+        next_settings.pop("runningStartedAt", None)
+        self._update_policy_settings(next_settings)
+        HistoricalMarketDataService.clear_backfill_status_cache()
 
         now = datetime.now()
         message = (
@@ -176,6 +210,15 @@ class MarketHistoryBackfillScheduler:
             "nextCursor": next_cursor,
             "symbols": processed_symbols
         }
+
+    def _update_policy_settings(self, settings):
+        SystemTaskService.update_policy(
+            self.JOB_NAME,
+            {
+                "settings": settings,
+                "description": "后台慢速补全全市场股票与 ETF 历史行情及指标。"
+            }
+        )
 
     def _ensure_job_table(self):
         DbUtil.execute_sql(
