@@ -22,6 +22,11 @@ class AgentRunService:
 
     RUN_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
     OVERRIDE_ACTIONS = {"acknowledged", "needs_review", "dismissed"}
+    OVERRIDE_ALLOWED_NEW_STATUSES = {
+        "acknowledged": {"succeeded"},
+        "needs_review": {"failed"},
+        "dismissed": {"cancelled"},
+    }
 
     MAX_SCENE_LENGTH = 64
     MAX_TRIGGER_SOURCE_LENGTH = 64
@@ -388,7 +393,7 @@ class AgentRunService:
         cls.ensure_schema()
         safe_action = cls._validate_override_action(action)
         safe_old_status = cls._validate_optional_status(old_status)
-        safe_new_status = cls._validate_optional_status(new_status)
+        safe_new_status = cls._validate_override_new_status(safe_action, new_status)
         override_id = DbUtil.execute_insert(
             f"""
             INSERT INTO {cls.OVERRIDES_TABLE} (
@@ -459,6 +464,7 @@ class AgentRunService:
         data = cls._normalize_run_row(run_row)
         data["steps"] = [cls._normalize_step_row(row) for row in step_rows]
         data["overrides"] = [cls._normalize_override_row(row) for row in override_rows]
+        cls._attach_review_state(data)
         return data
 
     @classmethod
@@ -500,7 +506,17 @@ class AgentRunService:
             """,
             tuple(params),
         ) or []
-        return [cls._normalize_run_row(row) for row in rows]
+        if not rows:
+            return []
+
+        data = [cls._normalize_run_row(row) for row in rows]
+        run_ids = [int(item.get("runId") or item.get("run_id") or 0) for item in data if int(item.get("runId") or item.get("run_id") or 0) > 0]
+        overrides_by_run_id = cls._list_overrides_by_run_ids(run_ids, use_primary=use_primary)
+        for item in data:
+            run_id = int(item.get("runId") or item.get("run_id") or 0)
+            item["overrides"] = overrides_by_run_id.get(run_id, [])
+            cls._attach_review_state(item)
+        return data
 
     @classmethod
     def _validate_status(cls, status: Any) -> str:
@@ -521,6 +537,16 @@ class AgentRunService:
         if normalized not in cls.OVERRIDE_ACTIONS:
             raise ValueError(f"unsupported override action: {action}")
         return normalized
+
+    @classmethod
+    def _validate_override_new_status(cls, action: str, status: Optional[str]) -> Optional[str]:
+        safe_status = cls._validate_optional_status(status)
+        if safe_status is None:
+            return None
+        allowed_statuses = cls.OVERRIDE_ALLOWED_NEW_STATUSES.get(action) or set()
+        if safe_status not in allowed_statuses:
+            raise ValueError(f"unsupported override status transition: action={action} status={status}")
+        return safe_status
 
     @classmethod
     def _serialize_summary(cls, value: Optional[Any], max_length: int) -> Optional[str]:
@@ -748,6 +774,47 @@ class AgentRunService:
             "reasonDetail": cls._deserialize_summary(reason),
             "createdAt": created_at,
         }
+
+    @classmethod
+    def _list_overrides_by_run_ids(
+        cls,
+        run_ids: List[int],
+        *,
+        use_primary: bool = False,
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        filtered_run_ids = [int(run_id) for run_id in run_ids if int(run_id) > 0]
+        if not filtered_run_ids:
+            return {}
+
+        fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
+        placeholders = ", ".join(["%s"] * len(filtered_run_ids))
+        rows = fetch_all(
+            f"""
+            SELECT *
+            FROM {cls.OVERRIDES_TABLE}
+            WHERE run_id IN ({placeholders})
+            ORDER BY created_at ASC, override_id ASC
+            """,
+            tuple(filtered_run_ids),
+        ) or []
+
+        grouped: Dict[int, List[Dict[str, Any]]] = {}
+        for row in rows:
+            override = cls._normalize_override_row(row)
+            run_id = int(override.get("runId") or override.get("run_id") or 0)
+            grouped.setdefault(run_id, []).append(override)
+        return grouped
+
+    @classmethod
+    def _attach_review_state(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        overrides = data.get("overrides") if isinstance(data.get("overrides"), list) else []
+        latest_override = overrides[-1] if overrides else None
+        review_action = str(latest_override.get("action") or "").strip().lower() if isinstance(latest_override, dict) else ""
+        data["latestOverride"] = latest_override
+        data["reviewAction"] = review_action or None
+        data["reviewedAt"] = latest_override.get("createdAt") if isinstance(latest_override, dict) else None
+        data["reviewedBy"] = latest_override.get("actor") if isinstance(latest_override, dict) else None
+        return data
 
     @staticmethod
     def _deserialize_summary(value: Optional[Any]) -> Optional[Any]:

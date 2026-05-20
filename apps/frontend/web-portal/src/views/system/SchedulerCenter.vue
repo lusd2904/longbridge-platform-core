@@ -219,12 +219,11 @@
           </div>
           <el-select
             v-model="reviewActionForm.newStatus"
-            clearable
-            placeholder="不调整运行状态"
+            placeholder="同步人工复核状态"
             class="review-status-select"
           >
             <el-option
-              v-for="status in AGENT_REVIEW_STATUS_OPTIONS"
+              v-for="status in activeReviewStatusOptions"
               :key="status.value"
               :label="status.label"
               :value="status.value"
@@ -301,7 +300,7 @@ const acknowledgingAction = ref('')
 const routeQueryHydrated = ref(false)
 const createReviewActionForm = () => ({
   action: 'acknowledged',
-  newStatus: '',
+  newStatus: 'succeeded',
   reason: '',
   reviewNote: ''
 })
@@ -320,11 +319,11 @@ const AGENT_REVIEW_ACTIONS = [
   { key: 'needs_review', label: '需继续复核', doneLabel: '需继续复核', message: '已标记为需继续复核' },
   { key: 'dismissed', label: '忽略', doneLabel: '已忽略', message: '已忽略该复核结果' }
 ]
-const AGENT_REVIEW_STATUS_OPTIONS = [
-  { value: 'succeeded', label: '运行成功' },
-  { value: 'failed', label: '运行失败' },
-  { value: 'cancelled', label: '已取消' }
-]
+const AGENT_REVIEW_STATUS_OPTIONS = {
+  acknowledged: [{ value: 'succeeded', label: '运行成功' }],
+  needs_review: [{ value: 'failed', label: '运行失败' }],
+  dismissed: [{ value: 'cancelled', label: '已取消' }]
+}
 const AGENT_REVIEW_TASK_KEYS = new Set(Object.keys(AGENT_REVIEW_TASK_SCENES))
 
 const scheduleLabel = (type) => ({ interval: '循环', daily: '每日', manual: '手动' }[type] || '未设置')
@@ -506,6 +505,10 @@ const agentRunReviewStateLabel = (run) => agentReviewActionLabel(run?.reviewActi
 const agentReviewActionButtonLabel = (run, action) => (
   normalizeOverrideAction(run?.reviewAction) === action.key ? action.doneLabel : action.label
 )
+const activeReviewStatusOptions = computed(() => {
+  const action = normalizeOverrideAction(reviewActionForm.value.action) || 'acknowledged'
+  return AGENT_REVIEW_STATUS_OPTIONS[action] || AGENT_REVIEW_STATUS_OPTIONS.acknowledged
+})
 const agentReviewSubmitLabel = (run) => (
   agentReviewActionButtonLabel(
     run,
@@ -525,6 +528,18 @@ const isReviewActionDisabled = (run, action) => {
 const resetReviewActionForm = () => {
   reviewActionForm.value = createReviewActionForm()
 }
+watch(
+  () => reviewActionForm.value.action,
+  (action) => {
+    const normalizedAction = normalizeOverrideAction(action) || 'acknowledged'
+    const options = AGENT_REVIEW_STATUS_OPTIONS[normalizedAction] || AGENT_REVIEW_STATUS_OPTIONS.acknowledged
+    const fallbackStatus = options[0]?.value || ''
+    if (!options.some((item) => item.value === reviewActionForm.value.newStatus)) {
+      reviewActionForm.value.newStatus = fallbackStatus
+    }
+  },
+  { immediate: true }
+)
 const agentRunStatusLabel = (status) => ({
   success: '成功',
   succeeded: '成功',

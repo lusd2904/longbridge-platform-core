@@ -70,6 +70,11 @@ _AGENT_RUN_SERVICE_CLASS = None
 _AGENT_RUN_SERVICE_LOADED = False
 _AGENT_RUN_DB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 _AGENT_RUN_OVERRIDE_ACTIONS = {"acknowledged", "needs_review", "dismissed"}
+_AGENT_RUN_OVERRIDE_STATUS_OPTIONS = {
+    "acknowledged": {"succeeded"},
+    "needs_review": {"failed"},
+    "dismissed": {"cancelled"},
+}
 
 
 def _normalize_position_batch_payload(raw_positions: object, sync_limit: int = SYNC_ANALYZE_POSITIONS_LIMIT) -> Tuple[List[dict], Dict[str, int | bool]]:
@@ -609,6 +614,16 @@ def _normalize_override_new_status(raw_status: object) -> Optional[str]:
     if text not in {"succeeded", "failed", "cancelled"}:
         raise HTTPException(status_code=400, detail="newStatus 仅支持 succeeded/failed/cancelled")
     return text
+
+
+def _validate_override_status_transition(action: str, new_status: Optional[str]) -> Optional[str]:
+    if not new_status:
+        return None
+    allowed_statuses = _AGENT_RUN_OVERRIDE_STATUS_OPTIONS.get(action) or set()
+    if new_status not in allowed_statuses:
+        allowed_text = "/".join(sorted(allowed_statuses)) or "空"
+        raise HTTPException(status_code=400, detail=f"{action} 仅支持 newStatus={allowed_text}")
+    return new_status
 
 
 def _load_agent_run_or_404(run_id: int) -> dict:
@@ -1913,7 +1928,10 @@ async def override_agent_run(
     _assert_agent_run_visible(run, session=session, scoped_user_id=scoped_user_id)
 
     action = _normalize_override_action(payload.get("action"))
-    new_status = _normalize_override_new_status(payload.get("newStatus", payload.get("new_status")))
+    new_status = _validate_override_status_transition(
+        action,
+        _normalize_override_new_status(payload.get("newStatus", payload.get("new_status"))),
+    )
     actor = str(payload.get("actor") or session.get("username") or session.get("role") or "human-review").strip() or "human-review"
 
     override_id = _call_agent_run_service(
