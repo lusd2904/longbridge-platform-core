@@ -366,6 +366,37 @@ function normalizeFinanceBriefing(item = {}) {
   }
 }
 
+function normalizeSentimentItem(item = {}) {
+  return {
+    ...item,
+    symbol: String(item?.symbol || '').trim().toUpperCase(),
+    market: String(item?.market || '').trim().toUpperCase(),
+    score: Number(item?.score || 0),
+    confidence: Number(item?.confidence || 0),
+    heat: Number(item?.heat || 0),
+    trend_strength: Number(item?.trend_strength || item?.trendStrength || 0),
+    driver_headlines: Array.isArray(item?.driver_headlines) ? item.driver_headlines.filter(Boolean) : [],
+    risk_keywords: Array.isArray(item?.risk_keywords) ? item.risk_keywords.filter(Boolean) : [],
+    quant_fields: item?.quant_fields && typeof item.quant_fields === 'object' ? item.quant_fields : {},
+    recommendation_ref: item?.recommendation_ref && typeof item.recommendation_ref === 'object' ? item.recommendation_ref : null,
+    latest_analysis_ref: item?.latest_analysis_ref && typeof item.latest_analysis_ref === 'object' ? item.latest_analysis_ref : null
+  }
+}
+
+function normalizeSentimentOverview(payload = {}) {
+  const marketSummaries = Array.isArray(payload?.marketSummaries) ? payload.marketSummaries : []
+  const topSymbols = Array.isArray(payload?.topSymbols) ? payload.topSymbols.map(normalizeSentimentItem) : []
+  const riskWordCloud = Array.isArray(payload?.riskWordCloud) ? payload.riskWordCloud : []
+  return {
+    ...payload,
+    marketSummaries,
+    topSymbols,
+    riskWordCloud,
+    aiConfig: payload?.aiConfig && typeof payload.aiConfig === 'object' ? payload.aiConfig : {},
+    linkedRoutes: payload?.linkedRoutes && typeof payload.linkedRoutes === 'object' ? payload.linkedRoutes : {}
+  }
+}
+
 function normalizeRecommendationPayload(payload = {}) {
   const items = Array.isArray(payload?.items)
     ? payload.items.map((item) => {
@@ -402,6 +433,7 @@ const SERVICE_PREFIX = {
   user: '/svc/user',
   market: '/svc/market',
   analysis: '/svc/analysis',
+  sentiment: '/svc/sentiment',
   strategy: '/svc/strategy',
   trade: '/svc/trade',
   risk: '/svc/risk',
@@ -1217,6 +1249,41 @@ export const getFinanceBriefings = async (params = {}) => {
     ...res,
     data: items.map(normalizeFinanceBriefing),
     meta: res?.meta && typeof res.meta === 'object' ? res.meta : {}
+  }
+}
+
+export const getSentimentBootstrap = async () => {
+  const res = await serviceGet('sentiment', '/api/v1/sentiment/bootstrap')
+  return {
+    ...res,
+    data: normalizeSentimentOverview(res?.data || {})
+  }
+}
+
+export const getSentimentOverview = async (params = {}) => {
+  const res = await serviceGet('sentiment', '/api/v1/sentiment/overview', params)
+  return {
+    ...res,
+    data: normalizeSentimentOverview(res?.data || {}),
+    meta: res?.meta && typeof res.meta === 'object' ? res.meta : {}
+  }
+}
+
+export const getSentimentUniverse = async (params = {}) => {
+  const res = await serviceGet('sentiment', '/api/v1/sentiment/universe', params)
+  const items = Array.isArray(res?.data) ? res.data : []
+  return {
+    ...res,
+    data: items.map(normalizeSentimentItem),
+    meta: res?.meta && typeof res.meta === 'object' ? res.meta : {}
+  }
+}
+
+export const getSymbolSentiment = async (symbol) => {
+  const res = await serviceGet('sentiment', `/api/v1/sentiment/symbol/${encodeURIComponent(symbol)}`)
+  return {
+    ...res,
+    data: normalizeSentimentItem(res?.data || {})
   }
 }
 

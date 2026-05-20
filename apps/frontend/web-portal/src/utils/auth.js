@@ -18,6 +18,7 @@ const MENU_TITLE_MAP = {
   AIAnalysis: 'AI研判',
   Backtest: '策略回测',
   MarketData: '实时行情',
+  MarketSentiment: '市场舆情',
   FinanceNews: '财经快讯',
   BrokerManagement: '券商连接',
   Settings: '系统设置中心'

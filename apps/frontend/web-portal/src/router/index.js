@@ -28,6 +28,7 @@ const RiskManagement = () => import('../views/RiskManagement.vue')
 const MarketData = () => import('../views/MarketData.vue')
 const Kline = () => import('../views/Kline.vue')
 const Recommendations = () => import('../views/Recommendations.vue')
+const MarketSentiment = () => import('../views/MarketSentiment.vue')
 const Settings = () => import('../views/Settings.vue')
 const UserManagement = () => import('../views/UserManagement.vue')
 const Login = () => import('../views/Login.vue')
@@ -150,6 +151,16 @@ const routes = [
         name: 'Recommendations',
         component: Recommendations,
         meta: { title: '智能推荐', icon: 'Star', group: 'market', subsystem: 'market', capability: 'recommendations.view' }
+      },
+      {
+        path: 'sentiment-center',
+        name: 'MarketSentiment',
+        component: MarketSentiment,
+        meta: { title: '市场舆情', icon: 'Cpu', group: 'market', subsystem: 'market', capability: 'market.sentiment.view' }
+      },
+      {
+        path: 'market-sentiment',
+        redirect: '/sentiment-center'
       },
       {
         path: 'finance-news',

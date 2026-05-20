@@ -170,7 +170,7 @@ const MOBILE_TAB_CONFIG = [
   },
   {
     key: 'market',
-    routeNames: ['MarketData', 'StockPool', 'Recommendations', 'FinanceNews'],
+    routeNames: ['MarketData', 'StockPool', 'Recommendations', 'MarketSentiment', 'FinanceNews'],
     fallback: { routeName: 'MarketData', path: '/market', title: '行情', icon: Histogram }
   },
   {

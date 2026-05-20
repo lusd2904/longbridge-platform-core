@@ -78,6 +78,7 @@ class PlatformAccessService:
                 "market.view",
                 "market.detail.view",
                 "market.news.view",
+                "market.sentiment.view",
                 "ai.analysis",
                 "recommendations.view",
                 "trade.live",
@@ -102,7 +103,8 @@ class PlatformAccessService:
             "priority": 30,
             "capabilities": [
                 "market.view",
-                "market.detail.view"
+                "market.detail.view",
+                "market.sentiment.view"
             ]
         },
         {
@@ -114,6 +116,7 @@ class PlatformAccessService:
                 "dashboard.view",
                 "market.view",
                 "market.detail.view",
+                "market.sentiment.view",
                 "trade.live",
                 "positions.view",
                 "orders.view",
@@ -138,6 +141,7 @@ class PlatformAccessService:
         {"menu_code": "market", "title": "实时行情", "route_name": "MarketData", "route_path": "/market", "menu_group": "market", "subsystem_code": "market", "icon": "Histogram", "sort_index": 100, "required_capability": "market.view"},
         {"menu_code": "kline", "title": "历史K线", "route_name": "Kline", "route_path": "/kline", "menu_group": "market", "subsystem_code": "market", "icon": "TrendCharts", "sort_index": 110, "required_capability": "market.detail.view"},
         {"menu_code": "recommendations", "title": "智能推荐", "route_name": "Recommendations", "route_path": "/recommendations", "menu_group": "market", "subsystem_code": "market", "icon": "Star", "sort_index": 120, "required_capability": "recommendations.view"},
+        {"menu_code": "sentiment-center", "title": "市场舆情", "route_name": "MarketSentiment", "route_path": "/sentiment-center", "menu_group": "market", "subsystem_code": "market", "icon": "Cpu", "sort_index": 125, "required_capability": "market.sentiment.view"},
         {"menu_code": "finance-news", "title": "财经快讯", "route_name": "FinanceNews", "route_path": "/finance-news", "menu_group": "market", "subsystem_code": "market", "icon": "Bell", "sort_index": 130, "required_capability": "market.news.view"},
         {"menu_code": "profile", "title": "个人中心", "route_name": "Profile", "route_path": "/profile", "menu_group": "user", "subsystem_code": "platform", "icon": "User", "sort_index": 140, "required_capability": "profile.view"},
         {"menu_code": "broker-management", "title": "券商连接", "route_name": "BrokerManagement", "route_path": "/broker-management", "menu_group": "user", "subsystem_code": "platform", "icon": "Wallet", "sort_index": 145, "required_capability": "profile.view"},

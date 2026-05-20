@@ -620,6 +620,20 @@ const pageActions = {
     }
     return actions
   },
+  sentimentCenter: async (page) => {
+    const actions = []
+    await expectVisible(page.getByText('市场舆情'), 'verified sentiment center title', 5000)
+    actions.push('verified sentiment center title')
+    await expectVisible(page.getByText('AI / 配置继承'), 'verified sentiment ai config panel', 5000)
+    actions.push('verified sentiment ai config panel')
+    await expectVisible(page.getByText('标的舆情联动'), 'verified sentiment symbol linkage panel', 5000)
+    actions.push('verified sentiment symbol linkage panel')
+    if (await clickSegmentByText(page, '美股')) {
+      actions.push('switched sentiment market filter')
+      await waitForRefreshStable(page, { timeoutMs: 3200 })
+    }
+    return actions
+  },
   kline: async (page) => {
     const actions = []
     if (await clickSegmentByText(page, '周K')) {
@@ -864,6 +878,7 @@ const desktopVisits = [
   { route: '/symbol/AAPL.US', name: 'symbol-detail', action: pageActions.symbolDetail },
   { route: '/kline', name: 'kline', action: pageActions.kline },
   { route: '/recommendations', name: 'recommendations', action: pageActions.recommendations },
+  { route: '/sentiment-center', name: 'sentiment-center', action: pageActions.sentimentCenter },
   { route: '/finance-news', name: 'finance-news', action: pageActions.financeNews },
   { route: '/strategy', name: 'strategy', action: pageActions.strategy },
   { route: '/backtest', name: 'backtest', action: pageActions.backtest },
