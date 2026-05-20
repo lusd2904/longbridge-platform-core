@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 import sys
 import threading
 import time
@@ -97,6 +98,12 @@ async def market_service_lifespan(_: Any):
         page_size=20,
     )
     _set_history_coverage_cache(default_coverage_key, default_coverage_payload)
+    for market in ("US", "CN", "HK"):
+        await asyncio.to_thread(
+            _get_history_market_expectation,
+            start_date=_HISTORY_COVERAGE_START_DATE,
+            market=market,
+        )
     yield
 
 
@@ -117,6 +124,16 @@ _HISTORY_COVERAGE_STATUSES = {"complete", "partial", "missing"}
 _HISTORY_COVERAGE_CACHE_TTL_SECONDS = 300
 _HISTORY_COVERAGE_CACHE_LOCK = threading.Lock()
 _HISTORY_COVERAGE_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_HISTORY_MARKET_EXPECTATION_CACHE_TTL_SECONDS = 300
+_HISTORY_MARKET_EXPECTATION_CACHE_LOCK = threading.Lock()
+_HISTORY_MARKET_EXPECTATION_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_HISTORY_MARKET_EXPECTATION_ANCHORS: Dict[str, Tuple[str, ...]] = {
+    "US": ("AAPL.US", "SPY.US", "QQQ.US", "NVDA.US"),
+    "CN": ("000001.SH", "399001.SZ", "510300.SH", "510050.SH"),
+    "HK": ("00700.HK", "2800.HK", "09988.HK", "00005.HK"),
+}
+_READ_MODEL_TABLE_EXISTS_CACHE_LOCK = threading.Lock()
+_READ_MODEL_TABLE_EXISTS_CACHE: Dict[str, bool] = {}
 _HISTORY_BACKFILL_LOCK = threading.Lock()
 _HISTORY_BACKFILL_SYMBOLS: set[str] = set()
 _LIVE_MARKET_CACHE_LOCK = threading.Lock()
@@ -247,11 +264,21 @@ def _build_stock_pool_meta(
 
 
 def _read_model_table_exists(table_name: str) -> bool:
+    normalized_table_name = str(table_name or "").strip()
+    if not normalized_table_name:
+        return False
+    with _READ_MODEL_TABLE_EXISTS_CACHE_LOCK:
+        if _READ_MODEL_TABLE_EXISTS_CACHE.get(normalized_table_name):
+            return True
     row = DbUtil.fetch_one(
         "SELECT 1 AS present FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = %s",
-        (str(table_name or "").strip(),),
+        (normalized_table_name,),
     )
-    return bool(row)
+    exists = bool(row)
+    if exists:
+        with _READ_MODEL_TABLE_EXISTS_CACHE_LOCK:
+            _READ_MODEL_TABLE_EXISTS_CACHE[normalized_table_name] = True
+    return exists
 
 
 def _normalize_history_coverage_status(raw_value: str) -> str:
@@ -329,6 +356,154 @@ def _build_history_coverage_universe_sql() -> str:
             """
         )
     return "\nUNION ALL\n".join(clauses)
+
+
+def _empty_history_coverage_payload(start_date: date) -> Dict[str, Any]:
+    return {
+        "summary": {
+            "expectedStart": start_date.isoformat(),
+            "expectedEnd": None,
+            "markets": [],
+            "filteredTotal": 0,
+            "counts": {key: 0 for key in sorted(_HISTORY_COVERAGE_STATUSES)},
+            "totalRows": 0,
+            "totalMissingDays": 0,
+            "lastUpdated": None,
+        },
+        "items": [],
+        "total": 0,
+    }
+
+
+def _normalize_exact_history_coverage_symbol(search: str) -> Tuple[str, bool]:
+    search_value = str(search or "").strip()
+    if not search_value:
+        return "", False
+    if "." not in search_value and not re.fullmatch(r"[A-Za-z0-9\-]{1,16}", search_value):
+        return "", False
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(search_value)
+    if not re.fullmatch(r"[A-Z0-9.\-]{1,32}\.(US|HK|SH|SZ|BJ)", normalized_symbol):
+        return "", False
+    return normalized_symbol, "." in search_value
+
+
+def _coerce_history_coverage_date(value: Any) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _load_exact_history_coverage_universe_rows(symbol: str) -> List[Dict[str, Any]]:
+    table_configs = iter_stock_pool_tables("all")
+    rows: List[Dict[str, Any]] = []
+    for table_config in table_configs:
+        table_name = str(table_config.get("table") or "").strip()
+        name_field = str(table_config.get("name_field") or "").strip()
+        market = str(table_config.get("market") or "").strip().upper()
+        asset_type = str(table_config.get("type") or "").strip().lower()
+        if not table_name or not name_field or not market or not _read_model_table_exists(table_name):
+            continue
+        priority = 0 if asset_type == "stock" else 1
+        table_rows = DbUtil.fetch_all(
+            f"""
+            SELECT
+                symbol,
+                COALESCE(NULLIF(TRIM({name_field}), ''), symbol) AS display_name,
+                '{market}' AS market,
+                updated_at AS universe_updated_at,
+                {priority} AS source_priority
+            FROM {table_name}
+            WHERE is_active = 1
+              AND (user_id = 1 OR user_id IS NULL)
+              AND symbol = %s
+            ORDER BY
+                CASE WHEN user_id = 1 THEN 0 ELSE 1 END ASC,
+                updated_at DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        ) or []
+        rows.extend(table_rows)
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            int(row.get("source_priority") or 0),
+            str(row.get("market") or ""),
+            str(row.get("symbol") or ""),
+        ),
+    )
+
+
+def _get_history_market_expectation(*, start_date: date, market: str) -> Dict[str, Any]:
+    normalized_market = str(market or "").strip().upper()
+    if not normalized_market:
+        return {}
+
+    cache_key = (start_date.isoformat(), normalized_market)
+    now = time.monotonic()
+    with _HISTORY_MARKET_EXPECTATION_CACHE_LOCK:
+        cached = _HISTORY_MARKET_EXPECTATION_CACHE.get(cache_key)
+        if cached and float(cached.get("expires_at") or 0.0) > now:
+            return copy.deepcopy(cached.get("payload") or {})
+
+    history_table = HistoricalMarketDataService.TABLE_NAME
+    anchors = _HISTORY_MARKET_EXPECTATION_ANCHORS.get(normalized_market, ())
+    row: Dict[str, Any] = {}
+    if anchors:
+        placeholders = ", ".join(["%s"] * len(anchors))
+        row = DbUtil.fetch_one(
+            f"""
+            SELECT
+                market,
+                MIN(trade_date) AS expected_start_trade_date,
+                MAX(trade_date) AS expected_end,
+                COUNT(DISTINCT trade_date) AS expected_days
+            FROM (
+                SELECT market, trade_date
+                FROM {history_table} FORCE INDEX (idx_symbol_date)
+                WHERE symbol IN ({placeholders})
+                  AND market = %s
+                  AND trade_date >= %s
+            ) AS anchor_trade_dates
+            GROUP BY market
+            """,
+            (*anchors, normalized_market, start_date),
+        ) or {}
+    if not row:
+        row = DbUtil.fetch_one(
+            f"""
+        SELECT
+            market,
+            MIN(trade_date) AS expected_start_trade_date,
+            MAX(trade_date) AS expected_end,
+            COUNT(DISTINCT trade_date) AS expected_days
+        FROM {history_table} FORCE INDEX (idx_market_date)
+        WHERE market = %s
+          AND trade_date >= %s
+        GROUP BY market
+        """,
+            (normalized_market, start_date),
+        ) or {}
+    payload = {
+        "market": row.get("market") or normalized_market,
+        "expected_start_trade_date": row.get("expected_start_trade_date"),
+        "expected_end": row.get("expected_end"),
+        "expected_days": int(row.get("expected_days") or 0),
+    }
+    with _HISTORY_MARKET_EXPECTATION_CACHE_LOCK:
+        _HISTORY_MARKET_EXPECTATION_CACHE[cache_key] = {
+            "expires_at": now + _HISTORY_MARKET_EXPECTATION_CACHE_TTL_SECONDS,
+            "payload": copy.deepcopy(payload),
+        }
+    return payload
 
 
 def _build_history_coverage_sql(
@@ -458,6 +633,154 @@ def _build_history_coverage_sql(
     return select_sql, tuple(params)
 
 
+def _load_exact_history_coverage_payload(
+    *,
+    start_date: date,
+    search: str,
+    status: str,
+    page: int,
+    page_size: int,
+) -> Optional[Dict[str, Any]]:
+    exact_symbol, explicit_market_suffix = _normalize_exact_history_coverage_symbol(search)
+    if not exact_symbol:
+        return None
+
+    universe_rows = _load_exact_history_coverage_universe_rows(exact_symbol)
+    if not universe_rows:
+        if explicit_market_suffix:
+            return _empty_history_coverage_payload(start_date)
+        return None
+
+    target_universe = universe_rows[0]
+    target_market = str(target_universe.get("market") or "").strip().upper()
+    history_table = HistoricalMarketDataService.TABLE_NAME
+    history_row = DbUtil.fetch_one(
+        f"""
+        SELECT
+            history.symbol,
+            history.market,
+            MIN(history.trade_date) AS first_date,
+            MAX(history.trade_date) AS latest_date,
+            COUNT(*) AS row_count,
+            MAX(history.updated_at) AS last_updated
+        FROM {history_table} history
+        WHERE history.symbol = %s
+          AND history.market = %s
+          AND history.trade_date >= %s
+        GROUP BY history.symbol, history.market
+        """,
+        (exact_symbol, target_market, start_date),
+    ) or {}
+    expectation_row = _get_history_market_expectation(start_date=start_date, market=target_market)
+
+    row_count = int(history_row.get("row_count") or 0)
+    expected_days = int(expectation_row.get("expected_days") or 0)
+    first_date = _coerce_history_coverage_date(history_row.get("first_date"))
+    latest_date = _coerce_history_coverage_date(history_row.get("latest_date"))
+    expected_first_trade_date = _coerce_history_coverage_date(expectation_row.get("expected_start_trade_date"))
+    expected_end = _coerce_history_coverage_date(expectation_row.get("expected_end"))
+    if row_count <= 0:
+        coverage_status = "missing"
+    elif (
+        expected_days > 0
+        and row_count >= expected_days
+        and first_date is not None
+        and latest_date is not None
+        and expected_first_trade_date is not None
+        and expected_end is not None
+        and first_date <= expected_first_trade_date
+        and latest_date >= expected_end
+    ):
+        coverage_status = "complete"
+    else:
+        coverage_status = "partial"
+    missing_days = max(expected_days - row_count, 0)
+    coverage_rows = [
+        {
+            "symbol": target_universe.get("symbol"),
+            "name": target_universe.get("display_name") or target_universe.get("symbol"),
+            "market": target_market,
+            "first_date": history_row.get("first_date"),
+            "latest_date": history_row.get("latest_date"),
+            "row_count": row_count,
+            "expected_start": start_date,
+            "expected_start_trade_date": expectation_row.get("expected_start_trade_date"),
+            "expected_end": expectation_row.get("expected_end"),
+            "expected_days": expected_days,
+            "status": coverage_status,
+            "missing_days": missing_days,
+            "last_updated": history_row.get("last_updated") or target_universe.get("universe_updated_at"),
+        }
+    ]
+
+    status_value = _normalize_history_coverage_status(status)
+    filtered_rows = [
+        row
+        for row in coverage_rows
+        if not status_value or str(row.get("status") or "").strip().lower() == status_value
+    ]
+    total = len(filtered_rows)
+    offset = max(int(page) - 1, 0) * int(page_size)
+    item_rows = filtered_rows[offset : offset + int(page_size)]
+
+    counts = {key: 0 for key in sorted(_HISTORY_COVERAGE_STATUSES)}
+    total_rows = 0
+    total_missing_days = 0
+    expected_end_values: List[Any] = []
+    last_updated_values: List[Any] = []
+    for row in filtered_rows:
+        row_status = str(row.get("status") or "missing").strip().lower()
+        counts[row_status if row_status in counts else "missing"] += 1
+        total_rows += int(row.get("row_count") or 0)
+        total_missing_days += int(row.get("missing_days") or 0)
+        if row.get("expected_end") not in (None, ""):
+            expected_end_values.append(row.get("expected_end"))
+        if row.get("last_updated") not in (None, ""):
+            last_updated_values.append(row.get("last_updated"))
+
+    markets = [
+        {
+            "market": target_market,
+            "expectedStart": start_date.isoformat(),
+            "expectedFirstTradeDate": _isoformat_optional(expectation_row.get("expected_start_trade_date")),
+            "expectedEnd": _isoformat_optional(expectation_row.get("expected_end")),
+            "expectedDays": expected_days,
+        }
+    ]
+
+    items = [
+        {
+            "symbol": row.get("symbol"),
+            "name": row.get("name") or row.get("symbol"),
+            "market": row.get("market"),
+            "firstDate": _isoformat_optional(row.get("first_date")),
+            "latestDate": _isoformat_optional(row.get("latest_date")),
+            "rowCount": int(row.get("row_count") or 0),
+            "expectedStart": _isoformat_optional(row.get("expected_start")),
+            "expectedEnd": _isoformat_optional(row.get("expected_end")),
+            "status": row.get("status") or "missing",
+            "missingDays": int(row.get("missing_days") or 0),
+            "lastUpdated": _isoformat_optional(row.get("last_updated")),
+        }
+        for row in item_rows
+    ]
+
+    return {
+        "summary": {
+            "expectedStart": start_date.isoformat(),
+            "expectedEnd": _isoformat_optional(max(expected_end_values)) if expected_end_values else None,
+            "markets": markets,
+            "filteredTotal": total,
+            "counts": counts,
+            "totalRows": total_rows,
+            "totalMissingDays": total_missing_days,
+            "lastUpdated": _isoformat_optional(max(last_updated_values)) if last_updated_values else None,
+        },
+        "items": items,
+        "total": total,
+    }
+
+
 def _load_history_coverage_market_rows(*, start_date: date, search: str) -> List[Dict[str, Any]]:
     universe_sql = _build_history_coverage_universe_sql()
     if not universe_sql:
@@ -535,26 +858,23 @@ def _load_history_coverage_payload(
     page: int,
     page_size: int,
 ) -> Dict[str, Any]:
+    exact_payload = _load_exact_history_coverage_payload(
+        start_date=start_date,
+        search=search,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    if exact_payload is not None:
+        return exact_payload
+
     coverage_sql, coverage_params = _build_history_coverage_sql(
         start_date=start_date,
         search=search,
         status=status,
     )
     if not coverage_sql:
-        return {
-            "summary": {
-                "expectedStart": start_date.isoformat(),
-                "expectedEnd": None,
-                "markets": [],
-                "filteredTotal": 0,
-                "counts": {key: 0 for key in sorted(_HISTORY_COVERAGE_STATUSES)},
-                "totalRows": 0,
-                "totalMissingDays": 0,
-                "lastUpdated": None,
-            },
-            "items": [],
-            "total": 0,
-        }
+        return _empty_history_coverage_payload(start_date)
 
     offset = max(int(page) - 1, 0) * int(page_size)
     item_rows = DbUtil.fetch_all(
@@ -691,6 +1011,8 @@ def _set_history_coverage_cache(cache_key: Tuple[Any, ...], payload: Dict[str, A
 def _clear_history_coverage_cache() -> None:
     with _HISTORY_COVERAGE_CACHE_LOCK:
         _HISTORY_COVERAGE_CACHE.clear()
+    with _HISTORY_MARKET_EXPECTATION_CACHE_LOCK:
+        _HISTORY_MARKET_EXPECTATION_CACHE.clear()
 
 
 def _parse_date(raw_value: Optional[str], field_name: str) -> Optional[date]:

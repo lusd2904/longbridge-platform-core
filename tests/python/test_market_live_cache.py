@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -218,3 +219,144 @@ def test_history_backfill_endpoint_releases_lock_when_backfill_fails(monkeypatch
 
     with market_service._HISTORY_BACKFILL_LOCK:
         assert market_service._HISTORY_BACKFILL_SYMBOLS == set()
+
+
+def test_history_coverage_exact_symbol_uses_fast_path(monkeypatch) -> None:
+    captured_calls = []
+
+    def fail_full_coverage_sql(**_kwargs):
+        raise AssertionError("exact symbol coverage should not build the full-market query")
+
+    def fake_exact_universe_rows(symbol):
+        assert symbol == "NVDL.US"
+        return [
+            {
+                "symbol": "NVDL.US",
+                "display_name": "GraniteShares 2x Long NVDA Daily ETF",
+                "market": "US",
+                "universe_updated_at": datetime(2024, 5, 20, 15, 0, 0),
+                "source_priority": 1,
+            }
+        ]
+
+    def fake_fetch_one(sql, params):
+        captured_calls.append((sql, params))
+        return {
+            "symbol": "NVDL.US",
+            "market": "US",
+            "first_date": date(2024, 1, 2),
+            "latest_date": date(2024, 5, 20),
+            "row_count": 98,
+            "last_updated": datetime(2024, 5, 20, 15, 30, 0),
+        }
+
+    def fake_market_expectation(**kwargs):
+        assert kwargs == {"start_date": date(2024, 1, 1), "market": "US"}
+        return {
+            "market": "US",
+            "expected_start_trade_date": date(2024, 1, 2),
+            "expected_end": date(2024, 5, 20),
+            "expected_days": 98,
+        }
+
+    monkeypatch.setattr(market_service, "_build_history_coverage_sql", fail_full_coverage_sql)
+    monkeypatch.setattr(market_service, "_load_exact_history_coverage_universe_rows", fake_exact_universe_rows)
+    monkeypatch.setattr(market_service, "_get_history_market_expectation", fake_market_expectation)
+    monkeypatch.setattr(market_service.DbUtil, "fetch_one", fake_fetch_one)
+
+    payload = market_service._load_history_coverage_payload(
+        start_date=date(2024, 1, 1),
+        search="nvdl.us",
+        status="",
+        page=1,
+        page_size=20,
+    )
+
+    assert len(captured_calls) == 1
+    assert captured_calls[0][1] == ("NVDL.US", "US", date(2024, 1, 1))
+    assert payload["total"] == 1
+    assert payload["summary"]["filteredTotal"] == 1
+    assert payload["summary"]["counts"] == {"complete": 1, "missing": 0, "partial": 0}
+    assert payload["summary"]["markets"] == [
+        {
+            "market": "US",
+            "expectedStart": "2024-01-01",
+            "expectedFirstTradeDate": "2024-01-02",
+            "expectedEnd": "2024-05-20",
+            "expectedDays": 98,
+        }
+    ]
+    assert payload["items"][0]["symbol"] == "NVDL.US"
+    assert payload["items"][0]["status"] == "complete"
+
+
+def test_history_coverage_bare_symbol_uses_fast_path_when_universe_matches(monkeypatch) -> None:
+    calls = []
+
+    def fail_full_coverage_sql(**_kwargs):
+        raise AssertionError("bare symbol with a universe match should not build the full-market query")
+
+    def fake_exact_universe_rows(symbol):
+        assert symbol == "NVDL.US"
+        return [
+            {
+                "symbol": "NVDL.US",
+                "display_name": "NVDL",
+                "market": "US",
+                "universe_updated_at": datetime(2024, 5, 20, 15, 0, 0),
+                "source_priority": 1,
+            }
+        ]
+
+    def fake_fetch_one(sql, params):
+        calls.append((sql, params))
+        return {"symbol": "NVDL.US", "market": "US", "row_count": 0}
+
+    monkeypatch.setattr(market_service, "_build_history_coverage_sql", fail_full_coverage_sql)
+    monkeypatch.setattr(market_service, "_load_exact_history_coverage_universe_rows", fake_exact_universe_rows)
+    monkeypatch.setattr(
+        market_service,
+        "_get_history_market_expectation",
+        lambda **_kwargs: {"market": "US", "expected_days": 5},
+    )
+    monkeypatch.setattr(market_service.DbUtil, "fetch_one", fake_fetch_one)
+
+    payload = market_service._load_history_coverage_payload(
+        start_date=date(2024, 1, 1),
+        search="NVDL",
+        status="",
+        page=1,
+        page_size=20,
+    )
+
+    assert len(calls) == 1
+    assert payload["total"] == 1
+    assert payload["items"][0]["symbol"] == "NVDL.US"
+    assert payload["items"][0]["status"] == "missing"
+
+
+def test_history_coverage_name_search_keeps_full_query_path(monkeypatch) -> None:
+    calls = []
+
+    def fake_build_history_coverage_sql(**kwargs):
+        calls.append(kwargs)
+        return "", ()
+
+    monkeypatch.setattr(market_service, "_build_history_coverage_sql", fake_build_history_coverage_sql)
+
+    payload = market_service._load_history_coverage_payload(
+        start_date=date(2024, 1, 1),
+        search="英伟达",
+        status="",
+        page=1,
+        page_size=20,
+    )
+
+    assert calls == [
+        {
+            "start_date": date(2024, 1, 1),
+            "search": "英伟达",
+            "status": "",
+        }
+    ]
+    assert payload["total"] == 0
