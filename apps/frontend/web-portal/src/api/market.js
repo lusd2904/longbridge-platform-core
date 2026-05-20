@@ -19,6 +19,7 @@ export {
   getMarketHistoryCoverage,
   getMarketHistoryBackfillStatus,
   getMarketHistoryCompare,
+  runMarketHistoryBackfill,
   getMarketOverview,
   getMarketQuotes,
   getQuoteSnapshots,

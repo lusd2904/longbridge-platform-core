@@ -410,7 +410,18 @@ const SERVICE_PREFIX = {
 }
 
 const buildServicePath = (service, path) => `${SERVICE_PREFIX[service]}${path}`
-const serviceGet = (service, path, params = {}) => request.get(buildServicePath(service, path), params)
+const normalizeGetConfig = (params = {}) => {
+  if (
+    params &&
+    typeof params === 'object' &&
+    !Array.isArray(params) &&
+    Object.prototype.hasOwnProperty.call(params, 'params')
+  ) {
+    return params
+  }
+  return { params }
+}
+const serviceGet = (service, path, params = {}) => request.get(buildServicePath(service, path), normalizeGetConfig(params))
 const servicePost = (service, path, data = {}) => request.post(buildServicePath(service, path), data)
 const servicePut = (service, path, data = {}) => request.put(buildServicePath(service, path), data)
 const serviceDelete = (service, path) => request.delete(buildServicePath(service, path))
@@ -1727,7 +1738,7 @@ export const getMarketHistory = async (params = {}) => {
 }
 export const getMarketHistoryCoverage = async (params = {}) => {
   try {
-    return await request.get('/svc/market/api/v1/market/history/coverage', params)
+    return await request.get('/svc/market/api/v1/market/history/coverage', { params })
   } catch (error) {
     const status = Number(error?.response?.status || 0)
     const message = String(error?.message || '').toLowerCase()
@@ -1738,6 +1749,7 @@ export const getMarketHistoryCoverage = async (params = {}) => {
     return serviceGet('market', '/api/v1/market/history/backfill-status', params)
   }
 }
+export const runMarketHistoryBackfill = (data = {}) => servicePost('market', '/api/v1/market/history/backfill', data)
 export const getMarketHistoryCompare = async (params = {}) => {
   const res = await serviceGet('market', '/api/v1/market/history/compare', params)
   return {

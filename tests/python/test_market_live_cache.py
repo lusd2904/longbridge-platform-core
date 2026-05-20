@@ -107,3 +107,114 @@ def test_live_snapshot_reuses_component_cache(monkeypatch) -> None:
         ("depth", "AAPL.US"),
         ("trades", "AAPL.US", 18),
     ])
+
+
+def test_history_backfill_endpoint_runs_single_symbol_and_clears_cache(monkeypatch) -> None:
+    calls = []
+
+    def fake_backfill_symbol_history(**kwargs):
+        calls.append(kwargs)
+        return {
+            "complete": True,
+            "savedCount": 3,
+            "fetchedRanges": [{"startDate": "2024-01-01", "endDate": "2024-01-03", "savedCount": 3}],
+        }
+
+    monkeypatch.setattr(
+        market_service.HistoricalMarketDataService,
+        "backfill_symbol_history",
+        fake_backfill_symbol_history,
+    )
+    with market_service._HISTORY_COVERAGE_CACHE_LOCK:
+        market_service._HISTORY_COVERAGE_CACHE.clear()
+        market_service._HISTORY_COVERAGE_CACHE[("history-coverage", "fixture")] = {
+            "expires_at": time.time() + 60,
+            "payload": {"items": [{"symbol": "NVDL.US"}]},
+        }
+
+    payload = market_service.asyncio.run(
+        market_service.market_history_backfill(
+            payload={"symbol": "nvdl.us", "startDate": "2024-01-01", "endDate": "2024-01-03"},
+            session={"user_id": 7},
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["data"]["symbol"] == "NVDL.US"
+    assert payload["data"]["savedCount"] == 3
+    assert calls == [
+        {
+            "symbol": "NVDL.US",
+            "start_date": market_service.date(2024, 1, 1),
+            "end_date": market_service.date(2024, 1, 3),
+            "user_id": 7,
+        }
+    ]
+    with market_service._HISTORY_COVERAGE_CACHE_LOCK:
+        assert market_service._HISTORY_COVERAGE_CACHE == {}
+
+
+def test_history_backfill_endpoint_rejects_invalid_range() -> None:
+    try:
+        market_service.asyncio.run(
+            market_service.market_history_backfill(
+                payload={"symbol": "NVDL.US", "startDate": "2024-02-01", "endDate": "2024-01-01"},
+                session={"user_id": 1},
+            )
+        )
+    except market_service.HTTPException as exc:
+        assert exc.status_code == 400
+        assert "endDate" in exc.detail
+    else:
+        raise AssertionError("expected HTTPException for invalid backfill range")
+
+
+def test_history_backfill_endpoint_rejects_duplicate_symbol(monkeypatch) -> None:
+    with market_service._HISTORY_BACKFILL_LOCK:
+        market_service._HISTORY_BACKFILL_SYMBOLS.clear()
+        market_service._HISTORY_BACKFILL_SYMBOLS.add("NVDL.US")
+
+    try:
+        try:
+            market_service.asyncio.run(
+                market_service.market_history_backfill(
+                    payload={"symbol": "NVDL.US"},
+                    session={"user_id": 1},
+                )
+            )
+        except market_service.HTTPException as exc:
+            assert exc.status_code == 409
+            assert "正在补价" in exc.detail
+        else:
+            raise AssertionError("expected HTTPException for duplicate backfill")
+    finally:
+        with market_service._HISTORY_BACKFILL_LOCK:
+            market_service._HISTORY_BACKFILL_SYMBOLS.clear()
+
+
+def test_history_backfill_endpoint_releases_lock_when_backfill_fails(monkeypatch) -> None:
+    def fail_backfill_symbol_history(**_kwargs):
+        raise RuntimeError("skshare unavailable")
+
+    monkeypatch.setattr(
+        market_service.HistoricalMarketDataService,
+        "backfill_symbol_history",
+        fail_backfill_symbol_history,
+    )
+    with market_service._HISTORY_BACKFILL_LOCK:
+        market_service._HISTORY_BACKFILL_SYMBOLS.clear()
+
+    try:
+        market_service.asyncio.run(
+            market_service.market_history_backfill(
+                payload={"symbol": "NVDL.US"},
+                session={"user_id": 1},
+            )
+        )
+    except RuntimeError as exc:
+        assert "skshare unavailable" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError from backfill service")
+
+    with market_service._HISTORY_BACKFILL_LOCK:
+        assert market_service._HISTORY_BACKFILL_SYMBOLS == set()

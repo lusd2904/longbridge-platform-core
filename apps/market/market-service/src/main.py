@@ -117,6 +117,8 @@ _HISTORY_COVERAGE_STATUSES = {"complete", "partial", "missing"}
 _HISTORY_COVERAGE_CACHE_TTL_SECONDS = 300
 _HISTORY_COVERAGE_CACHE_LOCK = threading.Lock()
 _HISTORY_COVERAGE_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_HISTORY_BACKFILL_LOCK = threading.Lock()
+_HISTORY_BACKFILL_SYMBOLS: set[str] = set()
 _LIVE_MARKET_CACHE_LOCK = threading.Lock()
 _LIVE_MARKET_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 
@@ -684,6 +686,11 @@ def _set_history_coverage_cache(cache_key: Tuple[Any, ...], payload: Dict[str, A
             "payload": cached_payload,
         }
     return copy.deepcopy(cached_payload)
+
+
+def _clear_history_coverage_cache() -> None:
+    with _HISTORY_COVERAGE_CACHE_LOCK:
+        _HISTORY_COVERAGE_CACHE.clear()
 
 
 def _parse_date(raw_value: Optional[str], field_name: str) -> Optional[date]:
@@ -1612,6 +1619,63 @@ async def market_history_coverage(
             total=total,
             summary=summary,
         ),
+    }
+
+
+@app.post("/api/v1/market/history/backfill")
+async def market_history_backfill(
+    payload: Optional[Dict[str, Any]] = Body(default=None),
+    session: dict = Depends(get_current_session),
+):
+    body = payload if isinstance(payload, dict) else {}
+    raw_symbol = str(body.get("symbol") or body.get("code") or "").strip()
+    if not raw_symbol:
+        raise HTTPException(status_code=400, detail="symbol 不能为空")
+
+    start_date = _parse_date(
+        body.get("startDate") or body.get("start_date"),
+        "startDate",
+    ) or _HISTORY_COVERAGE_START_DATE
+    end_date = _parse_date(
+        body.get("endDate") or body.get("end_date"),
+        "endDate",
+    ) or date.today()
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="endDate 不能早于 startDate")
+
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(raw_symbol)
+    with _HISTORY_BACKFILL_LOCK:
+        if normalized_symbol in _HISTORY_BACKFILL_SYMBOLS:
+            raise HTTPException(status_code=409, detail=f"{normalized_symbol} 正在补价，请稍后刷新")
+        _HISTORY_BACKFILL_SYMBOLS.add(normalized_symbol)
+
+    try:
+        result = await asyncio.to_thread(
+            HistoricalMarketDataService.backfill_symbol_history,
+            symbol=normalized_symbol,
+            start_date=start_date,
+            end_date=end_date,
+            user_id=int(session["user_id"]),
+        )
+        _clear_history_coverage_cache()
+    finally:
+        with _HISTORY_BACKFILL_LOCK:
+            _HISTORY_BACKFILL_SYMBOLS.discard(normalized_symbol)
+
+    return {
+        "success": True,
+        "data": {
+            "symbol": normalized_symbol,
+            "startDate": start_date.isoformat(),
+            "endDate": end_date.isoformat(),
+            **(result if isinstance(result, dict) else {"result": result}),
+        },
+        "meta": {
+            "readModel": "market-history-coverage",
+            "operation": "single-symbol-backfill",
+            "dataSource": "skshare-backfill",
+            "cacheInvalidated": True,
+        },
     }
 
 

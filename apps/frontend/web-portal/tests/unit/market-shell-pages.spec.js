@@ -37,6 +37,13 @@ const marketApiMocks = vi.hoisted(() => ({
         filteredTotal: 3,
         totalRows: 1280,
         lastUpdated: '2026-05-20T00:41:56',
+        markets: [
+          {
+            market: 'US',
+            expectedEnd: '2026-05-19',
+            expectedDays: 612
+          }
+        ],
         counts: {
           complete: 1,
           partial: 1,
@@ -54,9 +61,27 @@ const marketApiMocks = vi.hoisted(() => ({
           missingDays: 0,
           status: 'complete',
           lastUpdated: '2026-05-20T00:41:56'
+        },
+        {
+          symbol: 'TSLA.US',
+          name: 'Tesla',
+          market: 'US',
+          firstDate: '2024-01-03',
+          latestDate: '2026-05-18',
+          rowCount: 590,
+          missingDays: 22,
+          status: 'partial',
+          lastUpdated: '2026-05-20T00:30:00'
         }
       ],
       total: 3
+    }
+  })),
+  runMarketHistoryBackfill: vi.fn(async () => ({
+    data: {
+      symbol: 'TSLA.US',
+      savedCount: 22,
+      fetchedRanges: [{ startDate: '2024-01-01', endDate: '2026-05-19', savedCount: 22 }]
     }
   })),
   getMarketHistoryCompare: vi.fn(async () => ({
@@ -576,5 +601,53 @@ describe('market shell pages', () => {
     expect(wrapper.text()).toContain('66.7%')
     expect(wrapper.text()).toContain('NVDL.US')
     expect(wrapper.text()).toContain('610')
+    expect(wrapper.text()).toContain('待补优先')
+    expect(wrapper.text()).toContain('TSLA.US')
+    expect(wrapper.text()).toContain('22')
+    expect(marketApiMocks.getMarketHistoryCoverage).toHaveBeenCalledWith(expect.objectContaining({
+      page: 1,
+      page_size: 100
+    }))
+  })
+
+  it('runs a single-symbol history backfill from the coverage page', async () => {
+    marketApiMocks.getMarketHistoryCoverage.mockClear()
+    marketApiMocks.runMarketHistoryBackfill.mockClear()
+    const wrapper = mount(HistoryCoverage, {
+      global: {
+        ...mountOptions.global,
+        stubs: {
+          ...mountOptions.global.stubs,
+          PageHero: {
+            props: ['title', 'metrics'],
+            template: '<section><h1>{{ title }}</h1><div v-for="metric in metrics" :key="metric.label">{{ metric.label }} {{ metric.value }}</div><slot name="actions" /></section>'
+          },
+          MetricStrip: {
+            props: ['items'],
+            template: '<section><div v-for="item in items" :key="item.label">{{ item.label }} {{ item.value }}</div></section>'
+          },
+          SectionCardHeader: {
+            props: ['title', 'badge'],
+            template: '<header>{{ title }} {{ badge }}</header>'
+          },
+          'el-table': {
+            props: ['data'],
+            template: '<div class="el-table"><div v-for="row in data" :key="row.symbol" class="el-table__row">{{ row.symbol }} {{ row.rowCount }} {{ row.missingEstimate }}</div><slot /></div>'
+          }
+        }
+      }
+    })
+    await flushPromises()
+
+    const partialRow = wrapper.vm.tableRows.find((row) => row.symbol === 'TSLA.US')
+    await wrapper.vm.backfillRow(partialRow)
+    await flushPromises()
+
+    expect(marketApiMocks.runMarketHistoryBackfill).toHaveBeenCalledWith({
+      symbol: 'TSLA.US',
+      startDate: '2024-01-01',
+      endDate: '2026-05-19'
+    })
+    expect(marketApiMocks.getMarketHistoryCoverage).toHaveBeenCalledTimes(2)
   })
 })

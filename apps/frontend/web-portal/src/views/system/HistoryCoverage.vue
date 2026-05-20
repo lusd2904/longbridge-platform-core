@@ -30,11 +30,60 @@
 
     <MetricStrip :items="summaryMetrics" />
 
+    <div class="coverage-focus-grid">
+      <el-card class="glass-card focus-card">
+        <template #header>
+          <SectionCardHeader
+            title="待补优先"
+            :badge="`${repairableRows.length} 个`"
+          />
+        </template>
+        <div v-if="repairableRows.length" class="gap-list">
+          <button
+            v-for="row in topGapRows"
+            :key="row.id"
+            type="button"
+            class="gap-item"
+            :disabled="isBackfillRunning(row)"
+            @click="backfillRow(row)"
+          >
+            <span>
+              <strong>{{ row.symbol }}</strong>
+              <small>{{ row.statusLabel }} · 缺 {{ formatCount(row.missingEstimate) }}</small>
+            </span>
+            <em>{{ isBackfillRunning(row) ? '补齐中' : '补齐' }}</em>
+          </button>
+        </div>
+        <div v-else class="compact-empty">当前筛选内无待补标的</div>
+      </el-card>
+
+      <el-card class="glass-card focus-card">
+        <template #header>
+          <SectionCardHeader
+            title="市场基准"
+            :badge="summaryMarkets.length ? `${summaryMarkets.length} 个市场` : '未生成'"
+          />
+        </template>
+        <div v-if="summaryMarkets.length" class="market-baseline-list">
+          <div
+            v-for="item in summaryMarkets"
+            :key="item.market"
+            class="market-baseline-item"
+          >
+            <span>{{ item.marketLabel }}</span>
+            <strong>{{ item.expectedEnd || '--' }}</strong>
+            <small>{{ formatCount(item.expectedDays) }} 日</small>
+          </div>
+        </div>
+        <div v-else class="compact-empty">等待覆盖快照</div>
+      </el-card>
+    </div>
+
     <el-card class="glass-card table-card">
       <template #header>
         <SectionCardHeader
           title="覆盖明细"
-          :badge="`${filteredRows.length} / ${tableRows.length}`"
+          :badge="`${filteredRows.length} / ${formatCount(totalRows)}`"
         />
       </template>
 
@@ -69,9 +118,12 @@
             {{ formatCount(row.rowCount) }}
           </template>
         </el-table-column>
-        <el-table-column prop="missingEstimate" label="缺失估算" width="112" align="right">
+        <el-table-column prop="missingEstimate" label="缺失估算" min-width="136" align="right">
           <template #default="{ row }">
-            {{ formatCount(row.missingEstimate) }}
+            <div class="missing-cell">
+              <strong>{{ formatCount(row.missingEstimate) }}</strong>
+              <span>{{ row.gapSummary }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="112">
@@ -87,7 +139,33 @@
           </template>
         </el-table-column>
         <el-table-column prop="updatedAt" label="更新时间" min-width="164" />
+        <el-table-column label="操作" width="118" fixed="right" align="right">
+          <template #default="{ row }">
+            <el-button
+              class="repair-button"
+              size="small"
+              :loading="isBackfillRunning(row)"
+              :disabled="!canBackfill(row)"
+              @click="backfillRow(row)"
+            >
+              {{ row.statusKey === 'complete' ? '已完整' : '补齐' }}
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
+
+      <div class="pagination-row">
+        <el-pagination
+          background
+          layout="total, sizes, prev, pager, next"
+          :total="totalRows"
+          :current-page="currentPage"
+          :page-size="pageSize"
+          :page-sizes="pageSizes"
+          @current-change="handlePageChange"
+          @size-change="handlePageSizeChange"
+        />
+      </div>
     </el-card>
   </div>
 </template>
@@ -95,7 +173,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getMarketHistoryCoverage } from '../../api/market.js'
+import { getMarketHistoryCoverage, runMarketHistoryBackfill } from '../../api/market.js'
 import { formatDecimal, formatPercent as formatPercentValue } from '../../utils/formatters.js'
 import MetricStrip from '../../components/common/MetricStrip.vue'
 import PageHero from '../../components/common/PageHero.vue'
@@ -106,6 +184,11 @@ const keyword = ref('')
 const statusFilter = ref('all')
 const summary = ref({})
 const tableRows = ref([])
+const totalRows = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(100)
+const pageSizes = [50, 100, 200]
+const backfillLoadingSymbols = ref(new Set())
 
 const MARKET_LABEL_MAP = {
   US: '美股',
@@ -160,7 +243,7 @@ const estimateCoverageRate = (item = {}) => {
 }
 
 const deriveMissingEstimate = (item = {}) => {
-  const explicit = item.missingEstimate ?? item.missingRows ?? item.missingCount ?? item.missingDays
+  const explicit = item.missingEstimate ?? item.missingRows ?? item.missingCount ?? item.missingDays ?? item.missing_days
   if (explicit !== null && explicit !== undefined && explicit !== '') {
     return Math.max(toNumber(explicit, 0), 0)
   }
@@ -211,6 +294,7 @@ const normalizeSummary = (payload = {}) => {
       backfillStartDate: backendSummary.expectedStart || task.backfillStartDate,
       ...task
     },
+    markets: Array.isArray(backendSummary.markets) ? backendSummary.markets : [],
     items
   }
 }
@@ -232,6 +316,9 @@ const normalizeRow = (item = {}, index = 0, fallback = {}) => {
     endDate: item.endDate || item.rangeEndDate || item.latestDate || fallback.latestTradeDate || '--',
     rowCount,
     missingEstimate,
+    expectedStart: item.expectedStart || item.expected_start || fallback.task?.backfillStartDate || '--',
+    expectedEnd: item.expectedEnd || item.expected_end || fallback.latestTradeDate || '',
+    gapSummary: buildGapSummary(item, missingEstimate),
     statusKey,
     statusLabel: statusMeta.label,
     statusType: statusMeta.type,
@@ -239,6 +326,17 @@ const normalizeRow = (item = {}, index = 0, fallback = {}) => {
     coverageTone: statusMeta.tone,
     updatedAt: item.updatedAt || item.lastUpdated || item.lastUpdatedAt || item.latestSyncAt || fallback.updatedAt || '--'
   }
+}
+
+const buildGapSummary = (item = {}, missingEstimate = 0) => {
+  const ranges = Array.isArray(item.missingRanges) ? item.missingRanges : []
+  if (ranges.length) {
+    return ranges
+      .slice(0, 2)
+      .map((range) => `${range.startDate || range.start || '--'} ~ ${range.endDate || range.end || '--'}`)
+      .join(' / ')
+  }
+  return missingEstimate > 0 ? `缺 ${formatCount(missingEstimate)} 日` : '无缺口'
 }
 
 const buildFallbackRows = (payload = {}) => {
@@ -300,6 +398,28 @@ const filteredRows = computed(() => {
   })
 })
 
+const repairableRows = computed(() => filteredRows.value.filter((item) => canBackfill(item)))
+
+const topGapRows = computed(() => {
+  return [...repairableRows.value]
+    .sort((left, right) => {
+      const leftMissing = toNumber(left.missingEstimate, 0)
+      const rightMissing = toNumber(right.missingEstimate, 0)
+      if (rightMissing !== leftMissing) return rightMissing - leftMissing
+      return String(left.symbol).localeCompare(String(right.symbol))
+    })
+    .slice(0, 6)
+})
+
+const summaryMarkets = computed(() => {
+  return (summary.value.markets || []).map((item) => ({
+    market: String(item.market || '').trim().toUpperCase() || 'ALL',
+    marketLabel: normalizeMarketLabel(item.market),
+    expectedEnd: item.expectedEnd || item.expected_end || '',
+    expectedDays: toNumber(item.expectedDays ?? item.expected_days, 0)
+  }))
+})
+
 const summaryMetrics = computed(() => {
   const rows = filteredRows.value
   const completeCount = rows.filter((item) => item.statusKey === 'complete').length
@@ -330,6 +450,50 @@ const formatCount = (value) => {
 const resetFilters = () => {
   keyword.value = ''
   statusFilter.value = 'all'
+  currentPage.value = 1
+}
+
+const canBackfill = (row = {}) => {
+  return Boolean(row.symbol && row.symbol !== '--' && row.statusKey !== 'complete')
+}
+
+const isBackfillRunning = (row = {}) => {
+  return backfillLoadingSymbols.value.has(row.symbol)
+}
+
+const setBackfillLoading = (symbol, value) => {
+  const next = new Set(backfillLoadingSymbols.value)
+  if (value) {
+    next.add(symbol)
+  } else {
+    next.delete(symbol)
+  }
+  backfillLoadingSymbols.value = next
+}
+
+const validDateOrUndefined = (value) => {
+  const text = String(value || '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : undefined
+}
+
+const backfillRow = async (row = {}) => {
+  if (!canBackfill(row) || isBackfillRunning(row)) return
+  setBackfillLoading(row.symbol, true)
+  try {
+    const res = await runMarketHistoryBackfill({
+      symbol: row.symbol,
+      startDate: validDateOrUndefined(row.expectedStart || summary.value.task?.backfillStartDate),
+      endDate: validDateOrUndefined(row.expectedEnd || summary.value.latestTradeDate)
+    })
+    const savedCount = toNumber(res?.data?.savedCount, 0)
+    ElMessage.success(savedCount > 0 ? `${row.symbol} 已补齐 ${formatCount(savedCount)} 条` : `${row.symbol} 已检查，无需补齐`)
+    await loadCoverage(false)
+  } catch (error) {
+    console.error('历史补价失败:', error)
+    ElMessage.error(error?.data?.error || error?.message || '历史补价失败')
+  } finally {
+    setBackfillLoading(row.symbol, false)
+  }
 }
 
 const loadCoverage = async (manual = false) => {
@@ -338,11 +502,12 @@ const loadCoverage = async (manual = false) => {
     const res = await getMarketHistoryCoverage({
       search: keyword.value.trim(),
       status: statusFilter.value === 'all' ? '' : statusFilter.value,
-      page: 1,
-      page_size: 20
+      page: currentPage.value,
+      page_size: pageSize.value
     })
     const payload = normalizeSummary(res?.data || {})
     summary.value = payload
+    totalRows.value = toNumber(res?.data?.total ?? payload.totalUniverseSymbols ?? payload.items.length, payload.items.length)
     const sourceItems = payload.items.length ? payload.items : buildFallbackRows(res?.data || {})
     tableRows.value = sourceItems.map((item, index) => normalizeRow(item, index, payload))
     if (manual) {
@@ -362,11 +527,23 @@ const scheduleCoverageLoad = () => {
     window.clearTimeout(filterTimer)
   }
   filterTimer = window.setTimeout(() => {
+    currentPage.value = 1
     loadCoverage(false)
   }, 260)
 }
 
 watch([keyword, statusFilter], scheduleCoverageLoad)
+
+const handlePageChange = (page) => {
+  currentPage.value = Number(page) || 1
+  loadCoverage(false)
+}
+
+const handlePageSizeChange = (size) => {
+  pageSize.value = Number(size) || 100
+  currentPage.value = 1
+  loadCoverage(false)
+}
 
 onBeforeUnmount(() => {
   if (filterTimer) {
@@ -376,6 +553,15 @@ onBeforeUnmount(() => {
 
 onMounted(() => {
   loadCoverage(false)
+})
+
+defineExpose({
+  backfillRow,
+  currentPage,
+  pageSize,
+  tableRows,
+  totalRows,
+  topGapRows
 })
 </script>
 
@@ -418,6 +604,110 @@ onMounted(() => {
   padding-top: 10px;
 }
 
+.coverage-focus-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.6fr);
+  gap: 10px;
+}
+
+.focus-card :deep(.el-card__body) {
+  padding: 10px;
+}
+
+.gap-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.gap-item {
+  min-height: 52px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border-soft));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, var(--accent) 6%);
+  color: var(--text-emphasis);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gap-item:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface-soft));
+}
+
+.gap-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.gap-item span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.gap-item strong {
+  color: var(--text-emphasis);
+  font-size: 13px;
+}
+
+.gap-item small,
+.market-baseline-item small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.gap-item em {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-strong, var(--accent)) 42%, var(--border-soft));
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.market-baseline-list {
+  display: grid;
+  gap: 8px;
+}
+
+.market-baseline-item {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-soft) 72%, transparent);
+  color: var(--text-primary);
+}
+
+.market-baseline-item:last-child {
+  border-bottom: 0;
+}
+
+.market-baseline-item strong {
+  color: var(--text-emphasis);
+  font-size: 13px;
+}
+
+.compact-empty {
+  min-height: 52px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed color-mix(in srgb, var(--border-soft) 86%, transparent);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .table-card :deep(.el-table) {
   --el-table-header-bg-color: color-mix(in srgb, var(--surface-soft) 92%, transparent);
   --el-table-tr-bg-color: transparent;
@@ -430,19 +720,35 @@ onMounted(() => {
   padding: 7px 0;
 }
 
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+}
+
+.pagination-row :deep(.el-pagination) {
+  --el-pagination-bg-color: color-mix(in srgb, var(--surface-soft) 86%, transparent);
+  --el-pagination-button-color: var(--text-primary);
+  --el-pagination-hover-color: var(--accent-strong, var(--accent));
+  --el-pagination-button-disabled-bg-color: color-mix(in srgb, var(--surface-muted) 86%, transparent);
+}
+
 .symbol-cell,
-.range-cell {
+.range-cell,
+.missing-cell {
   display: grid;
   gap: 2px;
 }
 
 .symbol-cell strong,
+.missing-cell strong,
 .coverage-rate {
   color: var(--text-emphasis);
   font-variant-numeric: tabular-nums;
 }
 
 .symbol-cell span,
+.missing-cell span,
 .range-sep {
   color: var(--text-muted);
   font-size: 12px;
@@ -464,7 +770,31 @@ onMounted(() => {
   color: color-mix(in srgb, var(--accent-strong, var(--accent)) 88%, white 12%);
 }
 
+.repair-button {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
+  color: color-mix(in srgb, var(--accent-strong, var(--accent)) 86%, white 14%);
+  font-weight: 700;
+}
+
+.repair-button:hover:not(.is-disabled),
+.repair-button:focus:not(.is-disabled) {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-strong));
+  color: var(--text-emphasis);
+}
+
+.repair-button.is-disabled {
+  border-color: color-mix(in srgb, var(--border-soft) 78%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 78%, transparent);
+  color: var(--text-muted);
+}
+
 @media (max-width: 960px) {
+  .coverage-focus-grid {
+    grid-template-columns: 1fr;
+  }
+
   .hero-actions {
     justify-content: flex-start;
   }
