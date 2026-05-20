@@ -3,6 +3,7 @@ import threading
 from datetime import datetime
 
 from core.analysis.FinanceBriefingService import FinanceBriefingService
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
@@ -43,10 +44,19 @@ class FinanceBriefingScheduler:
             self._stop_event.wait(SystemTaskService.get_interval(self.JOB_NAME, 900))
 
     def _run_job(self):
-        result = FinanceBriefingService.refresh_all_markets(user_id=1)
+        execution_user = resolve_task_execution_user(self.JOB_NAME)
+        if not execution_user:
+            self._update_job(
+                'skipped',
+                '财经信息刷新已跳过：没有可用的执行用户',
+                last_run_date=datetime.now().date(),
+                last_run_at=datetime.now()
+            )
+            return
+        result = FinanceBriefingService.refresh_all_markets(user_id=int(execution_user['userId']))
         self._update_job(
             'success',
-            f"已生成 {len(result.get('items', []))} 条财经信息",
+            f"已生成 {len(result.get('items', []))} 条财经信息，执行用户 {execution_user.get('username') or execution_user.get('userId')}",
             last_run_date=datetime.now().date(),
             last_run_at=datetime.now()
         )

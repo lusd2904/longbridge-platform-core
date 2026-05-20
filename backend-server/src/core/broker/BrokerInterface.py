@@ -423,12 +423,13 @@ class BrokerManager:
             logger.error(f"列出券商账户用户失败: {e}")
             return []
     
-    def list_accounts(self, user_id: int = 1) -> List[Dict[str, Any]]:
+    def list_accounts(self, user_id: int = 1, include_inactive: bool = False) -> List[Dict[str, Any]]:
         """
-        列出所有券商账户
+        列出券商账户
         
         Args:
             user_id: 用户ID
+            include_inactive: 是否包含已删除/停用账户
             
         Returns:
             账户列表
@@ -439,9 +440,10 @@ class BrokerManager:
                    is_default, is_active, created_at
             FROM broker_accounts 
             WHERE user_id = %s
+              AND (%s = 1 OR is_active = 1)
             ORDER BY is_default DESC, id ASC
             """
-            rows = self.db.query_all(sql, (user_id,))
+            rows = self.db.query_all(sql, (user_id, 1 if include_inactive else 0))
             # 将元组转换为字典
             accounts = []
             for row in rows:

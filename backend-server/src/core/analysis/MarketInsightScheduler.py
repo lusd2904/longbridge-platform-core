@@ -2,6 +2,7 @@ import threading
 
 from config.Config import AppConfig
 from core.analysis.MarketInsightService import MarketInsightService
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
@@ -36,8 +37,12 @@ class MarketInsightScheduler:
                     enabled = enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
 
                 if enabled:
-                    MarketInsightService.refresh_all_markets(user_id=1, source='scheduler')
-                    self._update_job('success')
+                    execution_user = resolve_task_execution_user(self.JOB_NAME)
+                    if not execution_user:
+                        self._update_job('skipped', '市场动态已跳过：没有可用的执行用户')
+                    else:
+                        MarketInsightService.refresh_all_markets(user_id=int(execution_user['userId']), source='scheduler')
+                        self._update_job('success', f"市场动态已刷新，执行用户 {execution_user.get('username') or execution_user.get('userId')}")
                 else:
                     self._update_job('disabled', '市场动态调度器已关闭')
             except Exception as exc:

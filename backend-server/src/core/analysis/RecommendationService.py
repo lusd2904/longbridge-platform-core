@@ -137,8 +137,8 @@ class RecommendationService:
             cls._save_run(user_id, profile, empty_result['summary'], empty_result['stats'], [])
             return empty_result
 
-        enriched_items = cls._enrich_with_ai(profile, candidates[:12])
-        summary = cls._generate_summary(profile, enriched_items)
+        enriched_items = cls._enrich_with_ai(profile, candidates[:12], user_id=user_id)
+        summary = cls._generate_summary(profile, enriched_items, user_id=user_id)
         stats = cls._build_stats(enriched_items)
         generated_at = datetime.now()
 
@@ -269,14 +269,14 @@ class RecommendationService:
         return candidate
 
     @classmethod
-    def _enrich_with_ai(cls, profile: str, candidates: List[Dict]) -> List[Dict]:
+    def _enrich_with_ai(cls, profile: str, candidates: List[Dict], user_id: int = 1) -> List[Dict]:
         if not candidates:
             return []
 
         enriched = []
         with ThreadPoolExecutor(max_workers=4) as executor:
             future_map = {
-                executor.submit(cls._ai_enrich_candidate, profile, candidate): candidate
+                executor.submit(cls._ai_enrich_candidate, profile, candidate, user_id): candidate
                 for candidate in candidates
             }
             for future in as_completed(future_map):
@@ -291,7 +291,7 @@ class RecommendationService:
         return enriched
 
     @classmethod
-    def _ai_enrich_candidate(cls, profile: str, candidate: Dict) -> Dict:
+    def _ai_enrich_candidate(cls, profile: str, candidate: Dict, user_id: int = 1) -> Dict:
         prompt = f"""你是量化投研助理，请对下面的标的输出极简推荐结论。
 
 必须按以下格式返回：
@@ -314,7 +314,7 @@ PE: {candidate.get('pe') if candidate.get('pe') is not None else 'N/A'}
 预估收益: {candidate['expected_return']}%
 风险等级: {candidate['risk_level']}
 """
-        text = AIAnalyst.get_decision(None, prompt, task='recommend_brief')
+        text = AIAnalyst.get_decision(None, prompt, task='recommend_brief', user_id=user_id)
         usable = cls._is_usable_ai_text(text)
         summary = cls._extract_field(text, '推荐摘要') if usable else ''
         catalysts = cls._extract_list(text, '核心催化') if usable else []
@@ -334,7 +334,7 @@ PE: {candidate.get('pe') if candidate.get('pe') is not None else 'N/A'}
         return candidate
 
     @classmethod
-    def _generate_summary(cls, profile: str, items: List[Dict]) -> str:
+    def _generate_summary(cls, profile: str, items: List[Dict], user_id: int = 1) -> str:
         if not items:
             return '当前暂无可用推荐，请先同步市场数据。'
 
@@ -352,7 +352,7 @@ PE: {candidate.get('pe') if candidate.get('pe') is not None else 'N/A'}
 候选列表:
 {chr(10).join(lines)}
 """
-        text = AIAnalyst.get_decision(None, prompt, task='recommend_summary')
+        text = AIAnalyst.get_decision(None, prompt, task='recommend_summary', user_id=user_id)
         normalized = (text or '').strip()
         if not cls._is_usable_ai_text(normalized):
             return 'AI 组合摘要当前不可用，以下列表仅包含真实量化筛选结果与市场快照。'

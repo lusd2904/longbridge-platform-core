@@ -6,6 +6,7 @@ from datetime import date, datetime
 from config.Config import AppConfig
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from core.analysis.IndicatorSnapshotService import IndicatorSnapshotService
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
@@ -84,6 +85,26 @@ class MarketHistoryBackfillScheduler:
         end_date = min(date.today(), HistoricalMarketDataService._coerce_date(settings.get('endDate')) or date.today())
 
         self._update_job_status('running', f'慢补数启动中，cursor={cursor} batch={batch_size} start={start_date}')
+        execution_user = resolve_task_execution_user(self.JOB_NAME)
+        if not execution_user:
+            now = datetime.now()
+            self._update_job_status(
+                'skipped',
+                '慢补数已跳过：没有可用的执行用户',
+                last_run_date=now.date(),
+                last_run_at=now
+            )
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "no-execution-user",
+                "processed": 0,
+                "failed": [],
+                "cursor": cursor,
+                "nextCursor": cursor,
+                "symbols": []
+            }
+        execution_user_id = int(execution_user['userId'])
 
         universe = IndicatorSnapshotService._collect_universe_symbols(limit=batch_size, offset=cursor)
         wrapped = False
@@ -103,12 +124,12 @@ class MarketHistoryBackfillScheduler:
                     symbol,
                     start_date=start_date,
                     end_date=end_date,
-                    user_id=1
+                    user_id=execution_user_id
                 )
                 if int(result.get('savedCount') or 0) > 0:
                     IndicatorSnapshotService.refresh_symbol(
                         symbol,
-                        user_id=1,
+                        user_id=execution_user_id,
                         timeframes=('daily', 'weekly', 'monthly', 'quarterly', 'yearly')
                     )
                 processed_symbols.append(symbol)
@@ -138,7 +159,10 @@ class MarketHistoryBackfillScheduler:
         )
 
         now = datetime.now()
-        message = f"慢补数完成 {len(processed_symbols)} 个标的，失败 {len(failed)} 个，nextCursor={next_cursor}"
+        message = (
+            f"慢补数完成 {len(processed_symbols)} 个标的，失败 {len(failed)} 个，"
+            f"nextCursor={next_cursor}，执行用户 {execution_user.get('username') or execution_user_id}"
+        )
         self._update_job_status(
             'success',
             message,

@@ -62,6 +62,7 @@ from apps.operations.module_shared import (
     to_plain,
 )
 from apps.runtime_shared.auth import generate_token
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 
 bootstrap_runtime()
 
@@ -108,84 +109,6 @@ def _user_scoped_job_name(task_key: str, user_id: int) -> str:
     if task_key == "quant_trading":
         return quant_trading_scheduler._job_name(user_id)  # noqa: SLF001
     return task_key
-
-
-def _coerce_positive_int(value: Any) -> Optional[int]:
-    try:
-        parsed = int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _load_active_user(user_id: Any) -> Optional[Dict[str, Any]]:
-    normalized_user_id = _coerce_positive_int(user_id)
-    if normalized_user_id is None:
-        return None
-    try:
-        row = DbUtil.fetch_one(
-            """
-            SELECT id, username, role, status
-            FROM users
-            WHERE id = %s
-              AND COALESCE(status, 'active') NOT IN ('disabled', 'locked')
-            LIMIT 1
-            """,
-            (normalized_user_id,),
-        )
-    except Exception:
-        return None
-    if not row:
-        return None
-    return {
-        "userId": int(row.get("id") or normalized_user_id),
-        "username": row.get("username") or f"user-{normalized_user_id}",
-        "role": row.get("role") or "user",
-    }
-
-
-def _resolve_task_execution_user(task_key: str, requested_user_id: Any = None) -> Optional[Dict[str, Any]]:
-    policy_settings: Dict[str, Any] = {}
-    try:
-        policy_settings = (SystemTaskService.get_policy(task_key) or {}).get("settings") or {}
-    except Exception:
-        policy_settings = {}
-
-    env_key = f"REF_{task_key.upper()}_EXECUTION_USER_ID"
-    candidates = [
-        ("request-user", requested_user_id),
-        ("task-policy", policy_settings.get("executionUserId")),
-        ("task-policy", policy_settings.get("schedulerUserId")),
-        ("task-policy", policy_settings.get("userId")),
-        ("env", os.getenv(env_key)),
-        ("env", os.getenv("REF_SYSTEM_TASK_EXECUTION_USER_ID")),
-    ]
-    for reason, candidate in candidates:
-        user = _load_active_user(candidate)
-        if user:
-            user["reason"] = reason
-            return user
-
-    try:
-        row = DbUtil.fetch_one(
-            """
-            SELECT id, username, role
-            FROM users
-            WHERE COALESCE(status, 'active') NOT IN ('disabled', 'locked')
-            ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END, id ASC
-            LIMIT 1
-            """
-        )
-    except Exception:
-        row = None
-    if not row:
-        return None
-    return {
-        "userId": int(row.get("id") or 0),
-        "username": row.get("username") or f"user-{row.get('id')}",
-        "role": row.get("role") or "user",
-        "reason": "active-user-fallback",
-    }
 
 
 def _ensure_job_table() -> None:
@@ -916,16 +839,40 @@ def _run_market_universe(user_id: int) -> Dict[str, Any]:
     return result
 
 
-def _run_historical_sync() -> Dict[str, Any]:
+def _run_historical_sync(user_id: Optional[int] = None) -> Dict[str, Any]:
     from datetime import datetime
     from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 
     historical_market_data_scheduler._ensure_job_table()  # noqa: SLF001
     historical_market_data_scheduler._update_job_status("running", "历史行情同步启动中")  # noqa: SLF001
-    result = HistoricalMarketDataService.sync_tracked_universe()
+    execution_user = resolve_task_execution_user(historical_market_data_scheduler.JOB_NAME, user_id)
+    if not execution_user:
+        message = "历史行情同步已跳过：没有可用的执行用户"
+        historical_market_data_scheduler._update_job_status(
+            "skipped",
+            message,
+            last_run_date=datetime.now().date(),
+            last_run_at=datetime.now(),
+        )
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "no-execution-user",
+            "summary": message,
+            "symbols": [],
+            "symbol_count": 0,
+            "saved_count": 0,
+        }
+    execution_user_id = int(execution_user["userId"])
+    result = HistoricalMarketDataService.sync_tracked_universe(user_ids=[execution_user_id])
+    result["executionUser"] = {
+        "userId": execution_user_id,
+        "username": execution_user.get("username"),
+        "reason": execution_user.get("reason"),
+    }
     historical_market_data_scheduler._update_job_status(  # noqa: SLF001
         "success",
-        f"同步 {result.get('symbol_count', 0)} 个标的，写入 {result.get('saved_count', 0)} 条K线",
+        f"同步 {result.get('symbol_count', 0)} 个标的，写入 {result.get('saved_count', 0)} 条K线，执行用户 {execution_user.get('username') or execution_user_id}",
         last_run_date=datetime.now().date(),
         last_run_at=datetime.now(),
     )
@@ -969,7 +916,7 @@ def _run_market_scan(user_id: Optional[int] = None) -> Dict[str, Any]:
 
     daily_market_scan_scheduler._ensure_job_table()  # noqa: SLF001
     daily_market_scan_scheduler._update_job("running", "市场 AI 技术扫描启动中")  # noqa: SLF001
-    execution_user = _resolve_task_execution_user(daily_market_scan_scheduler.JOB_NAME, user_id)
+    execution_user = resolve_task_execution_user(daily_market_scan_scheduler.JOB_NAME, user_id)
     if not execution_user:
         message = "市场 AI 技术扫描已跳过：没有可用的执行用户"
         daily_market_scan_scheduler._update_job(  # noqa: SLF001
@@ -1158,7 +1105,7 @@ def _run_symbol_content_cache_refresh(user_id: int) -> Dict[str, Any]:
 
 TASK_RUNNERS: Dict[str, Callable[[int], Dict[str, Any]]] = {
     "market_universe_daily_sync": _run_market_universe,
-    "historical_market_data_daily_sync": lambda user_id: _run_historical_sync(),
+    "historical_market_data_daily_sync": lambda user_id: _run_historical_sync(user_id),
     "market_history_universe_backfill": lambda user_id: market_history_backfill_scheduler.run_once(),
     "symbol_indicator_daily_refresh": lambda user_id: _run_indicator_refresh(),
     "daily_market_ai_scan": lambda user_id: _run_market_scan(user_id),

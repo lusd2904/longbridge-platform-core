@@ -198,11 +198,13 @@ class MarketInsightService:
     @classmethod
     def _fetch_quotes(cls, symbols: List[str], user_id: int = 1) -> Dict[str, Dict[str, object]]:
         manager = get_broker_manager()
-        accounts = manager.list_accounts(user_id=user_id) or manager.list_accounts(user_id=1)
+        accounts = manager.list_accounts(user_id=user_id) or []
 
         for account in accounts:
-            owner_user_id = user_id if manager.account_belongs_to_user(account.get('id'), user_id) else 1
-            broker = manager.get_broker(account.get('id'), user_id=owner_user_id)
+            account_id = account.get('id')
+            if not manager.account_belongs_to_user(account_id, user_id):
+                continue
+            broker = manager.get_broker(account_id, user_id=user_id)
             if not broker:
                 continue
 

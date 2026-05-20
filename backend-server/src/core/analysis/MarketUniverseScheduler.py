@@ -3,6 +3,7 @@ import threading
 from datetime import date, datetime
 
 from config.Config import AppConfig
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 from utils.MarketUniverseSync import MarketUniverseSync
@@ -97,12 +98,21 @@ class MarketUniverseScheduler:
         )
 
         try:
-            result = MarketUniverseSync.sync_markets(markets=markets, user_id=1)
+            execution_user = resolve_task_execution_user(self.JOB_NAME)
+            if not execution_user:
+                self._update_job_status(
+                    status='skipped',
+                    message='市场底库同步已跳过：没有可用的执行用户',
+                    last_run_date=started_at.date(),
+                    last_run_at=started_at
+                )
+                return
+            result = MarketUniverseSync.sync_markets(markets=markets, user_id=int(execution_user['userId']))
             saved = int(result.get('total_saved', 0))
             duration = result.get('duration_seconds', 0)
             self._update_job_status(
                 status='success',
-                message=f"同步完成，写入 {saved} 条，耗时 {duration} 秒",
+                message=f"同步完成，写入 {saved} 条，耗时 {duration} 秒，执行用户 {execution_user.get('username') or execution_user.get('userId')}",
                 last_run_date=started_at.date(),
                 last_run_at=started_at
             )

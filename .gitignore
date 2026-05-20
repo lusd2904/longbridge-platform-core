@@ -32,6 +32,7 @@ runtime/*/
 .codex-agent/
 Claude/
 logs/
+.playwright-cli/
 apps/runtime/
 *.pid
 

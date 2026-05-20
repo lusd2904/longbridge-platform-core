@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 from config.Config import AppConfig
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
@@ -71,10 +72,19 @@ class HistoricalMarketDataScheduler:
     def _run_job(self):
         self._update_job_status('running', '历史行情同步启动中')
         try:
-            result = HistoricalMarketDataService.sync_tracked_universe()
+            execution_user = resolve_task_execution_user(self.JOB_NAME)
+            if not execution_user:
+                self._update_job_status(
+                    'skipped',
+                    '历史行情同步已跳过：没有可用的执行用户',
+                    last_run_date=datetime.now().date(),
+                    last_run_at=datetime.now()
+                )
+                return
+            result = HistoricalMarketDataService.sync_tracked_universe(user_ids=[int(execution_user['userId'])])
             self._update_job_status(
                 'success',
-                f"同步 {result.get('symbol_count', 0)} 个标的，写入 {result.get('saved_count', 0)} 条K线",
+                f"同步 {result.get('symbol_count', 0)} 个标的，写入 {result.get('saved_count', 0)} 条K线，执行用户 {execution_user.get('username') or execution_user.get('userId')}",
                 last_run_date=datetime.now().date(),
                 last_run_at=datetime.now()
             )

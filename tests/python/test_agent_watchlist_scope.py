@@ -11,6 +11,18 @@ ANALYSIS_MAIN = ROOT / "apps/intelligence/analysis-service/src/main.py"
 SCHEDULER_MAIN = ROOT / "apps/operations/scheduler-service/src/main.py"
 AGENT_RUN_SERVICE = ROOT / "backend-server/src/core/analysis/AgentRunService.py"
 DAILY_MARKET_SCAN_SCHEDULER = ROOT / "backend-server/src/core/analysis/DailyMarketScanScheduler.py"
+LEGACY_SCHEDULER_PATHS = [
+    ROOT / "backend-server/src/core/analysis/FinanceBriefingScheduler.py",
+    ROOT / "backend-server/src/core/analysis/HistoricalMarketDataScheduler.py",
+    ROOT / "backend-server/src/core/analysis/MarketHistoryBackfillScheduler.py",
+    ROOT / "backend-server/src/core/analysis/MarketInsightScheduler.py",
+    ROOT / "backend-server/src/core/analysis/MarketUniverseScheduler.py",
+    ROOT / "backend-server/src/core/analysis/RecommendationScheduler.py",
+    ROOT / "backend-server/src/core/analysis/DailySymbolTrendScanScheduler.py",
+]
+MARKET_INSIGHT_SERVICE = ROOT / "backend-server/src/core/analysis/MarketInsightService.py"
+RECOMMENDATION_SERVICE = ROOT / "backend-server/src/core/analysis/RecommendationService.py"
+BROKER_INTERFACE = ROOT / "backend-server/src/core/broker/BrokerInterface.py"
 
 
 def _load_module(module_name: str, path: Path):
@@ -185,8 +197,8 @@ def test_market_scan_scheduler_does_not_hardcode_bootstrap_user() -> None:
     assert "refresh_all_markets(user_id=1)" not in run_source
     assert "refresh_all_markets(user_id=1)" not in legacy_scheduler_source
     assert '"daily_market_ai_scan": lambda user_id: _run_market_scan(user_id)' in runner_source
-    assert "_resolve_task_execution_user(" in run_source
-    assert "_resolve_execution_user(" in legacy_scheduler_source
+    assert "resolve_task_execution_user(" in run_source
+    assert "resolve_task_execution_user(" in legacy_scheduler_source
 
 
 def test_market_scan_manual_run_uses_resolved_execution_user(monkeypatch) -> None:
@@ -201,7 +213,7 @@ def test_market_scan_manual_run_uses_resolved_execution_user(monkeypatch) -> Non
     )
     monkeypatch.setattr(
         module,
-        "_resolve_task_execution_user",
+        "resolve_task_execution_user",
         lambda task_key, requested_user_id=None: {
             "userId": int(requested_user_id),
             "username": "real-user",
@@ -224,6 +236,73 @@ def test_market_scan_manual_run_uses_resolved_execution_user(monkeypatch) -> Non
     assert result["executionUser"]["userId"] == 8
     assert result["executionUser"]["reason"] == "request-user"
     assert calls["updates"][-1][0][0] == "success"
+
+
+def test_legacy_scheduler_paths_do_not_hardcode_bootstrap_user() -> None:
+    banned_snippets = [
+        "refresh_all_markets(user_id=1",
+        "refresh_all_profiles(user_id=1",
+        "sync_markets(markets=markets, user_id=1",
+        "run_batch(\n            analysis_date=target_date,\n            batch_size=batch_size,\n            cursor=cursor,\n            user_id=1",
+        "backfill_symbol_history(\n                    symbol,\n                    start_date=start_date,\n                    end_date=end_date,\n                    user_id=1",
+        "refresh_symbol(\n                        symbol,\n                        user_id=1",
+        "sync_tracked_universe()",
+    ]
+
+    for path in LEGACY_SCHEDULER_PATHS:
+        source = path.read_text(encoding="utf-8")
+        assert "resolve_task_execution_user" in source, path.name
+        for snippet in banned_snippets:
+            assert snippet not in source, path.name
+
+
+def test_historical_sync_service_uses_resolved_user_instead_of_bootstrap() -> None:
+    source = (ROOT / "backend-server/src/core/analysis/HistoricalMarketDataService.py").read_text(encoding="utf-8")
+    assert "saved_count += cls.sync_symbol(symbol, user_id=1" not in source
+    assert "sync_user_id = cls._resolve_symbol_sync_user_id(symbol, user_ids)" in source
+    assert "saved_count += cls.sync_symbol(symbol, user_id=sync_user_id" in source
+
+
+def test_market_insight_quotes_do_not_fallback_to_bootstrap_account() -> None:
+    source = MARKET_INSIGHT_SERVICE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    fetch_quotes_source = ""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_fetch_quotes":
+            fetch_quotes_source = ast.get_source_segment(source, node) or ""
+            break
+
+    assert fetch_quotes_source
+    assert "manager.list_accounts(user_id=user_id) or manager.list_accounts(user_id=1)" not in fetch_quotes_source
+    assert "owner_user_id =" not in fetch_quotes_source
+    assert "manager.get_broker(account_id, user_id=user_id)" in fetch_quotes_source
+    assert "return cls._fetch_quotes_from_database(symbols)" in fetch_quotes_source
+
+
+def test_recommendation_ai_calls_preserve_execution_user() -> None:
+    source = RECOMMENDATION_SERVICE.read_text(encoding="utf-8")
+
+    assert "cls._enrich_with_ai(profile, candidates[:12], user_id=user_id)" in source
+    assert "cls._generate_summary(profile, enriched_items, user_id=user_id)" in source
+    assert "AIAnalyst.get_decision(None, prompt, task='recommend_brief', user_id=user_id)" in source
+    assert "AIAnalyst.get_decision(None, prompt, task='recommend_summary', user_id=user_id)" in source
+    assert "AIAnalyst.get_decision(None, prompt, task='recommend_brief')" not in source
+    assert "AIAnalyst.get_decision(None, prompt, task='recommend_summary')" not in source
+
+
+def test_broker_account_list_excludes_inactive_by_default() -> None:
+    source = BROKER_INTERFACE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    list_accounts_source = ""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "list_accounts":
+            list_accounts_source = ast.get_source_segment(source, node) or ""
+            break
+
+    assert list_accounts_source
+    assert "include_inactive: bool = False" in list_accounts_source
+    assert "AND (%s = 1 OR is_active = 1)" in list_accounts_source
+    assert "rows = self.db.query_all(sql, (user_id, 1 if include_inactive else 0))" in list_accounts_source
 
 
 def test_agent_run_service_exposes_atomic_claim() -> None:

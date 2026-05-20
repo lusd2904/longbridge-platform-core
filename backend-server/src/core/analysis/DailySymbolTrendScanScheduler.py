@@ -3,6 +3,7 @@ import threading
 from datetime import date, datetime, timedelta
 
 from core.analysis.DailySymbolTrendScanService import DailySymbolTrendScanService
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
@@ -87,12 +88,29 @@ class DailySymbolTrendScanScheduler:
 
         batch_size = max(1, min(SystemTaskService.get_batch_size(self.JOB_NAME, 24), 60))
         self._update_job("running", f"逐股 AI 趋势扫描启动中，targetDate={target_date} cursor={cursor} batch={batch_size}")
+        execution_user = resolve_task_execution_user(self.JOB_NAME)
+        if not execution_user:
+            now = datetime.now()
+            self._update_job(
+                "skipped",
+                "逐股 AI 趋势扫描已跳过：没有可用的执行用户",
+                last_run_date=self._coerce_date(target_date) or now.date(),
+                last_run_at=now
+            )
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "no-execution-user",
+                "analysisDate": target_date,
+                "processed": 0,
+                "saved": 0,
+            }
 
         result = DailySymbolTrendScanService.run_batch(
             analysis_date=target_date,
             batch_size=batch_size,
             cursor=cursor,
-            user_id=1
+            user_id=int(execution_user["userId"])
         )
 
         now = datetime.now()
@@ -120,7 +138,8 @@ class DailySymbolTrendScanScheduler:
 
         message = (
             f"逐股 AI 趋势扫描完成批次 {int(result.get('processed') or 0)} 个标的，"
-            f"回退 {int(result.get('fallbackCount') or 0)} 个，nextCursor={int(result.get('nextCursor') or 0)}"
+            f"回退 {int(result.get('fallbackCount') or 0)} 个，nextCursor={int(result.get('nextCursor') or 0)}，"
+            f"执行用户 {execution_user.get('username') or execution_user.get('userId')}"
         )
         self._update_job(
             "success",

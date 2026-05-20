@@ -2,6 +2,7 @@ import threading
 
 from config.Config import AppConfig
 from core.analysis.RecommendationService import RecommendationService
+from core.platform.SchedulerExecutionUser import resolve_task_execution_user
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
@@ -34,8 +35,12 @@ class RecommendationScheduler:
                 SystemTaskService.ensure_schema()
                 self._ensure_job_table()
                 if SystemTaskService.is_enabled(self.JOB_NAME, default=True):
-                    RecommendationService.refresh_all_profiles(user_id=1)
-                    self._update_job('success', '推荐结果已刷新')
+                    execution_user = resolve_task_execution_user(self.JOB_NAME)
+                    if not execution_user:
+                        self._update_job('skipped', '推荐结果刷新已跳过：没有可用的执行用户')
+                    else:
+                        RecommendationService.refresh_all_profiles(user_id=int(execution_user['userId']))
+                        self._update_job('success', f"推荐结果已刷新，执行用户 {execution_user.get('username') or execution_user.get('userId')}")
                 else:
                     self._update_job('disabled', '推荐调度器已关闭')
             except Exception as exc:

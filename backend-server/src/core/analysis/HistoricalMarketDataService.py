@@ -405,8 +405,9 @@ class HistoricalMarketDataService:
         saved_count = 0
         failed: List[Dict[str, str]] = []
         for symbol in symbols:
+            sync_user_id = cls._resolve_symbol_sync_user_id(symbol, user_ids)
             try:
-                saved_count += cls.sync_symbol(symbol, user_id=1, count=safe_lookback)
+                saved_count += cls.sync_symbol(symbol, user_id=sync_user_id, count=safe_lookback)
             except Exception as exc:
                 failed.append({"symbol": symbol, "error": str(exc)[:180]})
 
@@ -418,6 +419,38 @@ class HistoricalMarketDataService:
             "failed": failed[:20],
             "lookback_days": safe_lookback
         }
+
+    @classmethod
+    def _resolve_symbol_sync_user_id(cls, symbol: str, user_ids: Optional[Iterable[int]] = None) -> int:
+        candidates = [int(item) for item in (user_ids or []) if str(item or '').isdigit() and int(item) > 0]
+        if candidates:
+            return candidates[0]
+
+        normalized_symbol = cls.normalize_symbol(symbol)
+        try:
+            manager = get_broker_manager()
+            for current_user_id in manager.list_user_ids_with_accounts():
+                for account in manager.list_accounts(user_id=current_user_id):
+                    broker = manager.get_broker(account.get('id'), user_id=current_user_id)
+                    if broker:
+                        return int(current_user_id)
+        except Exception:
+            pass
+
+        try:
+            row = DbUtil.fetch_one(
+                """
+                SELECT user_id
+                FROM user_watchlist_stocks
+                WHERE symbol = %s
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (normalized_symbol,)
+            ) or {}
+            return int(row.get('user_id') or 1)
+        except Exception:
+            return 1
 
     @classmethod
     def collect_tracked_symbols(
