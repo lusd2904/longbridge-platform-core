@@ -89,6 +89,24 @@
               <span class="notification-time">{{ formatTime(notification.time) }}</span>
             </div>
             <div class="notification-message">{{ notification.message }}</div>
+            <div class="notification-meta" v-if="notification.reviewStatus">
+              <el-tag size="small" effect="plain" :type="getReviewTagType(notification)">
+                {{ getReviewStatusLabel(notification.reviewStatus) }}
+              </el-tag>
+              <el-tag
+                v-if="notification.reviewAction"
+                size="small"
+                effect="plain"
+                :type="getReviewActionTagType(notification.reviewAction)"
+              >
+                {{ getReviewActionLabel(notification.reviewAction) }}
+              </el-tag>
+              <span v-if="notification.reviewDeadlineAt">截止 {{ formatTime(notification.reviewDeadlineAt) }}</span>
+              <span v-if="notification.reviewSlaHours">SLA {{ notification.reviewSlaHours }}h</span>
+              <span v-if="notification.reviewedAt">复核于 {{ formatAbsoluteTime(notification.reviewedAt) }}</span>
+              <span v-if="notification.reviewedBy">复核 {{ notification.reviewedBy }}</span>
+              <span v-if="notification.reviewOverdue" class="overdue-text">已超期</span>
+            </div>
             <div class="notification-meta" v-if="notification.symbol">
               <span>{{ notification.symbol }}</span>
             </div>
@@ -200,7 +218,14 @@ const normalizeNotification = (item = {}) => ({
   query: normalizeRouteQuery(item),
   symbol: item.symbol || item.code || '',
   runId: item.runId || item.run_id || item.agentRunId || item.agent_run_id || '',
-  scene: item.scene || item.sceneKey || item.scene_key || ''
+  scene: item.scene || item.sceneKey || item.scene_key || '',
+  reviewStatus: item.reviewStatus || item.review_status || '',
+  reviewAction: item.reviewAction || item.review_action || '',
+  reviewDeadlineAt: item.reviewDeadlineAt || item.review_deadline_at || '',
+  reviewOverdue: Boolean(item.reviewOverdue ?? item.review_overdue),
+  reviewedAt: item.reviewedAt || item.reviewed_at || '',
+  reviewedBy: item.reviewedBy || item.reviewed_by || '',
+  reviewSlaHours: item.reviewSlaHours || item.review_sla_hours || ''
 })
 
 const unwrapNotificationPayload = (payload) => {
@@ -282,6 +307,39 @@ const getTypeIcon = (type) => ({
   risk: Warning,
   system: Bell
 }[type] || Bell)
+
+const getReviewStatusLabel = (status) => ({
+  reviewed: '已确认',
+  dismissed: '已忽略',
+  needs_review: '需复核',
+  in_progress: '处理中',
+  pending_review: '待复核',
+  failed: '失败',
+  cancelled: '已取消'
+}[status] || '复核状态')
+const getReviewActionLabel = (action) => ({
+  acknowledged: '动作: 已确认',
+  needs_review: '动作: 继续复核',
+  dismissed: '动作: 已忽略'
+}[action] || '动作: 待处理')
+
+const getReviewTagType = (notification) => {
+  if (notification.reviewOverdue) return 'danger'
+  return {
+    reviewed: 'success',
+    dismissed: 'info',
+    needs_review: 'warning',
+    in_progress: 'primary',
+    pending_review: 'warning',
+    failed: 'danger',
+    cancelled: 'info'
+  }[notification.reviewStatus] || 'info'
+}
+const getReviewActionTagType = (action) => ({
+  acknowledged: 'success',
+  needs_review: 'warning',
+  dismissed: 'info'
+}[action] || 'info')
 
 const loadNotifications = async () => {
   loading.value = true
@@ -678,9 +736,21 @@ onMounted(() => {
   font-size: 12px;
 }
 
+.notification-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .notification-message {
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+.overdue-text {
+  color: var(--danger);
 }
 
 .notification-actions {

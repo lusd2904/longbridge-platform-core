@@ -80,7 +80,7 @@ def _build_union_sql(
         if market_value and table_market != market_value:
             continue
 
-        where_clauses = ["is_active = 1", "(user_id = %s OR user_id = 1)"]
+        where_clauses = ["is_active = 1", "user_id = %s"]
         select_params: List[Any] = [int(user_id)]
 
         if search_value:

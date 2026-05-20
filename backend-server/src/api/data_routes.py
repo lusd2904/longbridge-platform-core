@@ -3,7 +3,7 @@
 """
 from flask import Blueprint, request, jsonify
 from utils.DbUtil import DbUtil
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import urlencode
 import json
@@ -251,6 +251,8 @@ def _build_legacy_account_card(summary: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _load_realtime_account_state(account_id: Optional[int] = None, user_id: Optional[int] = None) -> Tuple[Any, Dict[str, Any], List[Any]]:
+    if user_id is None:
+        raise ValueError("user_id is required")
     broker = _get_connected_broker(account_id, user_id=user_id, require_connection=False)
     positions = broker.get_positions() or []
 
@@ -264,7 +266,7 @@ def _load_realtime_account_state(account_id: Optional[int] = None, user_id: Opti
         summary = _build_account_summary(account_info, positions)
         summary.setdefault("source", "realtime")
     except Exception:
-        summary = _build_snapshot_summary(account_id, user_id or 1, positions if positions and isinstance(positions[0], dict) else [
+        summary = _build_snapshot_summary(account_id, user_id, positions if positions and isinstance(positions[0], dict) else [
             {
                 "market_value": float(getattr(position, 'market_value', 0) or 0),
                 "marketValue": float(getattr(position, 'market_value', 0) or 0)
@@ -274,7 +276,7 @@ def _load_realtime_account_state(account_id: Optional[int] = None, user_id: Opti
     return broker, summary, positions
 
 
-def _persist_asset_trend(summary: Dict[str, Any], user_id: int = 1) -> None:
+def _persist_asset_trend(summary: Dict[str, Any], user_id: int) -> None:
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         DbUtil.save_asset_trend(
@@ -433,7 +435,7 @@ def _fetch_stock_pool_rows(
     if not _table_exists(table_name):
         return []
 
-    where_clause = "WHERE is_active = 1 AND (user_id = %s OR user_id = 1)"
+    where_clause = "WHERE is_active = 1 AND user_id = %s"
     params: List[Any] = [user_id]
     if search:
         where_clause += f" AND (symbol LIKE %s OR {table_config['name_field']} LIKE %s)"
@@ -497,7 +499,7 @@ def _count_stock_pool_rows(
     if not _table_exists(table_name):
         return 0
 
-    where_clause = "WHERE is_active = 1 AND (user_id = %s OR user_id = 1)"
+    where_clause = "WHERE is_active = 1 AND user_id = %s"
     params: List[Any] = [user_id]
     if group_id:
         where_clause += " AND group_id = %s"
@@ -1005,6 +1007,10 @@ AGENT_REVIEW_SCENE_LABELS = {
     "watchlist_pre_open_review": "自选股盘前复核",
     "watchlist_post_close_review": "自选股盘后复核",
 }
+AGENT_REVIEW_SLA_HOURS = {
+    "watchlist_pre_open_review": 2,
+    "watchlist_post_close_review": 18,
+}
 
 
 def _coerce_agent_list(value: Any) -> List[Any]:
@@ -1078,6 +1084,7 @@ def _collect_agent_risk_events(user_id: int, limit: int = 20) -> List[Dict[str, 
 
         timestamp = row.get("finishedAt") or row.get("updatedAt") or row.get("createdAt")
         route_query = urlencode({"agentRunId": str(run_id), "scene": scene})
+        lifecycle = _agent_review_lifecycle(row, scene)
         for index, risk_flag in enumerate(risk_flags, start=1):
             if isinstance(risk_flag, dict):
                 level = _normalize_agent_risk_level(
@@ -1104,6 +1111,7 @@ def _collect_agent_risk_events(user_id: int, limit: int = 20) -> List[Dict[str, 
             if not message:
                 message = "Agent 复核识别到结构化风险，请进入任务中心查看证据和复核建议。"
 
+            active = _is_active_agent_review_risk(lifecycle)
             events.append({
                 "id": f"agent:{run_id}:risk:{index}",
                 "level": level,
@@ -1118,6 +1126,8 @@ def _collect_agent_risk_events(user_id: int, limit: int = 20) -> List[Dict[str, 
                 "run_id": run_id,
                 "scene": scene,
                 "evidence": evidence[:5],
+                "active": active,
+                **lifecycle,
             })
             if len(events) >= limit:
                 return events
@@ -1130,14 +1140,15 @@ def _build_risk_overview(user_id: int, account_id: Optional[int] = None) -> Dict
     limits = _load_risk_limits(user_id)
     alerts = StrategyMonitorService.get_alerts(user_id=user_id, limit=50)
     agent_risk_events = _collect_agent_risk_events(user_id=user_id, limit=20)
+    active_agent_risk_events = [item for item in agent_risk_events if _is_active_agent_review_risk(item)]
     stop_loss_orders = _load_risk_orders(user_id=user_id, order_type='stop_loss', account_id=account_id)
     take_profit_orders = _load_risk_orders(user_id=user_id, order_type='take_profit', account_id=account_id)
     positions = list(_load_position_snapshot(user_id=user_id, account_id=account_id).values())
 
     high_risk_count = len([item for item in alerts if item.get('severity') == 'high'])
-    high_risk_count += len([item for item in agent_risk_events if item.get('level') == 'high'])
+    high_risk_count += len([item for item in active_agent_risk_events if item.get('level') == 'high'])
     medium_risk_count = len([item for item in alerts if item.get('severity') == 'medium'])
-    medium_risk_count += len([item for item in agent_risk_events if item.get('level') == 'medium'])
+    medium_risk_count += len([item for item in active_agent_risk_events if item.get('level') == 'medium'])
     max_weight = max((float(item.get('weight') or 0) for item in positions), default=0.0)
     drawdown = _compute_asset_drawdown(user_id)
     protection_count = len(stop_loss_orders) + len(take_profit_orders)
@@ -1215,12 +1226,84 @@ def _parse_datetime_value(value: Any) -> datetime:
     text = str(value or '').strip()
     if not text:
         return datetime.min
-    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
         try:
             return datetime.strptime(text[:19], fmt)
         except ValueError:
             continue
     return datetime.min
+
+
+def _format_agent_datetime(value: datetime) -> str:
+    return value.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _agent_review_lifecycle(row: Dict[str, Any], scene: str) -> Dict[str, Any]:
+    status = str(row.get("status") or "").strip().lower()
+    review_action = str(row.get("reviewAction") or "").strip().lower()
+    if review_action == "acknowledged":
+        review_status = "reviewed"
+    elif review_action == "dismissed":
+        review_status = "dismissed"
+    elif review_action == "needs_review":
+        review_status = "needs_review"
+    elif status in {"queued", "running"}:
+        review_status = "in_progress"
+    elif status in {"failed", "cancelled"}:
+        review_status = status
+    else:
+        review_status = "pending_review"
+
+    base_time = _parse_datetime_value(row.get("finishedAt") or row.get("updatedAt") or row.get("createdAt"))
+    sla_hours = int(AGENT_REVIEW_SLA_HOURS.get(scene, 12))
+    deadline_at = None
+    overdue = False
+    if base_time != datetime.min:
+        deadline = base_time + timedelta(hours=sla_hours)
+        deadline_at = _format_agent_datetime(deadline)
+        overdue = review_status in {"pending_review", "needs_review"} and datetime.now() > deadline
+
+    return {
+        "reviewStatus": review_status,
+        "reviewAction": review_action or None,
+        "reviewedAt": row.get("reviewedAt"),
+        "reviewedBy": row.get("reviewedBy"),
+        "reviewDeadlineAt": deadline_at,
+        "reviewOverdue": overdue,
+        "reviewSlaHours": sla_hours,
+    }
+
+
+def _is_active_agent_review_risk(event: Dict[str, Any]) -> bool:
+    status = str(event.get("reviewStatus") or "").strip().lower()
+    return status not in {"reviewed", "dismissed", "cancelled", "failed"}
+
+
+def _agent_review_status_label(status: str) -> str:
+    return {
+        "reviewed": "已确认",
+        "dismissed": "已忽略",
+        "needs_review": "需复核",
+        "in_progress": "处理中",
+        "pending_review": "待复核",
+        "failed": "失败",
+        "cancelled": "已取消",
+    }.get(str(status or "").strip().lower(), "已更新")
+
+
+def _agent_review_notification_prefix(lifecycle: Dict[str, Any]) -> str:
+    status = str(lifecycle.get("reviewStatus") or "").strip().lower()
+    if bool(lifecycle.get("reviewOverdue")):
+        return "复核已超期"
+    return {
+        "reviewed": "已人工确认",
+        "dismissed": "已忽略",
+        "needs_review": "需要人工复核",
+        "pending_review": "待人工复核",
+        "in_progress": "复核处理中",
+        "failed": "复核失败",
+        "cancelled": "复核已取消",
+    }.get(status, "")
 
 
 def _get_notification_states(user_id: int, keys: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -1459,23 +1542,17 @@ def _collect_agent_review_notifications(user_id: int, limit: int = 20, risk_only
         if extra_parts:
             summary = f"{summary}（{'，'.join(extra_parts)}）"
 
-        status_label = {
-            "succeeded": "已完成",
-            "success": "已完成",
-            "completed": "已完成",
-            "running": "运行中",
-            "queued": "排队中",
-            "failed": "失败",
-            "cancelled": "已取消",
-            "skipped": "已跳过",
-        }.get(status, "已更新")
-
         route_query = urlencode({"agentRunId": str(run_id), "scene": scene})
         item_type = "agent-risk" if risk_count else "agent"
+        lifecycle = _agent_review_lifecycle(row, scene)
+        review_status_label = _agent_review_status_label(str(lifecycle.get("reviewStatus") or ""))
+        lifecycle_prefix = _agent_review_notification_prefix(lifecycle)
+        if lifecycle_prefix:
+            summary = f"{lifecycle_prefix}：{summary}"
         items.append({
             "notificationKey": f"agent:{run_id}",
             "type": item_type,
-            "title": f"{AGENT_REVIEW_SCENE_LABELS[scene]} {status_label}",
+            "title": f"{AGENT_REVIEW_SCENE_LABELS[scene]} {review_status_label}",
             "message": summary[:500],
             "time": row.get("finishedAt") or row.get("updatedAt") or row.get("createdAt"),
             "route": f"/scheduler-center?{route_query}",
@@ -1484,6 +1561,7 @@ def _collect_agent_review_notifications(user_id: int, limit: int = 20, risk_only
             "scene": scene,
             "riskCount": risk_count,
             "reviewCount": review_count,
+            **lifecycle,
         })
 
     return items[:limit]
@@ -1580,7 +1658,7 @@ def get_stock_groups():
         user_id = request.user_id
         market = request.args.get('market', 'all')
         
-        where_clause = "WHERE is_active = 1 AND (user_id = %s OR user_id = 1)"
+        where_clause = "WHERE is_active = 1 AND user_id = %s"
         params = [user_id]
         
         if market != 'all':
@@ -2252,7 +2330,7 @@ def get_market_status():
 def get_dashboard_market_insights():
     """获取仪表盘市场动态，优先读取数据库最新分析快照。"""
     try:
-        insights = MarketInsightService.get_latest_snapshots(user_id=getattr(request, 'user_id', 1))
+        insights = MarketInsightService.get_latest_snapshots(user_id=request.user_id)
         return jsonify({
             "success": True,
             "data": insights
@@ -2269,7 +2347,7 @@ def refresh_dashboard_market_insights():
     """手动刷新市场动态分析并写入数据库。"""
     try:
         result = MarketInsightService.refresh_all_markets(
-            user_id=getattr(request, 'user_id', 1),
+            user_id=request.user_id,
             source='manual'
         )
         return jsonify({
@@ -2547,7 +2625,7 @@ def get_accounts():
     """获取账户列表 - 从券商实时获取"""
     try:
         manager = get_broker_manager()
-        accounts = manager.list_accounts(getattr(request, 'user_id', 1))
+        accounts = manager.list_accounts(request.user_id)
         result = []
         for account in accounts:
             account_id = account.get('account_id')

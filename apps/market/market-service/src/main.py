@@ -80,24 +80,6 @@ async def market_service_lifespan(_: Any):
     QuoteSnapshotService.ensure_schema()
     WatchlistService.ensure_schema()
     await asyncio.to_thread(HistoricalMarketDataService.get_backfill_status)
-    default_coverage_key = _build_history_coverage_cache_key(
-        start_date=_HISTORY_COVERAGE_START_DATE,
-        search="",
-        status="",
-        page=1,
-        page_size=20,
-        expected_start=None,
-        expected_end=None,
-    )
-    default_coverage_payload = await asyncio.to_thread(
-        _load_history_coverage_payload,
-        start_date=_HISTORY_COVERAGE_START_DATE,
-        search="",
-        status="",
-        page=1,
-        page_size=20,
-    )
-    _set_history_coverage_cache(default_coverage_key, default_coverage_payload)
     for market in ("US", "CN", "HK"):
         await asyncio.to_thread(
             _get_history_market_expectation,
@@ -331,9 +313,10 @@ def _build_history_coverage_meta(
     }
 
 
-def _build_history_coverage_universe_sql() -> str:
+def _build_history_coverage_universe_sql(user_id: int) -> Tuple[str, Tuple[Any, ...]]:
     table_configs = iter_stock_pool_tables("all")
     clauses: List[str] = []
+    params: List[Any] = []
     for table_config in table_configs:
         table_name = str(table_config.get("table") or "").strip()
         name_field = str(table_config.get("name_field") or "").strip()
@@ -352,10 +335,11 @@ def _build_history_coverage_universe_sql() -> str:
                 {priority} AS source_priority
             FROM {table_name}
             WHERE is_active = 1
-              AND (user_id = 1 OR user_id IS NULL)
+              AND user_id = %s
             """
         )
-    return "\nUNION ALL\n".join(clauses)
+        params.append(int(user_id))
+    return "\nUNION ALL\n".join(clauses), tuple(params)
 
 
 def _empty_history_coverage_payload(start_date: date) -> Dict[str, Any]:
@@ -400,7 +384,7 @@ def _coerce_history_coverage_date(value: Any) -> Optional[date]:
     return None
 
 
-def _load_exact_history_coverage_universe_rows(symbol: str) -> List[Dict[str, Any]]:
+def _load_exact_history_coverage_universe_rows(symbol: str, user_id: int) -> List[Dict[str, Any]]:
     table_configs = iter_stock_pool_tables("all")
     rows: List[Dict[str, Any]] = []
     for table_config in table_configs:
@@ -421,14 +405,13 @@ def _load_exact_history_coverage_universe_rows(symbol: str) -> List[Dict[str, An
                 {priority} AS source_priority
             FROM {table_name}
             WHERE is_active = 1
-              AND (user_id = 1 OR user_id IS NULL)
+              AND user_id = %s
               AND symbol = %s
             ORDER BY
-                CASE WHEN user_id = 1 THEN 0 ELSE 1 END ASC,
                 updated_at DESC
             LIMIT 1
             """,
-            (symbol,),
+            (int(user_id), symbol),
         ) or []
         rows.extend(table_rows)
 
@@ -508,16 +491,17 @@ def _get_history_market_expectation(*, start_date: date, market: str) -> Dict[st
 
 def _build_history_coverage_sql(
     *,
+    user_id: int,
     start_date: date,
     search: str,
     status: str,
 ) -> Tuple[str, Tuple[Any, ...]]:
-    universe_sql = _build_history_coverage_universe_sql()
+    universe_sql, universe_params = _build_history_coverage_universe_sql(user_id)
     if not universe_sql:
         return "", ()
 
     history_table = HistoricalMarketDataService.TABLE_NAME
-    params: List[Any] = []
+    params: List[Any] = list(universe_params)
     search_clause = ""
     search_value = str(search or "").strip()
     if search_value:
@@ -635,6 +619,7 @@ def _build_history_coverage_sql(
 
 def _load_exact_history_coverage_payload(
     *,
+    user_id: int,
     start_date: date,
     search: str,
     status: str,
@@ -645,7 +630,7 @@ def _load_exact_history_coverage_payload(
     if not exact_symbol:
         return None
 
-    universe_rows = _load_exact_history_coverage_universe_rows(exact_symbol)
+    universe_rows = _load_exact_history_coverage_universe_rows(exact_symbol, user_id)
     if not universe_rows:
         if explicit_market_suffix:
             return _empty_history_coverage_payload(start_date)
@@ -781,12 +766,12 @@ def _load_exact_history_coverage_payload(
     }
 
 
-def _load_history_coverage_market_rows(*, start_date: date, search: str) -> List[Dict[str, Any]]:
-    universe_sql = _build_history_coverage_universe_sql()
+def _load_history_coverage_market_rows(*, user_id: int, start_date: date, search: str) -> List[Dict[str, Any]]:
+    universe_sql, universe_params = _build_history_coverage_universe_sql(user_id)
     if not universe_sql:
         return []
 
-    params: List[Any] = []
+    params: List[Any] = list(universe_params)
     search_clause = ""
     search_value = str(search or "").strip()
     if search_value:
@@ -852,6 +837,7 @@ def _load_history_coverage_market_rows(*, start_date: date, search: str) -> List
 
 def _load_history_coverage_payload(
     *,
+    user_id: int,
     start_date: date,
     search: str,
     status: str,
@@ -859,6 +845,7 @@ def _load_history_coverage_payload(
     page_size: int,
 ) -> Dict[str, Any]:
     exact_payload = _load_exact_history_coverage_payload(
+        user_id=user_id,
         start_date=start_date,
         search=search,
         status=status,
@@ -869,6 +856,7 @@ def _load_history_coverage_payload(
         return exact_payload
 
     coverage_sql, coverage_params = _build_history_coverage_sql(
+        user_id=user_id,
         start_date=start_date,
         search=search,
         status=status,
@@ -907,7 +895,7 @@ def _load_history_coverage_payload(
     ) or []
     summary_row = item_rows[0] if item_rows else {}
     total = int(summary_row.get("filtered_total") or 0)
-    market_rows = _load_history_coverage_market_rows(start_date=start_date, search=search)
+    market_rows = _load_history_coverage_market_rows(user_id=user_id, start_date=start_date, search=search)
 
     items = [
         {
@@ -957,6 +945,7 @@ def _load_history_coverage_payload(
 
 def _build_history_coverage_cache_key(
     *,
+    user_id: int,
     start_date: date,
     search: str,
     status: str,
@@ -967,6 +956,7 @@ def _build_history_coverage_cache_key(
 ) -> Tuple[Any, ...]:
     return (
         "history-coverage",
+        int(user_id),
         start_date.isoformat(),
         str(search or "").strip(),
         str(status or "").strip(),
@@ -1166,19 +1156,19 @@ LONGBRIDGE_PULL_CATALOG = [
         "items": [
             {
                 "id": "history_candlesticks",
-                "title": "获取标的历史 K 线",
+                "title": "获取标的日线历史 K 线",
                 "path": "/api/v1/market/longbridge/history-candlesticks",
                 "method": "GET",
-                "sdkMethod": "history_candlesticks_by_date",
-                "dataMode": "hybrid",
+                "sdkMethod": "HistoricalMarketDataService.get_history",
+                "dataMode": "storage",
             },
             {
                 "id": "candlesticks",
-                "title": "获取标的 K 线",
+                "title": "获取标的 K 线（已迁移）",
                 "path": "/api/v1/market/longbridge/candlesticks",
                 "method": "GET",
-                "sdkMethod": "candlesticks",
-                "dataMode": "live",
+                "sdkMethod": "deprecated",
+                "dataMode": "deprecated",
             },
             {
                 "id": "capital_flow",
@@ -1916,9 +1906,11 @@ async def market_history_coverage(
     page_size: int = Query(default=20, ge=1, le=200),
     expected_start: Optional[str] = Query(default=None, alias="expectedStart"),
     expected_end: Optional[str] = Query(default=None, alias="expectedEnd"),
-    _: dict = Depends(get_current_session),
+    session: dict = Depends(get_current_session),
 ):
+    user_id = int(session["user_id"])
     cache_key = _build_history_coverage_cache_key(
+        user_id=user_id,
         start_date=_HISTORY_COVERAGE_START_DATE,
         search=search,
         status=status,
@@ -1931,6 +1923,7 @@ async def market_history_coverage(
     if payload is None:
         payload = await asyncio.to_thread(
             _load_history_coverage_payload,
+            user_id=user_id,
             start_date=_HISTORY_COVERAGE_START_DATE,
             search=search,
             status=status,
@@ -2357,7 +2350,7 @@ async def stock_groups(
     session: dict = Depends(get_current_session),
 ):
     user_id = int(session["user_id"])
-    where_clause = "WHERE is_active = 1 AND (user_id = %s OR user_id = 1)"
+    where_clause = "WHERE is_active = 1 AND user_id = %s"
     params: List[Any] = [user_id]
     if market != "all":
         where_clause += " AND market = %s"
@@ -2840,60 +2833,38 @@ async def longbridge_history_candlesticks(
     user_id = int(session["user_id"])
     normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
     parsed_period = parse_period(period)
-    parsed_adjust = parse_adjust_type(adjust_type)
     parsed_start = _parse_date(start_date, "start_date")
     parsed_end = _parse_date(end_date, "end_date")
-    parsed_session = parse_trade_sessions(trade_session)
     normalized_storage = str(storage_mode or "auto").strip().lower()
 
-    if (
-        normalized_storage not in {"longbridge", "sdk", "live"}
-        and str(parsed_period) == str(parse_period("day"))
-    ):
-        history = HistoricalMarketDataService.get_history(
-            symbol=normalized_symbol,
-            timeframe="daily",
-            limit=max(1, min(int(limit or 180), 5000)),
-            user_id=user_id,
-            refresh=refresh,
+    if normalized_storage in {"longbridge", "sdk", "live"}:
+        raise HTTPException(
+            status_code=410,
+            detail="Longbridge 历史 K 线 SDK 路径已停用；请使用 storage_mode=auto/skshare 读取本地日线历史库"
         )
-        items = history.get("items", [])
-        if parsed_start:
-            items = [item for item in items if (item.get("date") or item.get("trade_date") or "") >= parsed_start.isoformat()]
-        if parsed_end:
-            items = [item for item in items if (item.get("date") or item.get("trade_date") or "") <= parsed_end.isoformat()]
-        history["items"] = items
-        history["dataSource"] = "skshare"
-        history["runtime"] = _longbridge_runtime()
-        return {"success": True, "data": history}
 
-    ctx = _with_quote_context(user_id)
-    kwargs = {}
-    if parsed_start is not None:
-        kwargs["start"] = parsed_start
-    if parsed_end is not None:
-        kwargs["end"] = parsed_end
-    if parsed_session is not None:
-        kwargs["trade_sessions"] = parsed_session
-    payload = ctx.history_candlesticks_by_date(
-        normalized_symbol,
-        parsed_period,
-        parsed_adjust,
-        **kwargs,
+    if str(parsed_period) != str(parse_period("day")):
+        raise HTTPException(
+            status_code=410,
+            detail="Longbridge 历史 K 线 SDK 路径已停用；该兼容端点仅提供日线历史库数据"
+        )
+
+    history = HistoricalMarketDataService.get_history(
+        symbol=normalized_symbol,
+        timeframe="daily",
+        limit=max(1, min(int(limit or 180), 5000)),
+        user_id=user_id,
+        refresh=refresh,
     )
-    return {
-        "success": True,
-        "data": _serialize_live(
-            payload,
-            extra={
-                "symbol": normalized_symbol,
-                "period": period,
-                "adjustType": adjust_type,
-                "startDate": parsed_start.isoformat() if parsed_start else None,
-                "endDate": parsed_end.isoformat() if parsed_end else None,
-            },
-        ),
-    }
+    items = history.get("items", [])
+    if parsed_start:
+        items = [item for item in items if (item.get("date") or item.get("trade_date") or "") >= parsed_start.isoformat()]
+    if parsed_end:
+        items = [item for item in items if (item.get("date") or item.get("trade_date") or "") <= parsed_end.isoformat()]
+    history["items"] = items
+    history["dataSource"] = "market-price-history-daily"
+    history["runtime"] = _longbridge_runtime()
+    return {"success": True, "data": history}
 
 
 @app.get("/api/v1/market/longbridge/candlesticks")
@@ -2905,19 +2876,10 @@ async def longbridge_candlesticks(
     trade_session: str = "all",
     session: dict = Depends(get_current_session),
 ):
-    ctx = _with_quote_context(int(session["user_id"]))
-    parsed_session = parse_trade_sessions(trade_session)
-    kwargs = {}
-    if parsed_session is not None:
-        kwargs["trade_sessions"] = parsed_session
-    payload = ctx.candlesticks(
-        HistoricalMarketDataService.normalize_symbol(symbol),
-        parse_period(period),
-        max(1, min(int(count or 30), 1000)),
-        parse_adjust_type(adjust_type),
-        **kwargs,
+    raise HTTPException(
+        status_code=410,
+        detail="Longbridge K 线 SDK 路径已停用；日线历史请使用 /api/v1/market/longbridge/history-candlesticks?storage_mode=auto"
     )
-    return {"success": True, "data": _serialize_live(payload)}
 
 
 @app.get("/api/v1/market/longbridge/options/expiry-dates")

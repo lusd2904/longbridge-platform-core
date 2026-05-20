@@ -23,6 +23,11 @@ LEGACY_SCHEDULER_PATHS = [
 MARKET_INSIGHT_SERVICE = ROOT / "backend-server/src/core/analysis/MarketInsightService.py"
 RECOMMENDATION_SERVICE = ROOT / "backend-server/src/core/analysis/RecommendationService.py"
 BROKER_INTERFACE = ROOT / "backend-server/src/core/broker/BrokerInterface.py"
+COMPOSE_FILE = ROOT / "docker-compose.yml"
+MARKET_SERVICE_MAIN = ROOT / "apps/market/market-service/src/main.py"
+MARKET_STOCK_POOL_QUERY = ROOT / "apps/market/market-service/src/stock_pool_query.py"
+DATA_ROUTES = ROOT / "backend-server/src/api/data_routes.py"
+AGNO_SIDECAR_MAIN = ROOT / "apps/intelligence/agno-sidecar/src/main.py"
 
 
 def _load_module(module_name: str, path: Path):
@@ -109,6 +114,32 @@ def test_watchlist_review_empty_targets_returns_skipped_without_run(monkeypatch)
     assert result["skipped"] is True
     assert result["targetsCount"] == 0
     assert calls == {"create": 0, "worker": 0, "load": 1}
+
+
+def test_watchlist_review_reuses_recent_idempotent_run(monkeypatch) -> None:
+    module = _load_module("analysis_service_watchlist_idempotency_test", ANALYSIS_MAIN)
+    calls = {"create": 0, "worker": 0}
+
+    monkeypatch.setattr(module, "_load_watchlist_scan_targets", lambda *args, **kwargs: ["AAPL.US"])
+    monkeypatch.setattr(module, "_build_watchlist_idempotency_key", lambda **kwargs: "idem-1")
+    monkeypatch.setattr(
+        module,
+        "_find_recent_watchlist_run_by_idempotency_key",
+        lambda **kwargs: {"runId": 77, "status": "queued", "inputSummary": {"idempotencyKey": "idem-1"}},
+    )
+    monkeypatch.setattr(module, "_create_watchlist_run", lambda *args, **kwargs: calls.__setitem__("create", calls["create"] + 1) or 101)
+    monkeypatch.setattr(module, "_start_watchlist_review_worker", lambda *args, **kwargs: calls.__setitem__("worker", calls["worker"] + 1))
+
+    result = asyncio.run(module.watchlist_review(
+        payload={"session": "pre_open", "targets": ["AAPL.US"], "triggerSource": "manual", "dryRun": True},
+        auth_session={"user_id": 1, "role": "admin"},
+    ))
+
+    assert result["accepted"] is True
+    assert result["deduped"] is True
+    assert result["agentRunId"] == 77
+    assert result["idempotencyKey"] == "idem-1"
+    assert calls == {"create": 0, "worker": 0}
 
 
 def test_scheduler_does_not_fallback_to_first_active_user_when_watchlist_empty() -> None:
@@ -318,3 +349,69 @@ def test_agent_run_service_exposes_atomic_claim() -> None:
     claim_source = ast.get_source_segment(source, claim_node) or ""
     assert "WHERE run_id = %s AND status = %s" in claim_source
     assert '"queued"' in claim_source
+
+
+def test_agent_run_service_exposes_stranded_cleanup() -> None:
+    source = AGENT_RUN_SERVICE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    cleanup_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "cancel_stale_runs":
+            cleanup_node = node
+            break
+
+    assert cleanup_node is not None, "AgentRunService.cancel_stale_runs is required for restart cleanup"
+    cleanup_source = ast.get_source_segment(source, cleanup_node) or ""
+    assert "status IN (%s, %s)" in cleanup_source
+    assert '"queued"' in cleanup_source
+    assert '"running"' in cleanup_source
+    assert "DATE_SUB(NOW(), INTERVAL %s MINUTE)" in cleanup_source
+    assert '"cancelled"' in cleanup_source
+
+
+def test_analysis_service_registers_startup_stranded_cleanup() -> None:
+    source = ANALYSIS_MAIN.read_text(encoding="utf-8")
+    assert 'app.add_event_handler("startup", _cleanup_stranded_agent_runs)' in source
+    assert '("cancel_stale_runs",)' in source
+
+
+def test_compose_runs_agno_sidecar_container() -> None:
+    source = COMPOSE_FILE.read_text(encoding="utf-8")
+    assert "agno-sidecar:" in source
+    assert "container_name: refactor-v2-agno-sidecar" in source
+    assert "apps/intelligence/agno-sidecar/src" in source
+    assert "REF_AGNO_SIDECAR_URL: ${REF_AGNO_SIDECAR_URL:-http://agno-sidecar:3200}" in source
+
+
+def test_analysis_service_posts_payload_to_agno_form_endpoint() -> None:
+    source = _function_source("_post_agno_team_run")
+
+    assert '"payload": json.dumps(payload, ensure_ascii=False, default=str)' in source
+    assert '"Content-Type": "application/x-www-form-urlencoded"' in source
+    assert "urllib_parse.urlencode(form_payload)" in source
+
+
+def test_agno_sidecar_parses_form_encoded_team_runs() -> None:
+    source = AGNO_SIDECAR_MAIN.read_text(encoding="utf-8")
+
+    assert "application/x-www-form-urlencoded" in source
+    assert "urllib_parse.parse_qs" in source
+    assert 'payload.get("payload")' in source
+    assert "json.loads(str(embedded_payload))" in source
+    assert "async def watchlist_review(request: Request)" in source
+    assert "request_payload = await _parse_request_payload(request)" in source
+
+
+def test_user_stock_pool_paths_do_not_use_bootstrap_user_fallback() -> None:
+    banned_snippets = [
+        "user_id = %s OR user_id = 1",
+        "user_id = 1 OR user_id = %s",
+        "OR user_id = 1",
+        "user_id IN (%s, 1)",
+        "user_id = 1 OR user_id IS NULL",
+        "CASE WHEN user_id = 1",
+    ]
+    for path in (DATA_ROUTES, MARKET_SERVICE_MAIN, MARKET_STOCK_POOL_QUERY):
+        source = path.read_text(encoding="utf-8")
+        for snippet in banned_snippets:
+            assert snippet not in source, path.name

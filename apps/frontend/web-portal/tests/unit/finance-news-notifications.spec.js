@@ -1,5 +1,5 @@
 import { flushPromises, shallowMount } from '@vue/test-utils'
-import { nextTick, ref } from 'vue'
+import { ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getFinanceBriefingsMock = vi.fn()
@@ -68,7 +68,10 @@ const mountOptions = {
       'el-input': { template: '<input />' },
       'el-radio-button': { template: '<button><slot /></button>' },
       'el-radio-group': { template: '<div><slot /></div>' },
-      'el-tag': { template: '<span><slot /></span>' }
+      'el-tag': {
+        props: ['type'],
+        template: '<span :data-tag-type="type"><slot /></span>'
+      }
     }
   }
 }
@@ -252,7 +255,14 @@ describe('FinanceNews and Notifications fetch behavior', () => {
             read: true,
             route: '/scheduler-center?agentRunId=run-20260520-003&scene=watchlist_pre_open_review',
             runId: 'run-20260520-003',
-            scene: 'watchlist_pre_open_review'
+            scene: 'watchlist_pre_open_review',
+            reviewStatus: 'needs_review',
+            reviewAction: 'needs_review',
+            reviewDeadlineAt: '2026-05-20 10:35:00',
+            reviewOverdue: true,
+            reviewedAt: '2026-05-20T09:20:00Z',
+            reviewedBy: 'analyst',
+            reviewSlaHours: 2
           }
         ],
         summary: { unreadCount: 0 }
@@ -264,8 +274,30 @@ describe('FinanceNews and Notifications fetch behavior', () => {
     await flushPromises()
 
     expect(wrapper.vm.filteredNotifications[0].type).toBe('agent-risk')
+    expect(wrapper.vm.filteredNotifications[0].reviewStatus).toBe('needs_review')
+    expect(wrapper.vm.filteredNotifications[0].reviewAction).toBe('needs_review')
+    expect(wrapper.vm.filteredNotifications[0].reviewDeadlineAt).toBe('2026-05-20 10:35:00')
+    expect(wrapper.vm.filteredNotifications[0].reviewOverdue).toBe(true)
+    expect(wrapper.vm.filteredNotifications[0].reviewedAt).toBe('2026-05-20T09:20:00Z')
+    expect(wrapper.vm.filteredNotifications[0].reviewedBy).toBe('analyst')
+    expect(wrapper.vm.filteredNotifications[0].reviewSlaHours).toBe(2)
+    expect(wrapper.vm.getReviewStatusLabel('needs_review')).toBe('需复核')
+    expect(wrapper.vm.getReviewActionLabel('needs_review')).toBe('动作: 继续复核')
+    expect(wrapper.vm.getReviewStatusLabel('reviewed')).toBe('已确认')
+    expect(wrapper.vm.getReviewActionLabel('acknowledged')).toBe('动作: 已确认')
+    expect(wrapper.vm.getReviewTagType(wrapper.vm.filteredNotifications[0])).toBe('danger')
+    expect(wrapper.vm.getReviewActionTagType('needs_review')).toBe('warning')
     expect(wrapper.vm.getTypeLabel('agent-risk')).toBe('Agent 风险')
     expect(wrapper.vm.getTypeTagType('agent-risk')).toBe('warning')
+    expect(wrapper.text()).toContain('需复核')
+    expect(wrapper.text()).toContain('动作: 继续复核')
+    expect(wrapper.text()).toContain('截止')
+    expect(wrapper.text()).toContain('SLA 2h')
+    expect(wrapper.text()).toContain('复核于')
+    expect(wrapper.text()).toContain('复核 analyst')
+    expect(wrapper.text()).toContain('已超期')
+    expect(wrapper.findAll('[data-tag-type=\"danger\"]').length).toBeGreaterThan(0)
+    expect(wrapper.findAll('[data-tag-type=\"warning\"]').length).toBeGreaterThan(0)
   })
 
   it('supports separate route query payloads for agent notifications', async () => {

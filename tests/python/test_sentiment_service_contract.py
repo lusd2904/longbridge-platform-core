@@ -38,6 +38,22 @@ def test_sentiment_config_reuses_sub2api_models(monkeypatch) -> None:
     assert payload["aiConfig"]["source"] == "LONGBRIDGE_AI_*"
 
 
+def test_sentiment_bootstrap_exposes_github_adoption_contract(monkeypatch) -> None:
+    monkeypatch.setenv("LONGBRIDGE_AI_BASE_URL", "http://sub2api:8080/v1")
+    monkeypatch.setenv("LONGBRIDGE_AI_MODEL", "gpt-5.5")
+    module = _load_module()
+
+    contract = module._build_page_contract(user_id=1)["githubAdoption"]
+
+    assert contract["decision"] == "native-contract-first"
+    assert "FinNLP collectors" in contract["recommendedStack"]
+    assert "sub2api gpt-5.4/gpt-5.5 synthesis" in contract["recommendedStack"]
+    assert contract["aiModelPolicy"].startswith("reuse LONGBRIDGE_AI_* / sub2api")
+    assert "must not submit orders" in contract["quantPolicy"]
+    assert any(item["name"] == "FinNLP" and item["adoption"] == "reference-adapter" for item in contract["candidates"])
+    assert any(item["license"] == "GPL family" and item["adoption"] == "do-not-vendor" for item in contract["candidates"])
+
+
 def test_sentiment_score_handles_json_payload_symbol() -> None:
     module = _load_module()
 

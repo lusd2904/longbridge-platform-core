@@ -54,6 +54,47 @@
       <p class="config-note">{{ aiConfig.note }}</p>
     </el-card>
 
+    <el-card class="glass-card">
+      <template #header>
+        <SectionCardHeader
+          title="GitHub 选型与量化边界"
+          :badge="githubAdoption.decision || 'native-contract-first'"
+        />
+      </template>
+      <div class="adoption-layout">
+        <div class="adoption-policy">
+          <div class="policy-item">
+            <span>推荐栈</span>
+            <strong>{{ recommendedStackText }}</strong>
+          </div>
+          <div class="policy-item">
+            <span>AI 复用</span>
+            <strong>{{ githubAdoption.aiModelPolicy || 'reuse LONGBRIDGE_AI_* / sub2api' }}</strong>
+          </div>
+          <div class="policy-item">
+            <span>量化边界</span>
+            <strong>{{ githubAdoption.quantPolicy || '只读证据，不触发交易执行' }}</strong>
+          </div>
+        </div>
+        <div class="candidate-list">
+          <div
+            v-for="candidate in githubCandidates"
+            :key="candidate.name"
+            class="candidate-row"
+          >
+            <div>
+              <strong>{{ candidate.name }}</strong>
+              <span>{{ candidate.fit }}</span>
+            </div>
+            <el-tag size="small" effect="plain">{{ candidate.license }}</el-tag>
+            <el-tag size="small" :type="candidate.adoption === 'do-not-vendor' ? 'danger' : 'info'" effect="plain">
+              {{ candidate.adoption }}
+            </el-tag>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
     <div class="summary-grid">
       <el-card v-for="summary in visibleMarketSummaries" :key="summary.market" class="glass-card summary-card">
         <div class="summary-head">
@@ -210,10 +251,14 @@ const overview = ref({
   topSymbols: [],
   riskWordCloud: [],
   aiConfig: {},
+  githubAdoption: {},
   linkedRoutes: {}
 })
 
 const aiConfig = computed(() => overview.value.aiConfig || {})
+const githubAdoption = computed(() => overview.value.githubAdoption || {})
+const githubCandidates = computed(() => githubAdoption.value.candidates || [])
+const recommendedStackText = computed(() => (githubAdoption.value.recommendedStack || []).join(' / ') || 'FinNLP / FinBERT / sub2api')
 const visibleMarketSummaries = computed(() => overview.value.marketSummaries || [])
 const visibleRiskWords = computed(() => {
   const keyword = String(focusKeyword.value || '').trim()
@@ -239,7 +284,8 @@ const filteredSymbols = computed(() => {
 const heroChips = computed(() => ([
   { text: selectedMarket.value === 'ALL' ? '全部市场' : marketLabel(selectedMarket.value), tone: 'info' },
   { text: aiConfig.value.provider || 'sub2api', tone: 'healthy' },
-  { text: aiConfig.value.models?.default || '--', tone: 'info' }
+  { text: aiConfig.value.models?.default || '--', tone: 'info' },
+  { text: githubAdoption.value.decision || 'native-contract-first', tone: 'warning' }
 ]))
 const heroMetrics = computed(() => ([
   { label: '市场摘要', value: `${visibleMarketSummaries.value.length} 个`, note: '跨市场情绪看板' },
@@ -282,11 +328,27 @@ const formatSigned = (value) => {
   return `${normalized > 0 ? '+' : ''}${normalized.toFixed(2)}`
 }
 const formatNumber = (value) => Number(value || 0).toFixed(1)
+const mergeOverview = (payload = {}) => ({
+  ...overview.value,
+  ...payload,
+  aiConfig: {
+    ...(overview.value.aiConfig || {}),
+    ...(payload.aiConfig || {})
+  },
+  githubAdoption: {
+    ...(overview.value.githubAdoption || {}),
+    ...(payload.githubAdoption || {})
+  },
+  linkedRoutes: {
+    ...(overview.value.linkedRoutes || {}),
+    ...(payload.linkedRoutes || {})
+  }
+})
 
 const loadBootstrap = async () => {
   try {
     const res = await getSentimentBootstrap()
-    overview.value = res?.data || overview.value
+    overview.value = mergeOverview(res?.data || {})
   } catch (error) {
     console.warn('加载舆情 bootstrap 失败:', error?.message || error)
   }
@@ -297,7 +359,7 @@ const loadOverview = async () => {
   try {
     const params = selectedMarket.value === 'ALL' ? {} : { market: selectedMarket.value }
     const res = await getSentimentOverview(params)
-    overview.value = res?.data || overview.value
+    overview.value = mergeOverview(res?.data || {})
   } catch (error) {
     console.error('加载舆情概览失败:', error)
     ElMessage.error('加载舆情概览失败')
@@ -353,7 +415,8 @@ onMounted(async () => {
 }
 
 .config-grid,
-.summary-grid {
+.summary-grid,
+.adoption-layout {
   display: grid;
   gap: 16px;
 }
@@ -385,6 +448,62 @@ onMounted(async () => {
   margin: 14px 0 0;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+.adoption-layout {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr);
+}
+
+.adoption-policy,
+.candidate-list {
+  display: grid;
+  gap: 12px;
+}
+
+.policy-item,
+.candidate-row {
+  border: 1px solid var(--border-soft);
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.policy-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+
+  span {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  strong {
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+}
+
+.candidate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+
+  div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  strong {
+    color: var(--text-primary);
+  }
+
+  span {
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
 }
 
 .summary-grid {
@@ -462,7 +581,12 @@ onMounted(async () => {
 
 @media (max-width: 1100px) {
   .summary-grid,
-  .config-grid {
+  .config-grid,
+  .adoption-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .candidate-row {
     grid-template-columns: 1fr;
   }
 }

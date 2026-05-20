@@ -25,7 +25,7 @@ x-backend-env: &backend-env
   LONGBRIDGE_CLI_BIN: longbridge
   LONGBRIDGE_REGION: cn
   LONGPORT_REGION: cn
-  REF_AGNO_SIDECAR_URL: ${REF_AGNO_SIDECAR_URL:-http://host.docker.internal:3200}
+  REF_AGNO_SIDECAR_URL: ${REF_AGNO_SIDECAR_URL:-http://agno-sidecar:3200}
 
 x-backend-service: &backend-service
   image: refactor-v2-platform:local
@@ -88,6 +88,8 @@ services:
     depends_on:
       market-service:
         condition: service_started
+      agno-sidecar:
+        condition: service_started
     environment:
       <<: *backend-env
       SERVICE_PORT: "8103"
@@ -100,6 +102,23 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  agno-sidecar:
+    <<: *backend-service
+    container_name: refactor-v2-agno-sidecar
+    command: ["scripts/docker_service_entrypoint.sh", "apps/intelligence/agno-sidecar/src"]
+    environment:
+      <<: *backend-env
+      SERVICE_PORT: "3200"
+      REF_AGNO_SIDECAR_PORT: "3200"
+    ports:
+      - "${REF_AGNO_SIDECAR_PORT:-3200}:3200"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
 
   strategy-service:
     <<: *backend-service

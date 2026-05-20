@@ -319,6 +319,42 @@ class AgentRunService:
         return cls.get_run(int(run_id), use_primary=True)
 
     @classmethod
+    def cancel_stale_runs(
+        cls,
+        *,
+        max_age_minutes: int = 60,
+        scene_prefix: Optional[str] = "watchlist_",
+        reason: Optional[Any] = None,
+    ) -> int:
+        cls.ensure_schema()
+        safe_minutes = max(5, min(int(max_age_minutes or 60), 24 * 60))
+        reason_payload = reason or {
+            "code": "agent_run_stranded",
+            "message": f"analysis-service startup cleanup cancelled queued/running runs older than {safe_minutes} minutes",
+        }
+        conditions = ["status IN (%s, %s)", "updated_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)"]
+        params: List[Any] = ["queued", "running", safe_minutes]
+        if scene_prefix:
+            conditions.append("scene LIKE %s")
+            params.append(f"{str(scene_prefix)}%")
+        affected = DbUtil.execute_sql(
+            f"""
+            UPDATE {cls.RUNS_TABLE}
+            SET status = %s,
+                error_summary = COALESCE(error_summary, %s),
+                finished_at = COALESCE(finished_at, NOW()),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE {' AND '.join(conditions)}
+            """,
+            tuple([
+                "cancelled",
+                cls._serialize_summary(reason_payload, cls.MAX_ERROR_LENGTH),
+                *params,
+            ]),
+        )
+        return int(affected or 0)
+
+    @classmethod
     def record_step(
         cls,
         *,

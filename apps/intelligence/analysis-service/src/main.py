@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import hashlib
 import json
 import os
 import re
@@ -64,6 +65,14 @@ PORT = service_port("REF_ANALYSIS_SERVICE_PORT", 8103)
 SYNC_ANALYZE_POSITIONS_LIMIT = 12
 AGNO_SIDECAR_BASE_URL = (
     str(os.getenv("REF_AGNO_SIDECAR_URL") or "http://127.0.0.1:3200").strip().rstrip("/")
+)
+WATCHLIST_REVIEW_IDEMPOTENCY_WINDOW_SECONDS = max(
+    60,
+    int(os.getenv("REF_WATCHLIST_REVIEW_IDEMPOTENCY_WINDOW_SECONDS", "900") or 900),
+)
+AGENT_RUN_STRANDED_MAX_AGE_MINUTES = max(
+    5,
+    int(os.getenv("REF_AGENT_RUN_STRANDED_MAX_AGE_MINUTES", "60") or 60),
 )
 _AGENT_RUN_SERVICE_FILE = REFACTOR_ROOT / "backend-server" / "src" / "core" / "analysis" / "AgentRunService.py"
 _AGENT_RUN_SERVICE_CLASS = None
@@ -440,6 +449,7 @@ def _build_agno_watchlist_message(payload: dict) -> str:
 def _post_agno_team_run(url: str, payload: dict, timeout_seconds: int) -> dict:
     form_payload = {
         "message": _build_agno_watchlist_message(payload),
+        "payload": json.dumps(payload, ensure_ascii=False, default=str),
         "stream": "false",
         "monitor": "true",
         "user_id": str(payload.get("userId") or payload.get("user_id") or ""),
@@ -555,6 +565,75 @@ def _call_agent_run_service(method_names: Tuple[str, ...], **kwargs) -> Optional
                 return method(**filtered_kwargs)
             except Exception:
                 continue
+    return None
+
+
+def _cleanup_stranded_agent_runs() -> int:
+    cleaned = _call_agent_run_service(
+        ("cancel_stale_runs",),
+        max_age_minutes=AGENT_RUN_STRANDED_MAX_AGE_MINUTES,
+        scene_prefix="watchlist_",
+        reason={
+            "code": "analysis_service_startup_cleanup",
+            "message": "analysis-service restarted before queued/running Agent review finished",
+        },
+    )
+    try:
+        return int(cleaned or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+app.add_event_handler("startup", _cleanup_stranded_agent_runs)
+
+
+def _build_watchlist_idempotency_key(
+    *,
+    scene: str,
+    user_id: int,
+    trigger_source: str,
+    targets: List[object],
+) -> str:
+    window = max(60, int(WATCHLIST_REVIEW_IDEMPOTENCY_WINDOW_SECONDS or 900))
+    bucket = int(time.time() // window)
+    canonical = json.dumps(
+        {
+            "scene": scene,
+            "userId": int(user_id),
+            "triggerSource": str(trigger_source or "manual").strip().lower(),
+            "targets": _sanitize_watchlist_payload(targets),
+            "bucket": bucket,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
+    return f"watchlist:{scene}:{int(user_id)}:{bucket}:{digest}"
+
+
+def _find_recent_watchlist_run_by_idempotency_key(
+    *,
+    scene: str,
+    user_id: int,
+    idempotency_key: str,
+) -> Optional[dict]:
+    rows = _call_agent_run_service(
+        ("list_recent_runs",),
+        scene=scene,
+        user_id=user_id,
+        limit=30,
+        use_primary=True,
+    )
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        status = str(row.get("status") or "").strip().lower()
+        if status in {"failed", "cancelled"}:
+            continue
+        input_summary = row.get("inputSummary") if isinstance(row.get("inputSummary"), dict) else {}
+        if input_summary.get("idempotencyKey") == idempotency_key:
+            return row
     return None
 
 
@@ -754,6 +833,8 @@ def _build_watchlist_review_accepted_result(
     trigger_source: str,
     dry_run: bool,
     targets_count: int,
+    idempotency_key: Optional[str] = None,
+    deduped: bool = False,
 ) -> dict:
     payload = _build_watchlist_review_result(
         run_id=run_id,
@@ -780,6 +861,9 @@ def _build_watchlist_review_accepted_result(
     )
     payload["accepted"] = True
     payload["async"] = True
+    payload["deduped"] = bool(deduped)
+    if idempotency_key:
+        payload["idempotencyKey"] = idempotency_key
     if db_run_id is not None:
         payload["agentRunId"] = db_run_id
     return payload
@@ -1850,6 +1934,32 @@ async def watchlist_review(
             user_id=user_id,
         )
 
+    idempotency_key = _build_watchlist_idempotency_key(
+        scene=scene,
+        user_id=user_id,
+        trigger_source=trigger_source,
+        targets=targets,
+    )
+    sidecar_payload["idempotencyKey"] = idempotency_key
+    existing_run = _find_recent_watchlist_run_by_idempotency_key(
+        scene=scene,
+        user_id=user_id,
+        idempotency_key=idempotency_key,
+    )
+    if isinstance(existing_run, dict):
+        existing_run_id = existing_run.get("runId") or existing_run.get("run_id")
+        return _build_watchlist_review_accepted_result(
+            run_id=str(existing_run_id or run_id),
+            db_run_id=int(existing_run_id) if existing_run_id else None,
+            scene=scene,
+            normalized_session=normalized_session,
+            trigger_source=trigger_source,
+            dry_run=dry_run,
+            targets_count=len(targets),
+            idempotency_key=idempotency_key,
+            deduped=True,
+        )
+
     db_run_id = _create_watchlist_run(
         scene=scene,
         user_id=user_id,
@@ -1872,6 +1982,7 @@ async def watchlist_review(
         trigger_source=trigger_source,
         dry_run=dry_run,
         targets_count=len(targets),
+        idempotency_key=idempotency_key,
     )
 
 

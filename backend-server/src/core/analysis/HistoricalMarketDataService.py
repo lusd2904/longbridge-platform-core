@@ -7,7 +7,7 @@ import logging
 import os
 import requests
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config.Config import AppConfig
 from core.analysis.MarketInsightService import MarketInsightService
@@ -607,8 +607,12 @@ class HistoricalMarketDataService:
     def sync_symbol(cls, symbol: str, user_id: int = 1, count: int = 420) -> int:
         cls.ensure_schema()
         normalized_symbol = cls.normalize_symbol(symbol)
-        candles = cls._fetch_candles(normalized_symbol, user_id=user_id, count=max(30, min(int(count or 420), 1500)))
-        return cls._save_candles(normalized_symbol, candles, source='skshare')
+        candles, source = cls._fetch_candles_with_source(
+            normalized_symbol,
+            user_id=user_id,
+            count=max(30, min(int(count or 420), 1500))
+        )
+        return cls._save_candles(normalized_symbol, candles, source=source)
 
     @classmethod
     def get_symbol_history_coverage(
@@ -769,19 +773,22 @@ class HistoricalMarketDataService:
             range_end = cls._coerce_date(item.get('endDate'))
             if not range_start or not range_end or range_end < range_start:
                 continue
-            candles = cls._fetch_candles_by_date_range_with_fallback(
+            candles, source = cls._fetch_candles_by_date_range_with_fallback_source(
                 normalized_symbol,
                 start_date=range_start,
                 end_date=range_end,
                 user_id=user_id
             )
             if candles:
-                saved = cls._save_candles(normalized_symbol, candles, source='skshare-backfill')
+                backfill_source = cls._backfill_source_name(source)
+                saved = cls._save_candles(normalized_symbol, candles, source=backfill_source)
                 saved_count += saved
                 fetched_ranges.append({
                     "startDate": range_start.strftime('%Y-%m-%d'),
                     "endDate": range_end.strftime('%Y-%m-%d'),
-                    "savedCount": saved
+                    "savedCount": saved,
+                    "dataSource": backfill_source,
+                    "upstreamSource": source
                 })
 
         refreshed_coverage = cls.get_symbol_history_coverage(
@@ -837,16 +844,26 @@ class HistoricalMarketDataService:
 
     @classmethod
     def _fetch_candles(cls, symbol: str, user_id: int = 1, count: int = 420) -> List[Dict[str, object]]:
+        candles, _source = cls._fetch_candles_with_source(symbol, user_id=user_id, count=count)
+        return candles
+
+    @classmethod
+    def _fetch_candles_with_source(
+        cls,
+        symbol: str,
+        user_id: int = 1,
+        count: int = 420
+    ) -> Tuple[List[Dict[str, object]], str]:
         safe_count = max(30, min(int(count or 420), 1500))
         end_date = date.today()
         start_date = end_date - timedelta(days=max(safe_count * 2, safe_count + 60))
-        candles = cls._fetch_candles_by_date_range_with_fallback(
+        candles, source = cls._fetch_candles_by_date_range_with_fallback_source(
             symbol,
             start_date=start_date,
             end_date=end_date,
             user_id=user_id,
         )
-        return candles[-safe_count:]
+        return candles[-safe_count:], source
 
     @classmethod
     def _fetch_candles_by_date_range(
@@ -867,6 +884,22 @@ class HistoricalMarketDataService:
         end_date: date,
         user_id: int = 1
     ) -> List[Dict[str, object]]:
+        candles, _source = cls._fetch_candles_by_date_range_with_fallback_source(
+            symbol,
+            start_date=start_date,
+            end_date=end_date,
+            user_id=user_id
+        )
+        return candles
+
+    @classmethod
+    def _fetch_candles_by_date_range_with_fallback_source(
+        cls,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        user_id: int = 1
+    ) -> Tuple[List[Dict[str, object]], str]:
         market = cls.detect_market(symbol)
 
         skshare_error = None
@@ -878,7 +911,7 @@ class HistoricalMarketDataService:
                 user_id=user_id
             )
             if skshare_history:
-                return skshare_history
+                return skshare_history, 'skshare'
         except Exception as exc:
             skshare_error = exc
             logger.warning("skshare 历史行情获取失败: %s %s", symbol, exc)
@@ -887,7 +920,7 @@ class HistoricalMarketDataService:
             try:
                 cn_history = cls._fetch_candles_from_akshare(symbol, start_date, end_date)
                 if cn_history:
-                    return cn_history
+                    return cn_history, 'akshare-fallback'
             except Exception as exc:
                 logger.warning("本地 akshare 历史行情 fallback 失败: %s %s", symbol, exc)
 
@@ -895,7 +928,7 @@ class HistoricalMarketDataService:
             try:
                 local_history = cls._fetch_candles_from_us_history_table(symbol, start_date, end_date)
                 if local_history:
-                    return local_history
+                    return local_history, 'us-history-fallback'
             except Exception as exc:
                 logger.warning("本地美股历史表 fallback 失败: %s %s", symbol, exc)
 
@@ -903,13 +936,20 @@ class HistoricalMarketDataService:
             try:
                 yf_history = cls._fetch_candles_from_yfinance(symbol, start_date, end_date)
                 if yf_history:
-                    return yf_history
+                    return yf_history, 'yfinance-fallback'
             except Exception as exc:
                 logger.warning("yfinance 历史行情 fallback 失败: %s %s", symbol, exc)
 
         if skshare_error:
             logger.warning("历史行情无可用 fallback: %s %s", symbol, skshare_error)
-        return []
+        return [], 'skshare'
+
+    @staticmethod
+    def _backfill_source_name(source: str) -> str:
+        safe_source = str(source or 'skshare').strip().lower() or 'skshare'
+        if safe_source.endswith('-backfill'):
+            return safe_source
+        return f'{safe_source}-backfill'
 
     @classmethod
     def _fetch_candles_from_skshare(

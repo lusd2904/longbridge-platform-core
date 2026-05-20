@@ -6,24 +6,26 @@ from core.analysis.HistoricalMarketDataService import HistoricalMarketDataServic
 from core.analysis.ai_analyst import AIAnalyst
 
 
+def _sample_candle(trade_date: str = "2026-01-02"):
+    return {
+        "trade_date": trade_date,
+        "open": 10,
+        "high": 11,
+        "low": 9,
+        "close": 10.5,
+        "volume": 1000,
+        "turnover": 10500,
+    }
+
+
 def test_sync_symbol_uses_skshare_source(monkeypatch) -> None:
     saved = {}
 
     monkeypatch.setattr(HistoricalMarketDataService, "ensure_schema", lambda: None)
     monkeypatch.setattr(
         HistoricalMarketDataService,
-        "_fetch_candles",
-        lambda symbol, user_id=1, count=420: [
-            {
-                "trade_date": "2026-01-02",
-                "open": 10,
-                "high": 11,
-                "low": 9,
-                "close": 10.5,
-                "volume": 1000,
-                "turnover": 10500,
-            }
-        ],
+        "_fetch_candles_with_source",
+        lambda symbol, user_id=1, count=420: ([_sample_candle()], "skshare"),
     )
 
     def fake_save(symbol, candles, source=""):
@@ -37,6 +39,26 @@ def test_sync_symbol_uses_skshare_source(monkeypatch) -> None:
     assert HistoricalMarketDataService.sync_symbol("000001.SZ", user_id=7, count=30) == 1
     assert saved["symbol"] == "000001.SZ"
     assert saved["source"] == "skshare"
+
+
+def test_sync_symbol_preserves_fallback_source(monkeypatch) -> None:
+    saved = {}
+
+    monkeypatch.setattr(HistoricalMarketDataService, "ensure_schema", lambda: None)
+    monkeypatch.setattr(
+        HistoricalMarketDataService,
+        "_fetch_candles_with_source",
+        lambda symbol, user_id=1, count=420: ([_sample_candle()], "akshare-fallback"),
+    )
+
+    def fake_save(symbol, candles, source=""):
+        saved["source"] = source
+        return len(candles)
+
+    monkeypatch.setattr(HistoricalMarketDataService, "_save_candles", fake_save)
+
+    assert HistoricalMarketDataService.sync_symbol("000001.SZ", user_id=7, count=30) == 1
+    assert saved["source"] == "akshare-fallback"
 
 
 def test_skshare_request_shape_for_cn_hk_us() -> None:
@@ -189,6 +211,72 @@ def test_history_fallback_errors_do_not_escape(monkeypatch) -> None:
         date(2026, 1, 1),
         date(2026, 1, 10),
     ) == []
+
+
+def test_history_fallback_reports_actual_source(monkeypatch) -> None:
+    monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_by_date_range", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_from_akshare", lambda *_args, **_kwargs: [_sample_candle()])
+    monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_from_yfinance", lambda *_args, **_kwargs: [])
+
+    candles, source = HistoricalMarketDataService._fetch_candles_by_date_range_with_fallback_source(
+        "000001.SZ",
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+    )
+
+    assert candles == [_sample_candle()]
+    assert source == "akshare-fallback"
+
+
+def test_backfill_symbol_history_saves_fallback_source(monkeypatch) -> None:
+    saved_sources = []
+    coverage_calls = []
+
+    def fake_coverage(symbol, start_date=None, end_date=None):
+        coverage_calls.append((symbol, start_date, end_date))
+        if len(coverage_calls) == 1:
+            return {
+                "symbol": symbol,
+                "complete": False,
+                "missingRanges": [{"startDate": "2026-01-01", "endDate": "2026-01-10"}],
+            }
+        return {
+            "symbol": symbol,
+            "complete": True,
+            "missingRanges": [],
+        }
+
+    monkeypatch.setattr(HistoricalMarketDataService, "ensure_schema", lambda: None)
+    monkeypatch.setattr(HistoricalMarketDataService, "get_symbol_history_coverage", fake_coverage)
+    monkeypatch.setattr(
+        HistoricalMarketDataService,
+        "_fetch_candles_by_date_range_with_fallback_source",
+        lambda *_args, **_kwargs: ([_sample_candle()], "yfinance-fallback"),
+    )
+    monkeypatch.setattr(
+        HistoricalMarketDataService,
+        "_save_candles",
+        lambda symbol, candles, source="": saved_sources.append(source) or len(candles),
+    )
+
+    result = HistoricalMarketDataService.backfill_symbol_history(
+        "AAPL.US",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 10),
+        user_id=7,
+    )
+
+    assert saved_sources == ["yfinance-fallback-backfill"]
+    assert result["savedCount"] == 1
+    assert result["fetchedRanges"] == [
+        {
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-10",
+            "savedCount": 1,
+            "dataSource": "yfinance-fallback-backfill",
+            "upstreamSource": "yfinance-fallback",
+        }
+    ]
 
 
 def test_ai_defaults_route_to_sub2api_models(monkeypatch) -> None:

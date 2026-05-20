@@ -1,6 +1,6 @@
 # Sentiment Center GitHub Adoption Plan
 
-Date: 2026-05-20
+Date: 2026-05-21
 
 ## Goal
 
@@ -20,13 +20,21 @@ The first implementation should reuse the existing `sentiment-service` boundary 
 
 | Project | Useful Ideas | Direct Adoption Risk | Recommendation |
 |---|---|---|---|
-| `amitpatole/tickerpulse-ai` | Multi-source stock/news monitoring, source adapters, ticker-centric AI research workflow | GPL-3.0 license risk for direct code copy; source scraping durability unknown | Reference architecture and source taxonomy only |
+| `FinNLP` | Financial news collection patterns, event extraction concepts, downstream evaluation ideas | Broad toolkit rather than a ready-made platform; ingestion assumptions still need local validation | Reference collection and evaluation patterns only |
+| `FinBERT` / `FinABSA` | Optional local sentiment scoring models for offline or fallback scoring | Model fit and label taxonomies must be checked against current markets and language mix | Optional local scoring reference only |
+| `FinGPT` | Finance-domain LLM prompting and market-language adaptation ideas | Can drift into generic generation patterns if copied without guardrails | Reference prompt and adaptation patterns only |
+| `AI News Tracker` | News-centric ingestion and alert framing | Integration style may not match current service boundaries or licensing posture | Reference news pipeline shape only |
+| `DISC-FinLLM` | Financial LLM evaluation and benchmark framing | Benchmark-heavy; not a turnkey implementation plan | Reference evaluation contract only |
+| `CFGPT` | Finance-oriented generation and summary ideas | Needs careful license and scope review before any code reuse | Reference summary structure only |
+| `amitpatole/tickerpulse-ai` | Multi-source stock/news monitoring, source adapters, ticker-centric AI research workflow | GPL-3.0 license risk for direct code copy; source scraping durability unknown | Architecture reference only; do not vendor |
+| `BettaFish` | Market news aggregation and insight presentation patterns | GPL code must not be vendored into this repository | Architecture reference only; no vendoring |
 | `shirosaidev/stocksight` | VADER/TextBlob sentiment scoring, Elasticsearch-backed query model, Twitter/news pipeline | Older stack and Twitter API assumptions; likely heavy operational footprint | Reference scoring/storage ideas only |
 | `awsdataarchitect/financial-signals-dashboard` | News/social sentiment to AI alpha signal, signal dashboard framing | Depends on Bright Data/Strands and external services; not aligned with current local stack | Reference signal contract only |
 | `koala73/worldmonitor` / related market radar projects | News radar information architecture, local model friendly summarization | Scope and license constraints need careful review before reuse | Reference UI/information architecture only |
 | `dragon1086/prism-insight` | News agent and AI stock analysis workflow | Contains broader automated trading concepts that must not enter this platform | Reference news analysis prompt/contract only; do not import trading parts |
 
 Decision: do not vendor or directly copy these projects in phase one. Use them as design references while implementing a narrow native sentiment center on the existing service boundary.
+TickerPulse and BettaFish are architecture references only because of GPL constraints; neither project should be vendored into this repository.
 
 ## AI Configuration Rule
 
@@ -47,6 +55,7 @@ Default route:
 - base URL in Docker: `http://sub2api:8080/v1`
 
 No new AI key, base URL, model registry, or frontend-visible secret should be added.
+The implementation should keep using the existing `LONGBRIDGE_AI_*` contract and the `sub2api` gateway rather than introducing a separate sentiment-specific AI path.
 
 ## Phase-One Sentiment Contract
 
@@ -116,6 +125,7 @@ Forbidden integrations:
 - No auto-buy or auto-sell.
 - No position mutation.
 - No direct strategy execution triggered by sentiment.
+- Quant outputs are read-only evidence only and must not trigger trades, execution jobs, or broker-side side effects.
 
 ## Implementation Slices
 
@@ -142,7 +152,16 @@ Forbidden integrations:
 - Frontend unit smoke for page rendering and quant links.
 - Browser smoke route entry once wired into menu.
 
-## Remaining Decisions
+Phase-one verification is complete:
+
+- `tests/python/test_sentiment_service_contract.py` covers the sentiment overview/bootstrap contract, GitHub adoption metadata, AI config reuse, and read-only quant policy.
+- `tests/unit/market-sentiment.spec.js` covers the `/sentiment-center` page render, GitHub adoption card, and quant/navigation links.
+- Authenticated gateway smoke passed for `/svc/sentiment/api/v1/sentiment/bootstrap` and `/svc/sentiment/api/v1/sentiment/overview?market=US`.
+- Browser smoke passed for `/sentiment-center` with no console/runtime errors.
+
+## Non-blocking Product Decisions
+
+The phase-one sentiment center is implemented as a read-only contract and standalone page. These are product hardening decisions for later iterations:
 
 - Whether sentiment persistence gets a new table or reuses existing briefing/content caches.
 - Which collectors are allowed for local use: RSS/news only first, then optional Reddit/StockTwits if credentials and rate limits are acceptable.

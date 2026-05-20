@@ -82,6 +82,69 @@ RISK_KEYWORD_BUCKETS = {
 
 MARKETS = ("US", "CN", "HK")
 
+GITHUB_ADOPTION_CANDIDATES = [
+    {
+        "name": "FinNLP",
+        "repo": "AI4Finance-Foundation/FinNLP",
+        "url": "https://github.com/AI4Finance-Foundation/FinNLP",
+        "license": "MIT",
+        "role": "collector",
+        "fit": "金融新闻、公告、社媒数据接入参考，中文来源覆盖更好",
+        "adoption": "reference-adapter",
+        "risk": "不直接 vendor，先按现有 sentiment-service contract 自研采集适配",
+    },
+    {
+        "name": "FinBERT",
+        "repo": "ProsusAI/finBERT",
+        "url": "https://github.com/ProsusAI/finBERT",
+        "license": "Apache-2.0",
+        "role": "sentiment-model",
+        "fit": "英文金融新闻正/负/中性轻量分类",
+        "adoption": "optional-model",
+        "risk": "MVP 不新增模型依赖，先保留为可选离线增强",
+    },
+    {
+        "name": "FinABSA",
+        "repo": "guijinSON/FinABSA",
+        "url": "https://github.com/guijinSON/FinABSA",
+        "license": "Apache-2.0",
+        "role": "aspect-sentiment",
+        "fit": "实体/方面级情绪，可补标的局部舆情",
+        "adoption": "optional-model",
+        "risk": "活跃度较低，仅作为 aspect-level 参考",
+    },
+    {
+        "name": "FinGPT",
+        "repo": "AI4Finance-Foundation/FinGPT",
+        "url": "https://github.com/AI4Finance-Foundation/FinGPT",
+        "license": "MIT",
+        "role": "financial-llm",
+        "fit": "中文金融 LLM 和任务数据集参考",
+        "adoption": "reference-model-layer",
+        "risk": "当前平台已复用 sub2api/gpt-5.4/gpt-5.5，不先引入新模型栈",
+    },
+    {
+        "name": "AINewsTracker",
+        "repo": "AlgoETS/AINewsTracker",
+        "url": "https://github.com/AlgoETS/AINewsTracker",
+        "license": "MIT",
+        "role": "service-reference",
+        "fit": "FastAPI 金融新闻情绪服务边界参考",
+        "adoption": "reference-architecture",
+        "risk": "非中文金融优先，不直接复制实现",
+    },
+    {
+        "name": "TickerPulse AI / BettaFish",
+        "repo": "multiple GPL reference projects",
+        "url": "https://github.com/amitpatole/tickerpulse-ai",
+        "license": "GPL family",
+        "role": "architecture-only",
+        "fit": "多源舆情和多 Agent 信息架构参考",
+        "adoption": "do-not-vendor",
+        "risk": "GPL 许可证与重型全栈耦合，不进入生产代码",
+    },
+]
+
 
 @dataclass
 class SentimentItem:
@@ -513,6 +576,18 @@ def _build_ai_config_contract() -> Dict[str, Any]:
     }
 
 
+def _build_github_adoption_contract() -> Dict[str, Any]:
+    return {
+        "decision": "native-contract-first",
+        "recommendedStack": ["FinNLP collectors", "FinBERT/FinABSA optional scoring", "sub2api gpt-5.4/gpt-5.5 synthesis"],
+        "sourcePolicy": "MIT/Apache reference only; GPL projects are architecture references and must not be vendored",
+        "aiModelPolicy": "reuse LONGBRIDGE_AI_* / sub2api; no new AI key, model registry, or frontend-visible secret",
+        "quantPolicy": "sentiment output is read-only evidence for quant review; it must not submit orders, cancel orders, mutate positions, or trigger strategy execution",
+        "candidates": GITHUB_ADOPTION_CANDIDATES,
+        "doc": "docs/sentiment-center-github-adoption-plan.md",
+    }
+
+
 def _build_page_contract(user_id: int) -> Dict[str, Any]:
     recommendation_map = _build_recommendation_map(user_id)
     market_summaries = [_build_market_summary(market, user_id, recommendation_map) for market in MARKETS]
@@ -536,6 +611,7 @@ def _build_page_contract(user_id: int) -> Dict[str, Any]:
         "topSymbols": [asdict(item) for item in top_items],
         "riskWordCloud": _build_risk_word_cloud(top_items),
         "aiConfig": _build_ai_config_contract(),
+        "githubAdoption": _build_github_adoption_contract(),
         "linkedRoutes": {
             "aiAnalysis": "/ai-analysis",
             "recommendations": "/recommendations",

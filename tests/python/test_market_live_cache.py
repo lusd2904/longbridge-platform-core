@@ -257,6 +257,46 @@ def test_history_backfill_endpoint_rejects_invalid_range() -> None:
         raise AssertionError("expected HTTPException for invalid backfill range")
 
 
+def test_longbridge_history_rejects_explicit_sdk_storage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        market_service,
+        "_with_quote_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("SDK history path must stay disabled")),
+    )
+
+    try:
+        market_service.asyncio.run(
+            market_service.longbridge_history_candlesticks(
+                symbol="AAPL.US",
+                storage_mode="longbridge",
+                session={"user_id": 1},
+            )
+        )
+    except market_service.HTTPException as exc:
+        assert exc.status_code == 410
+        assert "历史 K 线 SDK 路径已停用" in exc.detail
+    else:
+        raise AssertionError("expected HTTPException for explicit Longbridge history mode")
+
+
+def test_longbridge_candlesticks_endpoint_is_gone(monkeypatch) -> None:
+    monkeypatch.setattr(
+        market_service,
+        "_with_quote_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("SDK candlesticks path must stay disabled")),
+    )
+
+    try:
+        market_service.asyncio.run(
+            market_service.longbridge_candlesticks(symbol="AAPL.US", session={"user_id": 1})
+        )
+    except market_service.HTTPException as exc:
+        assert exc.status_code == 410
+        assert "K 线 SDK 路径已停用" in exc.detail
+    else:
+        raise AssertionError("expected HTTPException for disabled Longbridge candlesticks endpoint")
+
+
 def test_history_backfill_endpoint_rejects_duplicate_symbol(monkeypatch) -> None:
     with market_service._HISTORY_BACKFILL_LOCK:
         market_service._HISTORY_BACKFILL_SYMBOLS.clear()
@@ -314,8 +354,9 @@ def test_history_coverage_exact_symbol_uses_fast_path(monkeypatch) -> None:
     def fail_full_coverage_sql(**_kwargs):
         raise AssertionError("exact symbol coverage should not build the full-market query")
 
-    def fake_exact_universe_rows(symbol):
+    def fake_exact_universe_rows(symbol, user_id):
         assert symbol == "NVDL.US"
+        assert user_id == 1
         return [
             {
                 "symbol": "NVDL.US",
@@ -352,6 +393,7 @@ def test_history_coverage_exact_symbol_uses_fast_path(monkeypatch) -> None:
     monkeypatch.setattr(market_service.DbUtil, "fetch_one", fake_fetch_one)
 
     payload = market_service._load_history_coverage_payload(
+        user_id=1,
         start_date=date(2024, 1, 1),
         search="nvdl.us",
         status="",
@@ -383,8 +425,9 @@ def test_history_coverage_bare_symbol_uses_fast_path_when_universe_matches(monke
     def fail_full_coverage_sql(**_kwargs):
         raise AssertionError("bare symbol with a universe match should not build the full-market query")
 
-    def fake_exact_universe_rows(symbol):
+    def fake_exact_universe_rows(symbol, user_id):
         assert symbol == "NVDL.US"
+        assert user_id == 1
         return [
             {
                 "symbol": "NVDL.US",
@@ -409,6 +452,7 @@ def test_history_coverage_bare_symbol_uses_fast_path_when_universe_matches(monke
     monkeypatch.setattr(market_service.DbUtil, "fetch_one", fake_fetch_one)
 
     payload = market_service._load_history_coverage_payload(
+        user_id=1,
         start_date=date(2024, 1, 1),
         search="NVDL",
         status="",
@@ -432,6 +476,7 @@ def test_history_coverage_name_search_keeps_full_query_path(monkeypatch) -> None
     monkeypatch.setattr(market_service, "_build_history_coverage_sql", fake_build_history_coverage_sql)
 
     payload = market_service._load_history_coverage_payload(
+        user_id=1,
         start_date=date(2024, 1, 1),
         search="英伟达",
         status="",
@@ -444,6 +489,7 @@ def test_history_coverage_name_search_keeps_full_query_path(monkeypatch) -> None
             "start_date": date(2024, 1, 1),
             "search": "英伟达",
             "status": "",
+            "user_id": 1,
         }
     ]
     assert payload["total"] == 0
