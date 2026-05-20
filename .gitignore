@@ -30,6 +30,7 @@ runtime/*/
 .omx/
 .runtime/
 .codex-agent/
+.antigravitycli/
 Claude/
 logs/
 .playwright-cli/

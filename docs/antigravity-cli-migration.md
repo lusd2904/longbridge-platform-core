@@ -2,6 +2,14 @@
 
 Date: 2026-05-20
 
+## Cleanup / migration plan
+
+1. Audit active code paths for executable Gemini CLI, NotebookLM, and Gemini review workflow usage.
+2. Leave review business flow untouched unless it actually shells out to Gemini.
+3. Centralize Antigravity CLI probing and Gemini-compat translation in one adapter entrypoint.
+4. Only bake in command forms verified on this machine; force unknown Gemini flags behind explicit environment configuration.
+5. Verify the adapter with tests and shell-level probe commands.
+
 ## Local verification
 
 - `which agy` returned `/Users/lusd/.local/bin/agy`.
@@ -10,16 +18,55 @@ Date: 2026-05-20
 - The official installer script writes the CLI to `~/.local/bin/agy`.
 - A temporary official binary run confirmed:
   - `agy --help` exposes `--print`, `--prompt-interactive`, `--continue`, `install`, `plugin`, `update`
-  - `agy --print 'ping'` works on this machine
+  - `agy --prompt` is an alias for `--print`
+  - `agy -p` and `agy -i` are short aliases for `--print` and `--prompt-interactive`
   - `agy` does not accept Gemini's `-m` flag; `agy -m test --print 'ping'` returns `flags provided but not defined: -m`
 
-## Minimal command mapping
+## Actual usage audit
+
+- No executable Gemini CLI invocations were found in active scripts, Dockerfiles, compose files, CI config, `package.json` scripts, backend Python, or frontend Node utilities.
+- No active NotebookLM integration points were found in runtime code.
+- The current review workflow is `scheduler-service -> analysis-service -> Agno sidecar -> agent governance tables -> task center review UI`.
+- Gemini-related hits in this repository are currently limited to:
+  - this migration note;
+  - one non-CLI narrative mention in [docs/multi-agent-agno-status.md](./multi-agent-agno-status.md);
+  - historical `.omx/artifacts/*` records outside runtime code.
+
+Because the live review path does not shell out to Gemini today, the low-risk migration is an adapter layer for future/manual CLI use, not a business-flow rewrite.
+
+## Adapter entrypoints
+
+- Probe or inspect local CLI:
+  - `python3 scripts/antigravity_cli_adapter.py probe`
+  - `./scripts/check_antigravity_cli.sh`
+- Run verified normalized actions:
+  - `python3 scripts/antigravity_cli_adapter.py run --mode print --prompt 'ping' --dry-run`
+  - `python3 scripts/antigravity_cli_adapter.py run --mode interactive --prompt 'review this diff' --dry-run`
+- Translate a limited Gemini-style command without executing it:
+  - `python3 scripts/antigravity_cli_adapter.py gemini-compat --dry-run -- -p 'ping'`
+
+## Verified command mapping
 
 - `gemini -p '...'` -> `agy --print '...'`
-- `gemini --prompt '...'` -> `agy --prompt '...'`
+- `gemini --prompt '...'` -> `agy --print '...'`
 - `gemini -i '...'` -> `agy --prompt-interactive '...'`
 - `gemini -c` -> `agy --continue`
 - Do not blindly replace `gemini -m ...`; the current Antigravity CLI help does not expose a compatible model flag.
+- The adapter rejects unknown Gemini/CLI flags by default. If a missing mapping is truly required, provide it explicitly through environment variables instead of hardcoding a guessed command.
+
+## Environment overrides
+
+- `REF_AGENT_CLI_BIN`
+  - Force a specific CLI binary name if the machine does not use `agy`.
+- `REF_AGENT_CLI_PRINT_ARGS`
+- `REF_AGENT_CLI_INTERACTIVE_ARGS`
+- `REF_AGENT_CLI_CONTINUE_ARGS`
+  - Override the default Antigravity arguments per mode.
+- `REF_AGENT_CLI_MODEL_ARGS_TEMPLATE`
+  - Required if an existing Gemini workflow passes `-m` / `--model`.
+  - Example only if your local Antigravity build actually supports it: `REF_AGENT_CLI_MODEL_ARGS_TEMPLATE='--model {model}'`
+- `REF_AGENT_CLI_APPEND_ARGS`
+  - Append extra verified flags after the translated command.
 
 ## Authentication
 
@@ -31,8 +78,6 @@ Date: 2026-05-20
 
 ## Repository audit result
 
-- No executable Gemini CLI invocations were found in active scripts, Dockerfiles, compose files, CI config, or `package.json` scripts.
-- Gemini-related hits in this repository are currently limited to historical `.omx/artifacts/*` review records and one non-CLI narrative mention in `docs/multi-agent-agno-status.md`.
 - Because the repo does not execute Gemini CLI inside containers today, no Dockerfile, entrypoint, compose, or Python/Node dependency change is required for this migration.
 
 ## Historical files intentionally left unchanged
