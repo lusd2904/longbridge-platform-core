@@ -8,6 +8,11 @@ import Strategy from '@/views/Strategy.vue'
 import RiskManagement from '@/views/RiskManagement.vue'
 import HistoryCoverage from '@/views/system/HistoryCoverage.vue'
 
+const messageMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn()
+}))
+
 const marketApiMocks = vi.hoisted(() => ({
   addStockToPool: vi.fn(async () => ({})),
   analyzeStock: vi.fn(async () => ({
@@ -207,6 +212,18 @@ const marketApiMocks = vi.hoisted(() => ({
     }
   }))
 }))
+
+vi.mock('element-plus', async () => {
+  const actual = await vi.importActual('element-plus')
+  return {
+    ...actual,
+    ElMessage: {
+      ...(actual.ElMessage || {}),
+      success: messageMocks.success,
+      error: messageMocks.error
+    }
+  }
+})
 
 const riskApiMocks = vi.hoisted(() => ({
   getRiskOverview: vi.fn(async () => ({
@@ -613,6 +630,8 @@ describe('market shell pages', () => {
   it('runs a single-symbol history backfill from the coverage page', async () => {
     marketApiMocks.getMarketHistoryCoverage.mockClear()
     marketApiMocks.runMarketHistoryBackfill.mockClear()
+    messageMocks.success.mockReset()
+    messageMocks.error.mockReset()
     const wrapper = mount(HistoryCoverage, {
       global: {
         ...mountOptions.global,
@@ -649,5 +668,104 @@ describe('market shell pages', () => {
       endDate: '2026-05-19'
     })
     expect(marketApiMocks.getMarketHistoryCoverage).toHaveBeenCalledTimes(2)
+    expect(wrapper.vm.operationState).toEqual(expect.objectContaining({
+      kind: 'success',
+      title: 'TSLA.US 补价完成'
+    }))
+    expect(wrapper.text()).toContain('TSLA.US 补价完成')
+    expect(messageMocks.success).toHaveBeenCalled()
+  })
+
+  it('surfaces failed backfill state inline', async () => {
+    marketApiMocks.getMarketHistoryCoverage.mockClear()
+    marketApiMocks.runMarketHistoryBackfill.mockReset()
+    marketApiMocks.runMarketHistoryBackfill.mockRejectedValueOnce({ message: 'network timeout' })
+    messageMocks.success.mockReset()
+    messageMocks.error.mockReset()
+    const wrapper = mount(HistoryCoverage, {
+      global: {
+        ...mountOptions.global,
+        stubs: {
+          ...mountOptions.global.stubs,
+          PageHero: {
+            props: ['title', 'metrics'],
+            template: '<section><h1>{{ title }}</h1><div v-for="metric in metrics" :key="metric.label">{{ metric.label }} {{ metric.value }}</div><slot name="actions" /></section>'
+          },
+          MetricStrip: {
+            props: ['items'],
+            template: '<section><div v-for="item in items" :key="item.label">{{ item.label }} {{ item.value }}</div></section>'
+          },
+          SectionCardHeader: {
+            props: ['title', 'badge'],
+            template: '<header>{{ title }} {{ badge }}</header>'
+          },
+          'el-table': {
+            props: ['data'],
+            template: '<div class="el-table"><div v-for="row in data" :key="row.symbol" class="el-table__row">{{ row.symbol }} {{ row.rowCount }} {{ row.missingEstimate }}</div><slot /></div>'
+          }
+        }
+      }
+    })
+    await flushPromises()
+
+    const partialRow = wrapper.vm.tableRows.find((row) => row.symbol === 'TSLA.US')
+    await wrapper.vm.backfillRow(partialRow)
+    await flushPromises()
+
+    expect(wrapper.vm.operationState).toEqual(expect.objectContaining({
+      kind: 'error',
+      title: 'TSLA.US 补价失败',
+      message: 'network timeout'
+    }))
+    expect(wrapper.text()).toContain('TSLA.US 补价失败')
+    expect(messageMocks.error).toHaveBeenCalledWith('network timeout')
+  })
+
+  it('does not allow fallback aggregate rows to trigger single-symbol backfill', async () => {
+    marketApiMocks.getMarketHistoryCoverage.mockReset()
+    marketApiMocks.getMarketHistoryCoverage.mockResolvedValueOnce({
+      data: {
+        coverageRate: 80,
+        latestTradeDate: '2026-05-19',
+        marketCoverage: { US: 1200 },
+        task: {
+          backfillStartDate: '2024-01-01',
+          lastRunAt: '2026-05-20T00:41:56'
+        }
+      }
+    })
+    marketApiMocks.runMarketHistoryBackfill.mockClear()
+    const wrapper = mount(HistoryCoverage, {
+      global: {
+        ...mountOptions.global,
+        stubs: {
+          ...mountOptions.global.stubs,
+          PageHero: {
+            props: ['title', 'metrics'],
+            template: '<section><h1>{{ title }}</h1><div v-for="metric in metrics" :key="metric.label">{{ metric.label }} {{ metric.value }}</div><slot name="actions" /></section>'
+          },
+          MetricStrip: {
+            props: ['items'],
+            template: '<section><div v-for="item in items" :key="item.label">{{ item.label }} {{ item.value }}</div></section>'
+          },
+          SectionCardHeader: {
+            props: ['title', 'badge'],
+            template: '<header>{{ title }} {{ badge }}</header>'
+          },
+          'el-table': {
+            props: ['data'],
+            template: '<div class="el-table"><div v-for="row in data" :key="row.symbol" class="el-table__row">{{ row.symbol }} {{ row.rowCount }} {{ row.missingEstimate }}</div><slot /></div>'
+          }
+        }
+      }
+    })
+    await flushPromises()
+
+    const aggregateRow = wrapper.vm.tableRows.find((row) => row.symbol === 'US.ALL')
+    expect(aggregateRow).toBeTruthy()
+    expect(wrapper.vm.topGapRows).toEqual([])
+    await wrapper.vm.backfillRow(aggregateRow)
+
+    expect(marketApiMocks.runMarketHistoryBackfill).not.toHaveBeenCalled()
   })
 })

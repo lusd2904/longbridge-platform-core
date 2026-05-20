@@ -30,6 +30,18 @@
 
     <MetricStrip :items="summaryMetrics" />
 
+    <section
+      v-if="operationState"
+      class="operation-feedback-panel"
+      :class="operationState.kind"
+    >
+      <div class="operation-feedback-head">
+        <strong>{{ operationState.title }}</strong>
+        <span>{{ operationState.timestamp }}</span>
+      </div>
+      <p>{{ operationState.message }}</p>
+    </section>
+
     <div class="coverage-focus-grid">
       <el-card class="glass-card focus-card">
         <template #header>
@@ -47,9 +59,10 @@
             :disabled="isBackfillRunning(row)"
             @click="backfillRow(row)"
           >
-            <span>
+            <span class="gap-item-copy">
               <strong>{{ row.symbol }}</strong>
               <small>{{ row.statusLabel }} · 缺 {{ formatCount(row.missingEstimate) }}</small>
+              <small>{{ row.gapSummary }}</small>
             </span>
             <em>{{ isBackfillRunning(row) ? '补齐中' : '补齐' }}</em>
           </button>
@@ -189,6 +202,7 @@ const currentPage = ref(1)
 const pageSize = ref(100)
 const pageSizes = [50, 100, 200]
 const backfillLoadingSymbols = ref(new Set())
+const operationState = ref(null)
 
 const MARKET_LABEL_MAP = {
   US: '美股',
@@ -301,6 +315,7 @@ const normalizeSummary = (payload = {}) => {
 
 const normalizeRow = (item = {}, index = 0, fallback = {}) => {
   const market = String(item.market || item.exchange || 'ALL').trim().toUpperCase()
+  const symbol = String(item.symbol || item.code || '--').trim().toUpperCase() || '--'
   const rowCount = Math.max(toNumber(item.rowCount ?? item.rangeCount ?? item.totalCount, 0), 0)
   const missingEstimate = deriveMissingEstimate(item)
   const coverageRate = estimateCoverageRate(item)
@@ -308,7 +323,7 @@ const normalizeRow = (item = {}, index = 0, fallback = {}) => {
   const statusMeta = STATUS_META_MAP[statusKey] || STATUS_META_MAP.partial
   return {
     id: item.id || item.symbol || `${market}-${index}`,
-    symbol: String(item.symbol || item.code || '--').trim().toUpperCase() || '--',
+    symbol,
     name: String(item.name || item.displayName || item.symbolName || `${normalizeMarketLabel(market)}历史覆盖`).trim() || '--',
     market,
     marketLabel: normalizeMarketLabel(market),
@@ -324,7 +339,8 @@ const normalizeRow = (item = {}, index = 0, fallback = {}) => {
     statusType: statusMeta.type,
     coverageRate,
     coverageTone: statusMeta.tone,
-    updatedAt: item.updatedAt || item.lastUpdated || item.lastUpdatedAt || item.latestSyncAt || fallback.updatedAt || '--'
+    updatedAt: item.updatedAt || item.lastUpdated || item.lastUpdatedAt || item.latestSyncAt || fallback.updatedAt || '--',
+    isAggregate: Boolean(item.isAggregate || symbol === 'ALL' || symbol.endsWith('.ALL'))
   }
 }
 
@@ -335,6 +351,20 @@ const buildGapSummary = (item = {}, missingEstimate = 0) => {
       .slice(0, 2)
       .map((range) => `${range.startDate || range.start || '--'} ~ ${range.endDate || range.end || '--'}`)
       .join(' / ')
+  }
+  const expectedStart = String(item.expectedStart || item.expected_start || '').trim()
+  const expectedEnd = String(item.expectedEnd || item.expected_end || '').trim()
+  const actualStart = String(item.startDate || item.rangeStartDate || item.firstDate || item.earliestDate || '').trim()
+  const actualEnd = String(item.endDate || item.rangeEndDate || item.latestDate || '').trim()
+  const hints = []
+  if (expectedStart && actualStart && expectedStart !== actualStart) {
+    hints.push(`应从 ${expectedStart}，现从 ${actualStart}`)
+  }
+  if (expectedEnd && actualEnd && expectedEnd !== actualEnd) {
+    hints.push(`应至 ${expectedEnd}，现至 ${actualEnd}`)
+  }
+  if (hints.length) {
+    return hints.slice(0, 2).join(' / ')
   }
   return missingEstimate > 0 ? `缺 ${formatCount(missingEstimate)} 日` : '无缺口'
 }
@@ -352,7 +382,8 @@ const buildFallbackRows = (payload = {}) => {
     missingEstimate: 0,
     status: Number(payload?.coverageRate || 0) >= 99 ? 'complete' : 'partial',
     coverageRate: payload?.coverageRate ?? 0,
-    updatedAt: payload?.task?.lastRunAt || payload?.latestTradeDate || '--'
+    updatedAt: payload?.task?.lastRunAt || payload?.latestTradeDate || '--',
+    isAggregate: true
   }))
 }
 
@@ -447,6 +478,17 @@ const formatCount = (value) => {
   return num.toLocaleString('zh-CN')
 }
 
+const formatOperationTimestamp = () => new Date().toLocaleString('zh-CN', { hour12: false })
+
+const setOperationState = (kind, title, message) => {
+  operationState.value = {
+    kind,
+    title,
+    message,
+    timestamp: formatOperationTimestamp()
+  }
+}
+
 const resetFilters = () => {
   keyword.value = ''
   statusFilter.value = 'all'
@@ -454,7 +496,7 @@ const resetFilters = () => {
 }
 
 const canBackfill = (row = {}) => {
-  return Boolean(row.symbol && row.symbol !== '--' && row.statusKey !== 'complete')
+  return Boolean(row.symbol && row.symbol !== '--' && row.statusKey !== 'complete' && !row.isAggregate)
 }
 
 const isBackfillRunning = (row = {}) => {
@@ -478,18 +520,35 @@ const validDateOrUndefined = (value) => {
 
 const backfillRow = async (row = {}) => {
   if (!canBackfill(row) || isBackfillRunning(row)) return
+  const startDate = validDateOrUndefined(row.expectedStart || summary.value.task?.backfillStartDate)
+  const endDate = validDateOrUndefined(row.expectedEnd || summary.value.latestTradeDate)
+  setOperationState(
+    'loading',
+    `正在补齐 ${row.symbol}`,
+    `${startDate || '自动起始'} ~ ${endDate || '最新交易日'}`
+  )
   setBackfillLoading(row.symbol, true)
   try {
     const res = await runMarketHistoryBackfill({
       symbol: row.symbol,
-      startDate: validDateOrUndefined(row.expectedStart || summary.value.task?.backfillStartDate),
-      endDate: validDateOrUndefined(row.expectedEnd || summary.value.latestTradeDate)
+      startDate,
+      endDate
     })
     const savedCount = toNumber(res?.data?.savedCount, 0)
+    setOperationState(
+      'success',
+      `${row.symbol} 补价完成`,
+      savedCount > 0 ? `新增 ${formatCount(savedCount)} 条历史行情` : '已检查，无需补齐'
+    )
     ElMessage.success(savedCount > 0 ? `${row.symbol} 已补齐 ${formatCount(savedCount)} 条` : `${row.symbol} 已检查，无需补齐`)
     await loadCoverage(false)
   } catch (error) {
     console.error('历史补价失败:', error)
+    setOperationState(
+      'error',
+      `${row.symbol} 补价失败`,
+      error?.data?.error || error?.message || '历史补价失败'
+    )
     ElMessage.error(error?.data?.error || error?.message || '历史补价失败')
   } finally {
     setBackfillLoading(row.symbol, false)
@@ -497,6 +556,9 @@ const backfillRow = async (row = {}) => {
 }
 
 const loadCoverage = async (manual = false) => {
+  if (manual) {
+    setOperationState('loading', '正在刷新覆盖快照', '同步最新覆盖统计与缺口摘要')
+  }
   loading.value = true
   try {
     const res = await getMarketHistoryCoverage({
@@ -511,10 +573,12 @@ const loadCoverage = async (manual = false) => {
     const sourceItems = payload.items.length ? payload.items : buildFallbackRows(res?.data || {})
     tableRows.value = sourceItems.map((item, index) => normalizeRow(item, index, payload))
     if (manual) {
+      setOperationState('success', '覆盖快照已刷新', `当前展示 ${formatCount(tableRows.value.length)} 条记录`)
       ElMessage.success('覆盖数据已刷新')
     }
   } catch (error) {
     console.error('加载历史补价覆盖失败:', error)
+    setOperationState('error', '覆盖快照加载失败', error?.data?.error || error?.message || '加载历史补价覆盖失败')
     ElMessage.error(error?.data?.error || error?.message || '加载历史补价覆盖失败')
   } finally {
     loading.value = false
@@ -559,6 +623,7 @@ defineExpose({
   backfillRow,
   currentPage,
   pageSize,
+  operationState,
   tableRows,
   totalRows,
   topGapRows
@@ -598,6 +663,50 @@ defineExpose({
   border: 1px solid var(--border-soft);
   background: var(--surface-strong);
   box-shadow: var(--shadow-strong);
+}
+
+.operation-feedback-panel {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 82%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 90%, transparent);
+  color: var(--text-primary);
+  padding: 10px 12px;
+}
+
+.operation-feedback-panel.loading {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-soft));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+}
+
+.operation-feedback-panel.success {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border-soft));
+  background: color-mix(in srgb, var(--success) 12%, var(--surface-soft));
+}
+
+.operation-feedback-panel.error {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-soft));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-soft));
+}
+
+.operation-feedback-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.operation-feedback-head strong {
+  color: var(--text-emphasis);
+}
+
+.operation-feedback-head span,
+.operation-feedback-panel p {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.operation-feedback-panel p {
+  margin: 6px 0 0;
 }
 
 .table-card :deep(.el-card__body) {
@@ -651,6 +760,10 @@ defineExpose({
   gap: 2px;
 }
 
+.gap-item-copy {
+  min-width: 0;
+}
+
 .gap-item strong {
   color: var(--text-emphasis);
   font-size: 13px;
@@ -666,8 +779,8 @@ defineExpose({
   flex: 0 0 auto;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--accent-strong, var(--accent)) 42%, var(--border-soft));
-  background: var(--button-primary-bg);
-  color: var(--button-primary-text);
+  background: color-mix(in srgb, var(--accent-strong, var(--accent)) 76%, var(--surface-strong));
+  color: var(--button-primary-text, #fff);
   font-style: normal;
   font-size: 12px;
   font-weight: 700;
@@ -772,16 +885,16 @@ defineExpose({
 
 .repair-button {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border-soft));
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
-  color: color-mix(in srgb, var(--accent-strong, var(--accent)) 86%, white 14%);
+  background: color-mix(in srgb, var(--accent-strong, var(--accent)) 72%, var(--surface-strong));
+  color: var(--button-primary-text, #fff);
   font-weight: 700;
 }
 
 .repair-button:hover:not(.is-disabled),
 .repair-button:focus:not(.is-disabled) {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border-soft));
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface-strong));
-  color: var(--text-emphasis);
+  background: color-mix(in srgb, var(--accent-strong, var(--accent)) 82%, var(--surface-strong));
+  color: var(--button-primary-text, #fff);
 }
 
 .repair-button.is-disabled {
