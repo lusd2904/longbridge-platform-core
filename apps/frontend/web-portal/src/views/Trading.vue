@@ -1049,6 +1049,7 @@ const currentQuoteDisplayName = computed(() => currentQuote.value?.name || displ
 const currentQuoteSourceLabel = computed(() => {
   if (hasLivePushQuote.value) return 'Longbridge Push'
   const sourceKey = String(currentQuote.value?.quoteSource || '').toLowerCase()
+  if (sourceKey.includes('longbridge-live')) return '长桥实时'
   if (sourceKey.includes('longbridge-cli')) return 'Longbridge CLI'
   if (sourceKey.includes('quote-snapshot')) return '行情快照'
   if (sourceKey.includes('daily-history')) return '日线快照'
@@ -1349,11 +1350,12 @@ const buildOverviewQuotePayload = (overview = {}, symbol = '', fallbackPosition 
     timestamp: pickFirstDefinedValue(
       quoteSnapshot?.snapshotAt,
       quoteSnapshot?.snapshot_at,
+      quoteSnapshot?.timestamp,
       quoteSnapshot?.updatedAt,
       dailySnapshot?.snapshotDate
     ) || '',
     source: hasQuoteSnapshotPrice
-      ? 'quote-snapshot'
+      ? (quoteSnapshot?.source || quoteSnapshot?.dataSource || 'longbridge-live')
       : hasDailySnapshotPrice
         ? 'daily-history'
         : 'symbol-overview'
@@ -2138,8 +2140,8 @@ const formatReferencePriceSource = (value) => {
   const key = String(value || '').toLowerCase()
   if (key === 'request') return '手动输入'
   if (key === 'broker') return '实时行情'
-  if (key === 'quote_snapshot') return '快照兜底'
-  if (key === 'snapshot') return '快照'
+  if (key === 'quote_snapshot') return '历史快照'
+  if (key === 'snapshot') return '历史快照'
   return key ? key : '--'
 }
 

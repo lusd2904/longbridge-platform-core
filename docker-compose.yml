@@ -247,6 +247,8 @@ services:
         condition: service_started
       risk-service:
         condition: service_started
+      agno-sidecar:
+        condition: service_started
     environment:
       <<: *backend-env
       SERVICE_PORT: "5101"
@@ -282,6 +284,16 @@ services:
       market-service:
         condition: service_started
       analysis-service:
+        condition: service_started
+      strategy-service:
+        condition: service_started
+      trade-service:
+        condition: service_started
+      sentiment-service:
+        condition: service_started
+      scheduler-service:
+        condition: service_started
+      risk-service:
         condition: service_started
     ports:
       - "${REF_WEB_PORTAL_PORT:-3100}:3100"

@@ -35,8 +35,30 @@ app = create_service_app(
 PORT = service_port("REF_STRATEGY_SERVICE_PORT", 8104)
 
 
+@app.on_event("startup")
+async def initialize_strategy_schema():
+    StrategyMonitorService.ensure_schema(user_id=1)
+    QuantTradingService.ensure_schema()
+
+
 def _coerce_execute_flag(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
+
+
+def _coerce_float(value: object, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
 
 
 @app.get("/health")
@@ -51,7 +73,7 @@ async def health():
         port=PORT,
         status=summarize_status(deps.values()),
         deps=deps,
-        capabilities=["strategy-management", "backtest", "strategy-monitor"],
+        capabilities=["strategy-management", "backtest", "strategy-monitor", "watchlist-quant-strategy"],
     )
 
 
@@ -215,6 +237,18 @@ async def quant_status(session: dict = Depends(get_current_session)):
     return {"success": True, "data": QuantTradingService.get_status(user_id=int(session["user_id"]))}
 
 
+@app.get("/api/v1/strategy/quant/watchlist/history")
+async def watchlist_quant_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: dict = Depends(get_current_session),
+):
+    result = QuantTradingService.list_watchlist_strategy_history(
+        user_id=int(session["user_id"]),
+        limit=limit,
+    )
+    return {"success": True, "data": result}
+
+
 @app.post("/api/v1/strategy/quant/run")
 async def run_quant_cycle(
     payload: dict = Body(default={}),
@@ -222,13 +256,51 @@ async def run_quant_cycle(
 ):
     account_id = payload.get("account_id")
     execute = payload.get("execute")
-    result = QuantTradingService.run_cycle(
+    result = QuantTradingService.run_watchlist_strategy_cycle(
         user_id=int(session["user_id"]),
         account_id=int(account_id) if account_id else None,
         source="manual",
         execute=_coerce_execute_flag(execute) if execute is not None else False,
     )
-    return {"success": True, "message": "量化分析已完成", "data": result}
+    return {"success": True, "message": "自选池量化策略扫描已完成", "data": result}
+
+
+@app.post("/api/v1/strategy/quant/watchlist/run")
+async def run_watchlist_quant_cycle(
+    payload: dict = Body(default={}),
+    session: dict = Depends(get_current_session),
+):
+    account_id = payload.get("account_id") or payload.get("accountId")
+    execute = payload.get("execute")
+    result = QuantTradingService.run_watchlist_strategy_cycle(
+        user_id=int(session["user_id"]),
+        account_id=int(account_id) if account_id else None,
+        source=str(payload.get("source") or "manual"),
+        execute=_coerce_execute_flag(execute) if execute is not None else False,
+        strategy_profile=str(payload.get("strategy_profile") or payload.get("profile") or "balanced"),
+        limit=_coerce_int(payload.get("limit"), 80, 1, 200),
+        max_symbols=_coerce_int(payload.get("max_symbols") or payload.get("maxSymbols"), 2, 1, 10),
+        max_amount=_coerce_float(payload.get("max_amount") or payload.get("maxAmount"), 2000.0, 0.0, 100000000.0),
+        max_position_ratio=_coerce_float(payload.get("max_position_ratio") or payload.get("maxPositionRatio"), 0.08, 0.0, 1.0),
+        min_confidence=_coerce_int(payload.get("min_confidence") or payload.get("minConfidence"), 72, 0, 100),
+    )
+    return {"success": True, "message": "自选池量化策略扫描已完成", "data": result}
+
+
+@app.post("/api/v1/strategy/quant/watchlist/backtest")
+async def run_watchlist_quant_backtest(
+    payload: dict = Body(default={}),
+    session: dict = Depends(get_current_session),
+):
+    result = QuantTradingService.run_watchlist_strategy_backtest(
+        user_id=int(session["user_id"]),
+        symbol=str(payload.get("symbol") or ""),
+        market=payload.get("market"),
+        strategy_profile=str(payload.get("strategy_profile") or payload.get("profile") or "balanced"),
+        lookback_days=_coerce_int(payload.get("lookback_days") or payload.get("lookbackDays"), 90, 20, 260),
+        min_confidence=_coerce_int(payload.get("min_confidence") or payload.get("minConfidence"), 72, 0, 100),
+    )
+    return {"success": True, "message": "自选池量化策略复盘已完成", "data": result}
 
 
 if __name__ == "__main__":

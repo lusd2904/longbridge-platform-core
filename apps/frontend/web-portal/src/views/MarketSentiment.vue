@@ -35,11 +35,11 @@
       </template>
       <div class="config-grid">
         <div class="config-item">
-          <span>Base URL</span>
+          <span>网关地址</span>
           <strong>{{ aiConfig.baseUrl || '--' }}</strong>
         </div>
         <div class="config-item">
-          <span>Chat Completions</span>
+          <span>对话补全接口</span>
           <strong>{{ aiConfig.chatCompletionsUrl || '--' }}</strong>
         </div>
         <div class="config-item">
@@ -51,29 +51,29 @@
           <strong>{{ aiConfig.models?.scanPulse || '--' }} / {{ aiConfig.models?.recommendSummary || '--' }}</strong>
         </div>
       </div>
-      <p class="config-note">{{ aiConfig.note }}</p>
+      <p class="config-note">{{ aiConfigNote }}</p>
     </el-card>
 
     <el-card class="glass-card">
       <template #header>
         <SectionCardHeader
           title="GitHub 选型与量化边界"
-          :badge="githubAdoption.decision || 'native-contract-first'"
+          :badge="adoptionLabel(githubAdoption.decision || 'native-contract-first')"
         />
       </template>
       <div class="adoption-layout">
         <div class="adoption-policy">
           <div class="policy-item">
             <span>推荐栈</span>
-            <strong>{{ recommendedStackText }}</strong>
+            <strong>{{ localizedRecommendedStackText }}</strong>
           </div>
           <div class="policy-item">
             <span>AI 复用</span>
-            <strong>{{ githubAdoption.aiModelPolicy || 'reuse LONGBRIDGE_AI_* / sub2api' }}</strong>
+            <strong>{{ localizePolicyText(githubAdoption.aiModelPolicy) || '复用 LONGBRIDGE_AI_* / sub2api' }}</strong>
           </div>
           <div class="policy-item">
             <span>量化边界</span>
-            <strong>{{ githubAdoption.quantPolicy || '只读证据，不触发交易执行' }}</strong>
+            <strong>{{ localizePolicyText(githubAdoption.quantPolicy) || '只读证据，不触发交易执行' }}</strong>
           </div>
         </div>
         <div class="candidate-list">
@@ -88,7 +88,7 @@
             </div>
             <el-tag size="small" effect="plain">{{ candidate.license }}</el-tag>
             <el-tag size="small" :type="candidate.adoption === 'do-not-vendor' ? 'danger' : 'info'" effect="plain">
-              {{ candidate.adoption }}
+              {{ adoptionLabel(candidate.adoption) }}
             </el-tag>
           </div>
         </div>
@@ -181,7 +181,7 @@
         <el-table-column label="趋势/风控" min-width="180">
           <template #default="{ row }">
             <div class="compact-stack">
-              <span>{{ row?.trend_direction || 'sideways' }} / {{ row?.risk_level || 'medium' }}</span>
+              <span>{{ trendDirectionLabel(row?.trend_direction) }} / {{ riskLevelLabel(row?.risk_level) }}</span>
               <span>技术分 {{ formatNumber(row?.quant_fields?.technical_score) }}</span>
             </div>
           </template>
@@ -204,9 +204,9 @@
         <el-table-column label="量化契约" min-width="220">
           <template #default="{ row }">
             <div class="compact-stack">
-              <span>bias {{ row?.quant_fields?.ai_bias || 'neutral' }}</span>
-              <span>expected {{ formatPercent(row?.quant_fields?.expected_return || 0, { signed: true }) }}</span>
-              <span>recommended {{ row?.quant_fields?.recommended ? 'yes' : 'no' }}</span>
+              <span>AI 倾向 {{ aiBiasLabel(row?.quant_fields?.ai_bias) }}</span>
+              <span>预期收益 {{ formatPercent(row?.quant_fields?.expected_return || 0, { signed: true }) }}</span>
+              <span>推荐结论 {{ booleanLabel(row?.quant_fields?.recommended) }}</span>
             </div>
           </template>
         </el-table-column>
@@ -221,9 +221,9 @@
         <el-table-column label="联动入口" width="240" fixed="right">
           <template #default="{ row }">
             <div class="action-row">
-              <el-button size="small" @click="goAI(row)">AI研判</el-button>
-              <el-button size="small" @click="goRecommendations()">推荐</el-button>
-              <el-button size="small" @click="goStrategy()">策略</el-button>
+              <el-button class="sentiment-action-button is-ai" size="small" @click="goAI(row)">AI研判</el-button>
+              <el-button class="sentiment-action-button is-recommend" size="small" @click="goRecommendations()">推荐</el-button>
+              <el-button class="sentiment-action-button is-strategy" size="small" @click="goStrategy()">策略</el-button>
             </div>
           </template>
         </el-table-column>
@@ -259,6 +259,7 @@ const aiConfig = computed(() => overview.value.aiConfig || {})
 const githubAdoption = computed(() => overview.value.githubAdoption || {})
 const githubCandidates = computed(() => githubAdoption.value.candidates || [])
 const recommendedStackText = computed(() => (githubAdoption.value.recommendedStack || []).join(' / ') || 'FinNLP / FinBERT / sub2api')
+const localizedRecommendedStackText = computed(() => localizePolicyText(recommendedStackText.value))
 const visibleMarketSummaries = computed(() => overview.value.marketSummaries || [])
 const visibleRiskWords = computed(() => {
   const keyword = String(focusKeyword.value || '').trim()
@@ -285,7 +286,7 @@ const heroChips = computed(() => ([
   { text: selectedMarket.value === 'ALL' ? '全部市场' : marketLabel(selectedMarket.value), tone: 'info' },
   { text: aiConfig.value.provider || 'sub2api', tone: 'healthy' },
   { text: aiConfig.value.models?.default || '--', tone: 'info' },
-  { text: githubAdoption.value.decision || 'native-contract-first', tone: 'warning' }
+  { text: adoptionLabel(githubAdoption.value.decision || 'native-contract-first'), tone: 'warning' }
 ]))
 const heroMetrics = computed(() => ([
   { label: '市场摘要', value: `${visibleMarketSummaries.value.length} 个`, note: '跨市场情绪看板' },
@@ -294,14 +295,14 @@ const heroMetrics = computed(() => ([
 ]))
 const overviewMetrics = computed(() => ([
   {
-    label: 'Base URL',
+    label: '网关地址',
     value: aiConfig.value.baseUrl || '--',
     note: '复用现有 LONGBRIDGE_AI_*'
   },
   {
     label: '默认模型',
     value: aiConfig.value.models?.default || '--',
-    note: 'OpenAI-compatible'
+    note: '兼容 OpenAI 接口'
   },
   {
     label: '扫描模型',
@@ -315,6 +316,7 @@ const overviewMetrics = computed(() => ([
   }
 ]))
 const aiConfigBadge = computed(() => aiConfig.value.source || 'LONGBRIDGE_AI_*')
+const aiConfigNote = computed(() => localizePolicyText(aiConfig.value.note || '复用 sub2api'))
 
 const marketLabel = (market) => ({ US: '美股', CN: 'A股', HK: '港股' }[market] || market || '全部')
 const sentimentLabel = (value) => ({
@@ -322,6 +324,60 @@ const sentimentLabel = (value) => ({
   negative: '偏空',
   neutral: '中性'
 }[value] || value || '中性')
+const trendDirectionLabel = (value) => ({
+  up: '上行',
+  bullish: '上行',
+  down: '下行',
+  bearish: '下行',
+  sideways: '震荡',
+  flat: '震荡',
+  neutral: '震荡'
+}[String(value || '').trim().toLowerCase()] || '震荡')
+const riskLevelLabel = (value) => ({
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+  critical: '极高风险',
+  neutral: '中性'
+}[String(value || '').trim().toLowerCase()] || '中风险')
+const aiBiasLabel = (value) => ({
+  bullish: '偏多',
+  positive: '偏多',
+  bearish: '偏空',
+  negative: '偏空',
+  neutral: '中性'
+}[String(value || '').trim().toLowerCase()] || '中性')
+const booleanLabel = (value) => value ? '是' : '否'
+const adoptionLabel = (value) => ({
+  'native-contract-first': '本地契约优先',
+  'reference-adapter': '参考适配',
+  'reference-architecture': '架构参考',
+  'reference-model-layer': '模型层参考',
+  'optional-model': '可选模型',
+  'do-not-vendor': '不引入代码'
+}[String(value || '').trim().toLowerCase()] || value || '本地契约优先')
+const replaceText = (text, from, to) => text.split(from).join(to)
+const localizePolicyText = (value = '') => {
+  let text = String(value || '').trim()
+  if (!text) return ''
+  const replacements = [
+    ['sentiment output is read-only evidence for quant review; it must not submit orders, cancel orders, mutate positions, or trigger strategy execution', '舆情输出仅作为量化复核的只读证据，不得提交订单、撤单、改动持仓或触发策略执行'],
+    ['reuse LONGBRIDGE_AI_* / sub2api; no new AI key, model registry, or frontend-visible secret', '复用 LONGBRIDGE_AI_* / sub2api，不新增 AI 密钥、模型注册表或前端可见密钥'],
+    ['reuse LONGBRIDGE_AI_* / sub2api', '复用 LONGBRIDGE_AI_* / sub2api'],
+    ['MIT/Apache reference only; GPL projects are architecture references and must not be vendored', '仅参考 MIT/Apache 项目；GPL 项目只做架构参考，不引入代码'],
+    ['FinNLP collectors', 'FinNLP 采集器'],
+    ['FinBERT/FinABSA optional scoring', '可选 FinBERT/FinABSA 评分'],
+    ['FinBERT optional scoring', '可选 FinBERT 评分'],
+    ['sub2api gpt-5.4/gpt-5.5 synthesis', 'sub2api gpt-5.4/gpt-5.5 综合'],
+    ['sub2api synthesis', 'sub2api 综合'],
+    ['OpenAI-compatible', '兼容 OpenAI 接口'],
+    ['reuse sub2api', '复用 sub2api']
+  ]
+  replacements.forEach(([from, to]) => {
+    text = replaceText(text, from, to)
+  })
+  return text
+}
 const formatPercent = (value, options = {}) => formatPercentValue(Number(value || 0), options)
 const formatSigned = (value) => {
   const normalized = Number(value || 0)
@@ -573,6 +629,44 @@ onMounted(async () => {
 
 .action-row {
   justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.sentiment-action-button {
+  min-width: 58px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: border-color 180ms ease, background 180ms ease, color 180ms ease, box-shadow 180ms ease;
+}
+
+.sentiment-action-button.is-ai {
+  color: #d9fbff;
+  border-color: color-mix(in srgb, #38bdf8 56%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, #0891b2 48%, transparent), color-mix(in srgb, #0f766e 38%, transparent));
+}
+
+.sentiment-action-button.is-recommend {
+  color: #e7f2ff;
+  border-color: color-mix(in srgb, #60a5fa 58%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, #2563eb 46%, transparent), color-mix(in srgb, #1d4ed8 36%, transparent));
+}
+
+.sentiment-action-button.is-strategy {
+  color: #fff7df;
+  border-color: color-mix(in srgb, #f59e0b 56%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, #b45309 48%, transparent), color-mix(in srgb, #7c3aed 28%, transparent));
+}
+
+.sentiment-action-button:hover,
+.sentiment-action-button:focus-visible {
+  color: #fff;
+  border-color: color-mix(in srgb, currentColor 42%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, #60a5fa 24%, transparent);
 }
 
 .table-empty-state {

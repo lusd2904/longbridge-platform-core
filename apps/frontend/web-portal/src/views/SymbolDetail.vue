@@ -433,7 +433,7 @@ const toTimestampMs = (value) => {
 const quoteBase = computed(() => {
   const liveQuoteTimestamp = liveQuote.value?.timestamp || liveQuote.value?.pushReceivedAt || liveQuote.value?.updatedAt || ''
   const pullQuoteTimestamp = quoteApiFallback.value?.timestamp || quoteApiFallback.value?.snapshotAt || quoteApiFallback.value?.updatedAt || ''
-  const snapshotQuoteTimestamp = quoteSnapshot.value?.snapshotAt || quoteSnapshot.value?.updatedAt || ''
+  const snapshotQuoteTimestamp = quoteSnapshot.value?.snapshotAt || quoteSnapshot.value?.timestamp || quoteSnapshot.value?.updatedAt || ''
   const hasLiveQuote = liveQuote.value?.last_price !== undefined && liveQuote.value?.last_price !== null
   const hasPullQuote = quoteApiFallback.value?.price !== undefined && quoteApiFallback.value?.price !== null
   const hasSnapshotQuote = quoteSnapshot.value?.price !== undefined && quoteSnapshot.value?.price !== null
@@ -445,7 +445,7 @@ const quoteBase = computed(() => {
     return { ...quoteApiFallback.value, source: 'longbridge-cli' }
   }
   if (hasSnapshotQuote) {
-    return { ...quoteSnapshot.value, source: 'quote-snapshot' }
+    return { ...quoteSnapshot.value, source: quoteSnapshot.value?.source || quoteSnapshot.value?.dataSource || 'longbridge-live' }
   }
   return {
     price: dailySnapshot.value?.closePrice ?? 0,
@@ -493,6 +493,7 @@ const quoteSnapshotTimeDisplay = computed(() => {
 const quoteBaseSourceLabel = computed(() => {
   if (quoteBase.value?.source === 'realtime-stream') return 'Longbridge Push'
   if (quoteBase.value?.source === 'longbridge-cli') return 'Longbridge Quote'
+  if (String(quoteBase.value?.source || '').startsWith('longbridge-live')) return '长桥实时'
   if (quoteBase.value?.source === 'quote-snapshot') return '行情快照'
   if (quoteBase.value?.source === 'daily-history') return '历史收盘'
   return '行情数据'
@@ -541,17 +542,17 @@ const sourceLayerCards = computed(() => ([
   {
     label: '价格状态',
     value: quoteBaseSourceLabel.value,
-    hint: quoteSnapshotTimeDisplay.value === '--' ? '等待报价快照' : `快照 ${quoteSnapshotTimeDisplay.value}`,
+    hint: quoteSnapshotTimeDisplay.value === '--' ? '等待长桥实时' : `${quoteBaseSourceLabel.value} ${quoteSnapshotTimeDisplay.value}`,
     tone: ''
   },
   {
     label: '最新价',
-    value: hasRealtimeQuote.value ? '实时行情' : wsConnected.value ? '等待首帧' : '快照',
+    value: hasRealtimeQuote.value ? '实时行情' : wsConnected.value ? '等待首帧' : '长桥实时',
     hint: liveQuote.value?.timestamp
       ? formatDateTime(liveQuote.value.timestamp)
       : wsConnected.value
         ? '连接已建立，继续等待实时价'
-        : '当前显示快照价格',
+        : '当前显示长桥实时拉取价格',
     tone: hasRealtimeQuote.value ? 'positive' : 'neutral'
   },
   {
@@ -576,7 +577,7 @@ const symbolHeroChips = computed(() => ([
     tone: marketTone(overview.value?.market)
   },
   {
-    text: wsConnected.value ? '实时推送' : '行情快照',
+    text: wsConnected.value ? '实时推送' : '长桥实时',
     tone: wsConnected.value ? 'healthy' : 'info'
   },
   {

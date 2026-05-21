@@ -14,6 +14,7 @@ from typing import Callable, Mapping, NamedTuple, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CLI_CANDIDATES = ("agy", "antigravity", "antigravity-cli", "ag")
+DEFAULT_GEMINI_CANDIDATES = ("gemini",)
 DEFAULT_MODE_ARGS = {
     "print": ("--print",),
     "interactive": ("--prompt-interactive",),
@@ -27,6 +28,24 @@ MODE_ENV_KEYS = {
 ENV_BIN = "REF_AGENT_CLI_BIN"
 ENV_APPEND_ARGS = "REF_AGENT_CLI_APPEND_ARGS"
 ENV_MODEL_ARGS_TEMPLATE = "REF_AGENT_CLI_MODEL_ARGS_TEMPLATE"
+ENV_GEMINI_BIN = "REF_AGENT_CLI_GEMINI_BIN"
+ENV_DISABLE_GEMINI_FALLBACK = "REF_AGENT_CLI_DISABLE_GEMINI_FALLBACK"
+AUTH_FAILURE_MARKERS = (
+    "oauth",
+    "authentication required",
+    "waiting for authentication",
+    "authorization code",
+    "authentication timed out",
+    "authorization",
+    "authorisation",
+    "authenticate",
+    "authentication",
+    "login",
+    "log in",
+    "sign in",
+    "permission denied",
+    "credentials",
+)
 SUPPORTED_FORWARD_FLAGS = {
     "--add-dir": True,
     "--conversation": True,
@@ -43,6 +62,11 @@ class AdapterConfigError(RuntimeError):
 class ResolvedCli(NamedTuple):
     command: str
     path: str
+
+
+class CompletedProcessResult(NamedTuple):
+    returncode: int
+    output: str
 
 
 def _split_env_args(value: str | None) -> list[str]:
@@ -69,6 +93,41 @@ def resolve_cli(
     raise AdapterConfigError(
         "Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash"
     )
+
+
+def resolve_gemini_cli(
+    env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> ResolvedCli:
+    active_env = dict(os.environ if env is None else env)
+    configured = active_env.get(ENV_GEMINI_BIN, "").strip()
+    if configured:
+        resolved = which(configured)
+        if not resolved:
+            raise AdapterConfigError(
+                f"{ENV_GEMINI_BIN} points to '{configured}', but that command is not available in PATH."
+            )
+        return ResolvedCli(command=configured, path=resolved)
+    for candidate in DEFAULT_GEMINI_CANDIDATES:
+        resolved = which(candidate)
+        if resolved:
+            return ResolvedCli(command=candidate, path=resolved)
+    raise AdapterConfigError("Gemini CLI fallback is not available in PATH.")
+
+
+def should_use_gemini_fallback(
+    returncode: int,
+    output: str,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    active_env = dict(os.environ if env is None else env)
+    disabled = active_env.get(ENV_DISABLE_GEMINI_FALLBACK, "").strip().lower()
+    if disabled in {"1", "true", "yes", "on"}:
+        return False
+    normalized = (output or "").lower()
+    if returncode == 0 and not any(marker in normalized for marker in AUTH_FAILURE_MARKERS):
+        return False
+    return any(marker in normalized for marker in AUTH_FAILURE_MARKERS)
 
 
 def _resolve_mode_args(mode: str, env: Mapping[str, str]) -> list[str]:
@@ -110,6 +169,27 @@ def build_command(
     if passthrough_args:
         command.extend(passthrough_args)
     command.extend(_split_env_args(active_env.get(ENV_APPEND_ARGS)))
+    return command
+
+
+def build_gemini_fallback_command(
+    *,
+    mode: str,
+    prompt: str | None = None,
+    model: str | None = None,
+    env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> list[str]:
+    if mode == "continue":
+        raise AdapterConfigError("Gemini fallback for continue mode requires an explicit prompt.")
+    if not prompt:
+        raise AdapterConfigError("Gemini fallback requires a prompt string.")
+    active_env = dict(os.environ if env is None else env)
+    resolved = resolve_gemini_cli(active_env, which=which)
+    command = [resolved.path]
+    if model:
+        command.extend(["--model", model])
+    command.extend(["--prompt", prompt])
     return command
 
 
@@ -225,9 +305,60 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _run_subprocess(command: Sequence[str]) -> int:
-    completed = subprocess.run(command, cwd=ROOT)
-    return int(completed.returncode)
+def _run_subprocess(
+    command: Sequence[str],
+    *,
+    capture_output: bool = False,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> CompletedProcessResult:
+    completed = runner(
+        command,
+        cwd=ROOT,
+        capture_output=capture_output,
+        text=capture_output,
+        check=False,
+    )
+    output = ""
+    if capture_output:
+        output = (completed.stdout or "") + (completed.stderr or "")
+    return CompletedProcessResult(int(completed.returncode), output)
+
+
+def run_with_gemini_auth_fallback(
+    *,
+    mode: str,
+    prompt: str | None,
+    model: str | None,
+    passthrough_args: Sequence[str] | None = None,
+    env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> int:
+    active_env = dict(os.environ if env is None else env)
+    command = build_command(
+        mode=mode,
+        prompt=prompt,
+        model=model,
+        passthrough_args=passthrough_args,
+        env=active_env,
+        which=which,
+    )
+    primary = _run_subprocess(command, capture_output=True, runner=runner)
+    if primary.output:
+        stream = sys.stdout if primary.returncode == 0 else sys.stderr
+        print(primary.output, end="", file=stream)
+    if not should_use_gemini_fallback(primary.returncode, primary.output, active_env):
+        return primary.returncode
+
+    fallback = build_gemini_fallback_command(
+        mode=mode,
+        prompt=prompt,
+        model=model,
+        env=active_env,
+        which=which,
+    )
+    print("[antigravity] authorization blocked; falling back to Gemini CLI.", file=sys.stderr)
+    return _run_subprocess(fallback, capture_output=False, runner=runner).returncode
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -236,9 +367,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "probe":
             resolved = resolve_cli()
             if args.format == "json":
-                print(json.dumps({"command": resolved.command, "path": resolved.path}, ensure_ascii=False, indent=2))
+                try:
+                    gemini = resolve_gemini_cli()
+                    gemini_payload = {"command": gemini.command, "path": gemini.path}
+                except AdapterConfigError:
+                    gemini_payload = None
+                print(json.dumps(
+                    {
+                        "command": resolved.command,
+                        "path": resolved.path,
+                        "geminiFallback": gemini_payload,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ))
                 return 0
             print(f"[antigravity] using {resolved.command} at {resolved.path}")
+            try:
+                gemini = resolve_gemini_cli()
+                print(f"[antigravity] Gemini fallback available at {gemini.path}")
+            except AdapterConfigError:
+                print("[antigravity] Gemini fallback unavailable")
             help_result = subprocess.run([resolved.path, "--help"], cwd=ROOT, capture_output=True, text=True, check=False)
             output = help_result.stdout or help_result.stderr
             print(output.rstrip())
@@ -254,7 +403,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.dry_run:
                 print(_command_payload(command))
                 return 0
-            return _run_subprocess(command)
+            return run_with_gemini_auth_fallback(
+                mode=args.mode,
+                prompt=args.prompt,
+                model=args.model,
+                passthrough_args=args.pass_arg,
+            )
 
         compat_args = list(args.args)
         if compat_args and compat_args[0] == "--":
@@ -263,7 +417,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.dry_run:
             print(_command_payload(command))
             return 0
-        return _run_subprocess(command)
+        return _run_subprocess(command).returncode
     except AdapterConfigError as exc:
         print(f"[antigravity] {exc}", file=sys.stderr)
         return 1

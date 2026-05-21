@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,128 @@ def test_build_command_uses_verified_defaults_for_print_mode() -> None:
     )
 
     assert command == ["/usr/local/bin/agy", "--print", "hello", "--print-timeout", "60s"]
+
+
+def test_probe_json_includes_gemini_fallback(monkeypatch, capsys) -> None:
+    module = _load_module()
+
+    monkeypatch.setattr(
+        module,
+        "resolve_cli",
+        lambda: module.ResolvedCli("agy", "/usr/local/bin/agy"),
+    )
+    monkeypatch.setattr(
+        module,
+        "resolve_gemini_cli",
+        lambda: module.ResolvedCli("gemini", "/usr/local/bin/gemini"),
+    )
+
+    assert module.main(["probe", "--format", "json"]) == 0
+
+    payload = module.json.loads(capsys.readouterr().out)
+    assert payload["path"] == "/usr/local/bin/agy"
+    assert payload["geminiFallback"]["path"] == "/usr/local/bin/gemini"
+
+
+def test_run_with_gemini_auth_fallback_uses_gemini_on_oauth_failure() -> None:
+    module = _load_module()
+    calls = []
+
+    def fake_which(name: str):
+        return {
+            "agy": "/usr/local/bin/agy",
+            "gemini": "/usr/local/bin/gemini",
+        }.get(name)
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        if command[0].endswith("agy"):
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="OAuth login required")
+        return subprocess.CompletedProcess(command, 0, stdout="gemini ok", stderr="")
+
+    code = module.run_with_gemini_auth_fallback(
+        mode="print",
+        prompt="review docs",
+        model=None,
+        env={},
+        which=fake_which,
+        runner=fake_runner,
+    )
+
+    assert code == 0
+    assert calls == [
+        ["/usr/local/bin/agy", "--print", "review docs"],
+        ["/usr/local/bin/gemini", "--prompt", "review docs"],
+    ]
+
+
+def test_run_with_gemini_auth_fallback_handles_zero_exit_auth_prompt() -> None:
+    module = _load_module()
+    calls = []
+
+    def fake_which(name: str):
+        return {
+            "agy": "/usr/local/bin/agy",
+            "gemini": "/usr/local/bin/gemini",
+        }.get(name)
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        if command[0].endswith("agy"):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "Authentication required. Please visit the URL to log in:\n"
+                    "Waiting for authentication (timeout 30s)...\n"
+                    "Or, paste the authorization code here and press Enter:\n"
+                    "Error: authentication timed out.\n"
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="gemini ok", stderr="")
+
+    code = module.run_with_gemini_auth_fallback(
+        mode="print",
+        prompt="review docs",
+        model=None,
+        env={},
+        which=fake_which,
+        runner=fake_runner,
+    )
+
+    assert code == 0
+    assert calls == [
+        ["/usr/local/bin/agy", "--print", "review docs"],
+        ["/usr/local/bin/gemini", "--prompt", "review docs"],
+    ]
+
+
+def test_run_with_gemini_auth_fallback_does_not_mask_non_auth_failure() -> None:
+    module = _load_module()
+    calls = []
+
+    def fake_which(name: str):
+        return {
+            "agy": "/usr/local/bin/agy",
+            "gemini": "/usr/local/bin/gemini",
+        }.get(name)
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr="unknown flag")
+
+    code = module.run_with_gemini_auth_fallback(
+        mode="print",
+        prompt="review docs",
+        model=None,
+        env={},
+        which=fake_which,
+        runner=fake_runner,
+    )
+
+    assert code == 2
+    assert calls == [["/usr/local/bin/agy", "--print", "review docs"]]
 
 
 def test_translate_gemini_args_rejects_model_without_explicit_mapping() -> None:

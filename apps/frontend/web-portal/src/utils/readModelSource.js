@@ -24,6 +24,10 @@ const SOURCE_LABEL_MAP = {
   'live-backfill': '实时回填',
   live: '实时',
   quotes: '行情推送',
+  'longbridge-live': '长桥实时',
+  'longbridge-live-stale': '长桥实时缓存',
+  'longbridge-push': '长桥推送',
+  'longbridge-subscribe-snapshot': '长桥订阅首帧',
   depth: '盘口',
   trades: '成交明细',
   'quote / depth / trades': '行情推送',
@@ -108,9 +112,9 @@ export const formatQuoteStatusTag = ({ wsConnected = false, pendingCount = 0, re
     return { type: 'success', text: '实时推送' }
   }
   if (readyCount > 0) {
-    return { type: 'info', text: '报价快照' }
+    return { type: 'info', text: '长桥实时' }
   }
-  return { type: 'warning', text: '等待报价快照' }
+  return { type: 'warning', text: '等待长桥实时' }
 }
 
 export const formatContentCacheSourceLabel = (meta = {}) => {

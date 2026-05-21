@@ -13,6 +13,7 @@ SERVICE_PORTS = {
     "market-service": int(os.getenv("REF_MARKET_SERVICE_PORT", "8102")),
     "analysis-service": int(os.getenv("REF_ANALYSIS_SERVICE_PORT", "8103")),
     "strategy-service": int(os.getenv("REF_STRATEGY_SERVICE_PORT", "8104")),
+    "agno-sidecar": int(os.getenv("REF_AGNO_SIDECAR_PORT", "3200")),
     "trade-service": int(os.getenv("REF_TRADE_SERVICE_PORT", "8105")),
     "scheduler-service": int(os.getenv("REF_SCHEDULER_SERVICE_PORT", "8107")),
     "risk-service": int(os.getenv("REF_RISK_SERVICE_PORT", "8108")),

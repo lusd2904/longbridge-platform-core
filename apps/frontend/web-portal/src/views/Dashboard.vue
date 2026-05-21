@@ -228,7 +228,7 @@
 
         <el-card v-if="activeMobileSection === 'ops'" class="mobile-feed-card">
           <template #header>
-            <SectionCardHeader title="服务状态" >
+            <SectionCardHeader title="服务状态墙" >
               <template #actions>
                 <el-button type="primary" link :loading="healthLoading" @click="loadSystemHealth(false)">刷新</el-button>
               </template>
@@ -270,7 +270,7 @@
       <template v-if="!isPhoneLayout">
         <el-card class="operations-card">
         <template #header>
-          <SectionCardHeader title="服务状态">
+          <SectionCardHeader title="服务状态墙">
             <template #actions>
               <el-button type="primary" link :loading="healthLoading" @click="loadSystemHealth(false)">
                 刷新检查
@@ -278,12 +278,21 @@
             </template>
           </SectionCardHeader>
         </template>
+        <div class="service-wall-head">
+          <span>{{ serviceHealthSourceLabel }}</span>
+          <span>{{ serviceHealthSnapshot }}</span>
+        </div>
         <div class="service-health-grid">
           <div v-for="service in systemHealthCards" :key="service.key" class="service-pill">
             <span class="service-dot" :class="service.tone"></span>
-            <span class="service-name">{{ service.label }}</span>
-            <strong :class="service.tone">{{ service.value }}</strong>
-            <small>{{ service.hint }}</small>
+            <div class="service-copy">
+              <span class="service-name">{{ service.label }}</span>
+              <strong :class="service.tone">{{ service.value }}</strong>
+            </div>
+            <div class="service-endpoint">
+              <span>{{ service.endpoint }}</span>
+              <small>{{ service.hint }}</small>
+            </div>
           </div>
         </div>
         <div class="service-meta">
@@ -420,7 +429,7 @@
                   {{ item.quoteSourceTag }}
                 </el-tag>
                 <span v-if="item.quoteSnapshotAt" class="insight-source-time">
-                  报价快照 {{ formatTime(item.quoteSnapshotAt) }}
+                  长桥实时 {{ formatTime(item.quoteSnapshotAt) }}
                 </span>
               </div>
 
@@ -432,7 +441,7 @@
                     {{ formatPercentValue(benchmark.changePercent) }}
                   </span>
                   <span class="chip-source">
-                    {{ benchmark.quoteReady ? `快照 ${formatTime(benchmark.quoteSnapshotAt)}` : '沿用分析生成价' }}
+                    {{ benchmark.quoteReady ? `长桥实时 ${formatTime(benchmark.quoteSnapshotAt)}` : '等待长桥实时' }}
                   </span>
                 </div>
               </div>
@@ -539,7 +548,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { getFinanceBriefings, getRecommendations } from '../api/analysis.js'
-import { getDashboardMarketInsights, getQuoteSnapshots } from '../api/market.js'
+import { getDashboardMarketInsights, getStockQuotes } from '../api/market.js'
 import { getApiHealth } from '../api/platform.js'
 import { getAssetTrend, getBrokerAccounts, getDashboardSummary, getPositionsSnapshot, getProjectedOrders } from '../api/trade.js'
 import { useOrderStream, useStockQuotes } from '../composables/useWebSocket.js'
@@ -644,8 +653,10 @@ const HEALTH_CARD_META = [
   { key: 'analysis_service', label: '分析服务' },
   { key: 'strategy_service', label: '策略服务' },
   { key: 'trade_service', label: '交易服务' },
+  { key: 'sentiment_service', label: '舆情服务' },
   { key: 'scheduler_service', label: '调度中心' },
-  { key: 'risk_service', label: '风控服务' }
+  { key: 'risk_service', label: '风控服务' },
+  { key: 'agno_sidecar', label: 'Agno Sidecar' }
 ]
 
 const overallHealthLabel = computed(() => {
@@ -665,6 +676,21 @@ const serviceHealthSnapshot = computed(() => {
   const healthy = Number(systemHealth.value?.summary?.healthy || 0)
   const total = Number(systemHealth.value?.summary?.total || systemHealthCards.value.length || 0)
   return total ? `${healthy}/${total} 正常` : '等待检测'
+})
+
+const serviceHealthSourceLabel = computed(() => {
+  const source = String(systemHealth.value?.source || '')
+  const catalogSource = String(systemHealth.value?.catalog_source || '')
+  if (source.includes('api-gateway') && catalogSource.includes('catalog')) {
+    return 'Gateway 观测 · Catalog 已同步'
+  }
+  if (source.includes('api-gateway')) {
+    return 'Gateway 观测'
+  }
+  if (source.includes('direct')) {
+    return '直连健康检查'
+  }
+  return '等待 Gateway 观测'
 })
 
 
@@ -915,18 +941,21 @@ const systemHealthCards = computed(() => {
   return HEALTH_CARD_META.map((item) => {
     const payload = services[item.key]
     const alertCount = Number(payload?.alert_count || 0)
+    const basePath = payload?.basePath || ''
+    const port = payload?.port ? `:${payload.port}` : ''
     return {
       key: item.key,
       label: item.label,
       value: formatServiceStatus(payload),
       tone: serviceTone(payload),
+      endpoint: basePath || payload?.service || '等待目录',
       hint: alertCount
         ? `${alertCount} 条告警`
-        : payload?.version
+        : port
+          ? port
+          : payload?.version
           ? `v${payload.version}`
-          : payload?.port
-            ? `:${payload.port}`
-            : payload?.service || '等待检查'
+          : payload?.description || '等待检查'
     }
   })
 })
@@ -1042,7 +1071,7 @@ const marketInsightQuoteCoverage = computed(() => {
   const coverage = summarizeQuoteSnapshotCoverage(marketInsights.value.flatMap((item) => item?.benchmarks || []))
   return {
     ...coverage,
-    label: formatQuoteCoverageLabel(coverage, { prefix: '基准报价快照', emptyLabel: '等待基准报价' })
+    label: formatQuoteCoverageLabel(coverage, { prefix: '基准长桥实时', emptyLabel: '等待基准长桥实时' })
   }
 })
 const marketInsightSourceSummary = computed(() => buildMarketInsightReadModelSummary(
@@ -1056,7 +1085,7 @@ const marketInsightSourceSummary = computed(() => buildMarketInsightReadModelSum
 const marketInsightSourceTags = computed(() => marketInsightSourceSummary.value.tags || [])
 const recommendationQuoteSourceTag = computed(() => {
   const coverage = summarizeQuoteSnapshotCoverage(recommendationItems.value)
-  return formatQuoteCoverageLabel(coverage, { prefix: '推荐报价快照', emptyLabel: '等待推荐报价' })
+  return formatQuoteCoverageLabel(coverage, { prefix: '推荐长桥实时', emptyLabel: '等待推荐长桥实时' })
 })
 const financeBriefingSourceSummary = computed(() => {
   const summary = buildFinanceBriefingReadModelSummary(
@@ -1392,10 +1421,10 @@ const loadMarketData = async () => {
       let quoteMap = {}
       if (benchmarkSymbols.length) {
         try {
-          const quoteRes = await getQuoteSnapshots(benchmarkSymbols, { maxAgeMinutes: 20 })
+          const quoteRes = await getStockQuotes(benchmarkSymbols)
           quoteMap = buildQuoteSnapshotMap(quoteRes?.data || [])
         } catch (quoteError) {
-          console.error('Failed to load market benchmark quote snapshots:', quoteError)
+          console.error('Failed to load market benchmark Longbridge quotes:', quoteError)
         }
       }
 
@@ -1408,7 +1437,7 @@ const loadMarketData = async () => {
           benchmarks: mergedBenchmarks,
           quoteReadyCount: coverage.readyCount,
           benchmarkCount: coverage.totalCount,
-          quoteSourceTag: formatQuoteCoverageLabel(coverage, { prefix: '报价', emptyLabel: '等待报价' }),
+          quoteSourceTag: formatQuoteCoverageLabel(coverage, { prefix: '长桥实时', emptyLabel: '等待长桥实时' }),
           quoteSnapshotAt: coverage.latestSnapshotAt || null
         }
       })
@@ -1488,7 +1517,7 @@ const loadWorkbenchInsights = async () => {
     const baseItems = Array.isArray(recommendationPayload.items)
       ? recommendationPayload.items.slice(0, 4)
       : []
-    const quoteRes = await getQuoteSnapshots(baseItems.map((item) => item.symbol), { maxAgeMinutes: 20 })
+    const quoteRes = await getStockQuotes(baseItems.map((item) => item.symbol))
     const quoteMap = buildQuoteSnapshotMap(quoteRes?.data || [])
     recommendationItems.value = mergeQuoteSnapshots(baseItems, quoteMap)
     recommendationSummary.value = recommendationPayload.summary || ''
@@ -1891,18 +1920,27 @@ onUnmounted(() => {
 
 .service-health-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
+.service-wall-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .service-pill {
-  min-height: 46px;
+  min-height: 68px;
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border-soft);
   background: var(--surface-soft);
   display: grid;
-  grid-template-columns: auto minmax(72px, 0.8fr) minmax(84px, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   position: relative;
@@ -1915,6 +1953,9 @@ onUnmounted(() => {
   .service-name {
     font-size: 12px;
     color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   strong {
@@ -1934,11 +1975,26 @@ onUnmounted(() => {
       color: var(--danger);
     }
   }
+}
 
+.service-copy,
+.service-endpoint {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.service-endpoint {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.25;
+
+  span,
   small {
-    font-size: 11px;
-    color: var(--text-muted);
-    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 }

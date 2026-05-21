@@ -4,7 +4,7 @@ principles:
   - keep_legacy_as_backup
   - migrate_by_domain
   - use_parallel_ports
-  - reserve_sentiment_boundary_first
+  - keep_sentiment_read_model_isolated
 
 services:
   - code: web-portal
@@ -21,9 +21,9 @@ services:
     port: 5101
     status: live
     responsibility:
-      - auth aggregation
-      - service routing
-      - unified response envelope
+      - service catalog
+      - dependency probes
+      - observability summary
     legacy_sources:
       - backend-server/app.py
       - backend-server/src/api
@@ -35,7 +35,6 @@ services:
     responsibility:
       - login
       - profile
-      - watchlist
       - user preferences
     legacy_sources:
       - backend-server/src/api/user_routes.py
@@ -49,6 +48,7 @@ services:
       - price history
       - indicator snapshots
       - market scan datasets
+      - stock pool and watchlist
     legacy_sources:
       - backend-server/src/core/analysis/HistoricalMarketDataService.py
       - backend-server/src/core/analysis/IndicatorSnapshotService.py
@@ -61,6 +61,7 @@ services:
       - ai analysis
       - trend batch scans
       - conclusion generation
+      - quant factor inputs for strategy scoring
     legacy_sources:
       - backend-server/src/api/ai_routes.py
       - backend-server/src/core/analysis/DailySymbolTrendScanService.py
@@ -73,6 +74,8 @@ services:
       - strategy config
       - risk rule coordination
       - backtest orchestration
+      - self-watchlist quant strategy scan
+      - lightweight position budget suggestions
     legacy_sources:
       - backend-server/src/strategy
       - web/src/views/Strategy.vue
@@ -83,6 +86,7 @@ services:
     status: live
     responsibility:
       - order execution
+      - normalized order state projection
       - position query
       - order projection
     legacy_sources:
@@ -90,16 +94,26 @@ services:
 
   - code: sentiment-service
     port: 8106
-    status: placeholder
+    status: live
     responsibility:
-      - sentiment ingestion
-      - sentiment scoring
-      - event extraction
+      - sentiment read model
+      - GitHub reference project metadata
+      - read-only quantitative sentiment fields
       - symbol sentiment summary
     legacy_sources:
       - AI_ANALYSIS_DESIGN.md
 
-  - code: scheduler
+  - code: agno-sidecar
+    port: 3200
+    status: live
+    responsibility:
+      - Agno-compatible watchlist review
+      - read-only AI gateway calls
+      - degraded review fallback
+    legacy_sources:
+      - apps/intelligence/agno-sidecar/src/main.py
+
+  - code: scheduler-service
     port: 8107
     status: live
     responsibility:
@@ -122,3 +136,124 @@ services:
       - backend-server/src/api/data_routes.py
       - web/src/views/RiskManagement.vue
       - web/src/views/Notifications.vue
+
+service_edges:
+  - from: web-portal
+    to: api-gateway
+    kind: frontend_proxy
+    path: /svc/gateway
+    purpose: service catalog and observability status wall
+  - from: web-portal
+    to: user-center
+    kind: frontend_proxy
+    path: /svc/user
+    purpose: login, bootstrap, menus and user settings
+  - from: web-portal
+    to: market-service
+    kind: frontend_proxy
+    path: /svc/market
+    purpose: market data, watchlist and stock pool pages
+  - from: web-portal
+    to: analysis-service
+    kind: frontend_proxy
+    path: /svc/analysis
+    purpose: AI analysis, recommendations and Agent run detail
+  - from: web-portal
+    to: strategy-service
+    kind: frontend_proxy
+    path: /svc/strategy
+    purpose: strategy configuration, backtest pages and self-watchlist quant scan
+  - from: web-portal
+    to: trade-service
+    kind: frontend_proxy
+    path: /svc/trade
+    purpose: accounts, positions, orders and execution UI
+  - from: web-portal
+    to: sentiment-service
+    kind: frontend_proxy
+    path: /svc/sentiment
+    purpose: sentiment center read model
+  - from: web-portal
+    to: scheduler-service
+    kind: frontend_proxy
+    path: /svc/scheduler
+    purpose: scheduler runtime and task center
+  - from: web-portal
+    to: risk-service
+    kind: frontend_proxy
+    path: /svc/risk
+    purpose: risk overview, protection orders and notifications
+
+  - from: api-gateway
+    to: user-center
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: market-service
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: analysis-service
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: strategy-service
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: trade-service
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: sentiment-service
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: scheduler-service
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: risk-service
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+  - from: api-gateway
+    to: agno-sidecar
+    kind: health_probe
+    path: /health
+    purpose: service catalog and dependency observability
+
+  - from: scheduler-service
+    to: analysis-service
+    kind: service_call
+    path: /api/v1/analysis/agent/watchlist-review
+    purpose: scheduled watchlist pre-open and post-close review
+  - from: analysis-service
+    to: agno-sidecar
+    kind: service_call
+    path: /api/v1/agent/watchlist-review
+    purpose: review-only AI watchlist analysis
+  - from: agno-sidecar
+    to: ai-gateway
+    kind: external_call
+    path: /v1/chat/completions
+    purpose: OpenAI-compatible review generation through existing AI config
+  - from: trade-service
+    to: longbridge-cli
+    kind: external_call
+    purpose: broker account, quote and order execution runtime
+  - from: market-service
+    to: skshare
+    kind: external_call
+    purpose: market history fallback
+  - from: market-service
+    to: longbridge-quote
+    kind: external_call
+    purpose: quote and push data runtime

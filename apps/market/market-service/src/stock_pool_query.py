@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from apps.market.market_shared.boundary import iter_stock_pool_tables
-from core.readmodel.QuoteSnapshotService import QuoteSnapshotService
 from utils.DbUtil import DbUtil
 
 
@@ -148,36 +147,6 @@ def _build_union_sql(
     return "\nUNION ALL\n".join(clauses), tuple(params)
 
 
-def _merge_quote_snapshot(base: Dict[str, Any], snapshot: Dict[str, Any] | None) -> Dict[str, Any]:
-    merged = dict(base)
-    quote_snapshot = snapshot or {}
-    for source_key, target_key in (
-        ("price", "price"),
-        ("change", "change"),
-        ("change_percent", "change_percent"),
-        ("prev_close", "prev_close"),
-        ("open", "open"),
-        ("high", "high"),
-        ("low", "low"),
-        ("volume", "volume"),
-        ("turnover", "turnover"),
-    ):
-        if quote_snapshot.get(source_key) not in (None, ""):
-            merged[target_key] = quote_snapshot.get(source_key)
-    merged["quote_source"] = quote_snapshot.get("source") or merged.get("quote_source") or "universe"
-    merged["quote_snapshot_at"] = quote_snapshot.get("snapshotAt") or merged.get("quote_snapshot_at")
-    merged["quoteReady"] = bool(
-        merged.get("quoteReady")
-        or merged.get("price")
-        or merged.get("prev_close")
-        or merged.get("open")
-        or merged.get("high")
-        or merged.get("low")
-        or merged.get("quote_snapshot_at")
-    )
-    return merged
-
-
 def load_stock_pool_page(
     *,
     market: str,
@@ -235,7 +204,6 @@ def load_stock_pool_page(
         LIMIT %s OFFSET %s
     """
     rows = DbUtil.fetch_all(page_sql, union_params + (int(user_id), int(page_size), int(offset))) or []
-    quote_map = QuoteSnapshotService.get_latest_map([str(row.get("symbol") or "") for row in rows]) if rows else {}
 
     items: List[Dict[str, Any]] = []
     for row in rows:
@@ -245,9 +213,9 @@ def load_stock_pool_page(
             "market": row.get("market"),
             "sector": row.get("display_category") or "",
             "group_id": row.get("group_id"),
-            "price": float(row.get("current_price")) if row.get("current_price") is not None else None,
-            "change_percent": float(row.get("change_percent")) if row.get("change_percent") is not None else None,
-            "volume": int(row.get("volume")) if row.get("volume") is not None else None,
+            "price": None,
+            "change_percent": None,
+            "volume": None,
             "market_cap": float(row.get("market_cap")) if row.get("market_cap") is not None else None,
             "pe": float(row.get("pe_ratio")) if row.get("pe_ratio") is not None else None,
             "prev_close": None,
@@ -256,18 +224,14 @@ def load_stock_pool_page(
             "low": None,
             "change": None,
             "turnover": None,
-            "quote_source": "universe",
+            "quote_source": "pending",
             "quote_snapshot_at": None,
-            "quoteReady": bool(
-                row.get("current_price") is not None
-                or row.get("change_percent") is not None
-                or row.get("volume") is not None
-            ),
+            "quoteReady": False,
             "type": row.get("asset_type") or "stock",
             "asset_type": row.get("asset_type") or "stock",
             "isWatchlisted": bool(row.get("is_watchlisted")),
             "watchlistedAt": row.get("watchlisted_at"),
         }
-        items.append(_merge_quote_snapshot(base, quote_map.get(str(row.get("symbol") or ""))))
+        items.append(base)
 
     return {"items": items, "total": total}

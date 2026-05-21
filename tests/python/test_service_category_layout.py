@@ -15,6 +15,7 @@ def test_apps_category_layout_exists() -> None:
         "apps/market/sentiment-service",
         "apps/intelligence/analysis-service",
         "apps/intelligence/strategy-service",
+        "apps/intelligence/agno-sidecar",
         "apps/trading/trade-service",
         "apps/governance/risk-service",
         "apps/operations/scheduler-service",

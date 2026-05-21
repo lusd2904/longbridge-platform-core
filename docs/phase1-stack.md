@@ -12,31 +12,34 @@
 - `sentiment-service` `8106`
 - `scheduler-service` `8107`
 - `risk-service` `8108`
+- `agno-sidecar` `3200`
 - `api-gateway` `5101`
 - `web-portal` `3100`
 
 ## 启动方式
 
 ```bash
-./refactor-v2/scripts/start_phase1_stack.sh
+./scripts/start_phase1_stack.sh
 ```
 
 ## 停止方式
 
 ```bash
-./refactor-v2/scripts/stop_phase1_stack.sh
+./scripts/stop_phase1_stack.sh
 ```
 
 ## 核心验证接口
+
+### 微服务直连调试
+
+这些命令直接访问服务端口，适合确认服务自身是否健康：
 
 ```bash
 curl http://127.0.0.1:5101/health
 curl http://127.0.0.1:5101/api/v1/bootstrap
 curl http://127.0.0.1:5101/api/v1/system/dependencies
-curl http://127.0.0.1:3100
-curl http://127.0.0.1:3100/svc/gateway/api/v1/system/catalog
-curl -X POST http://127.0.0.1:8101/api/v1/auth/login
-curl http://127.0.0.1:8101/api/v1/auth/info
+curl http://127.0.0.1:5101/api/v1/system/catalog
+curl http://127.0.0.1:8101/health
 curl http://127.0.0.1:8102/api/v1/market/bootstrap
 curl http://127.0.0.1:8102/api/v1/market/history?symbol=AAPL.US
 curl http://127.0.0.1:8102/api/v1/market/symbols/AAPL.US/overview
@@ -50,11 +53,33 @@ curl http://127.0.0.1:8105/api/v1/trade/bootstrap
 curl http://127.0.0.1:8105/api/v1/trade/accounts
 curl http://127.0.0.1:8105/api/v1/trade/accounts/default
 curl http://127.0.0.1:8106/api/v1/sentiment/config
+curl http://127.0.0.1:3200/health
 curl http://127.0.0.1:8107/api/v1/scheduler/bootstrap
 curl http://127.0.0.1:8107/api/v1/scheduler/tasks
 curl http://127.0.0.1:8107/api/v1/scheduler/jobs
 curl http://127.0.0.1:8108/api/v1/risk/bootstrap
 curl http://127.0.0.1:8108/api/v1/notifications/bootstrap
+```
+
+### Web Portal 代理链路
+
+这些命令通过 `web-portal` 的 `/svc/*` 代理访问，适合验证用户真实访问路径：
+
+```bash
+curl http://127.0.0.1:3100
+curl http://127.0.0.1:3100/svc/gateway/api/v1/system/catalog
+curl http://127.0.0.1:3100/svc/gateway/api/v1/system/observability
+
+TOKEN=$(curl -fsS -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}' \
+  http://127.0.0.1:3100/svc/user/api/v1/auth/login \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).data.token))')
+
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3100/svc/market/api/v1/market/bootstrap
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3100/svc/sentiment/api/v1/sentiment/bootstrap
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3100/svc/analysis/api/v1/analysis/bootstrap
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3100/svc/scheduler/api/v1/scheduler/tasks
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3100/svc/risk/api/v1/notifications/bootstrap
 ```
 
 ## 当前定位
@@ -70,6 +95,8 @@ curl http://127.0.0.1:8108/api/v1/notifications/bootstrap
 - `scheduler-service` 已复用老任务策略与各类 Scheduler，能查看线程状态、任务配置并手动触发。
 - `risk-service` 已复用 legacy 风控与通知逻辑，能查看风险总览、保护单和通知中心。
 - `web-portal` 已接入这批新服务，提供独立登录页和重构工作台。
-- `sentiment-service` 继续保持占位，等你把抓数方案敲定后再接真实采集。
+- `/dashboard` 服务状态墙已读取 Gateway catalog/observability，展示各服务状态、端口、basePath 和告警数。
+- `sentiment-service` 已提供舆情 read model、GitHub 参考项目 metadata、只读量化字段和前端舆情中心数据。
+- `agno-sidecar` 已接入 watchlist review，只读调用 AI 网关并支持降级返回。
 
 下一步就可以把前端入口逐步切到这批新服务，而不是继续在旧后端里叠功能。

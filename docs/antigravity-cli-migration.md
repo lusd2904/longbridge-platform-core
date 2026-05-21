@@ -8,11 +8,13 @@ Date: 2026-05-20
 2. Leave review business flow untouched unless it actually shells out to Gemini.
 3. Centralize Antigravity CLI probing and Gemini-compat translation in one adapter entrypoint.
 4. Only bake in command forms verified on this machine; force unknown Gemini flags behind explicit environment configuration.
-5. Verify the adapter with tests and shell-level probe commands.
+5. If Antigravity blocks on OAuth/auth in non-interactive review mode, fall back to the already-installed Gemini CLI instead of requiring another authorization code.
+6. Verify the adapter with tests and shell-level probe commands.
 
 ## Local verification
 
 - `which agy` returned `/Users/lusd/.local/bin/agy`.
+- `which gemini` returned `/Users/lusd/.local/bin/gemini`.
 - `which antigravity`, `which ag`, `which antigravity-cli` all returned not found on this machine.
 - Official installer: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
 - The official installer script writes the CLI to `~/.local/bin/agy`.
@@ -42,6 +44,10 @@ Because the live review path does not shell out to Gemini today, the low-risk mi
 - Run verified normalized actions:
   - `python3 scripts/antigravity_cli_adapter.py run --mode print --prompt 'ping' --dry-run`
   - `python3 scripts/antigravity_cli_adapter.py run --mode interactive --prompt 'review this diff' --dry-run`
+- Runtime fallback:
+  - `run --mode print` first invokes Antigravity.
+  - If the Antigravity output contains OAuth/login/auth/credential failure text and exits non-zero, the adapter invokes `gemini --prompt '<same prompt>'`.
+  - Set `REF_AGENT_CLI_DISABLE_GEMINI_FALLBACK=true` to disable the fallback for a strict Antigravity-only check.
 - Translate a limited Gemini-style command without executing it:
   - `python3 scripts/antigravity_cli_adapter.py gemini-compat --dry-run -- -p 'ping'`
 
@@ -67,6 +73,10 @@ Because the live review path does not shell out to Gemini today, the low-risk mi
   - Example only if your local Antigravity build actually supports it: `REF_AGENT_CLI_MODEL_ARGS_TEMPLATE='--model {model}'`
 - `REF_AGENT_CLI_APPEND_ARGS`
   - Append extra verified flags after the translated command.
+- `REF_AGENT_CLI_GEMINI_BIN`
+  - Force the Gemini fallback binary if the machine does not expose it as `gemini`.
+- `REF_AGENT_CLI_DISABLE_GEMINI_FALLBACK`
+  - Set to `true`/`1` to keep Antigravity auth failures as hard failures.
 
 ## Authentication
 
@@ -75,6 +85,7 @@ Because the live review path does not shell out to Gemini today, the low-risk mi
 - The CLI prints a Google OAuth URL and waits for either browser completion or a pasted authorization code. The latest generated URL/state is intentionally not committed as a durable secret; regenerate it with the command above when the user is ready to authorize.
 - After browser authorization, `agy --print 'Reply exactly: pong' --print-timeout 120s` returned `pong` in this workspace shell.
 - If browser sign-in is required outside the CLI flow, use `https://app.antigravity.google/`.
+- Current working rule: for README/architecture/code review tasks, use Antigravity when it is already authorized; if it asks for OAuth again, use Gemini CLI fallback and record the fallback in the review artifact.
 
 ## Repository audit result
 

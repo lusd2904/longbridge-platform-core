@@ -14,7 +14,6 @@ if str(REFACTOR_ROOT) not in sys.path:
 from apps.governance.module_shared import (
     DbUtil,
     PositionSnapshotService,
-    QuoteSnapshotService,
     RiskOverviewSnapshotService,
     bootstrap_runtime,
     build_dependency_status,
@@ -449,60 +448,7 @@ def _build_risk_snapshot_meta(
 
 
 def _load_cached_risk_orders(user_id: int, order_type: str, account_id: Optional[int]) -> List[Dict[str, Any]]:
-    ensure_risk_control_tables()
-    where_clauses = ["user_id = %s", "order_type = %s", "status = 'active'"]
-    params: List[Any] = [user_id, order_type]
-    if account_id not in (None, ""):
-        where_clauses.append("(account_id = %s OR account_id IS NULL)")
-        params.append(int(account_id))
-
-    rows = DbUtil.fetch_all(
-        f"""
-        SELECT id, account_id, symbol, trigger_price, quantity, status, note, created_at, updated_at
-        FROM user_risk_orders
-        WHERE {' AND '.join(where_clauses)}
-        ORDER BY updated_at DESC, id DESC
-        LIMIT 100
-        """,
-        tuple(params),
-    ) or []
-    symbols = [normalize_market_symbol(row.get("symbol")) for row in rows if row.get("symbol")]
-    try:
-        quote_map = QuoteSnapshotService.get_latest_map(symbols, max_age_minutes=60) if symbols else {}
-    except Exception:
-        quote_map = {}
-
-    results: List[Dict[str, Any]] = []
-    for row in rows:
-        symbol = normalize_market_symbol(row.get("symbol"))
-        quote = quote_map.get(symbol) or {}
-        current_price = float(quote.get("last_price") or quote.get("lastPrice") or quote.get("price") or 0)
-        trigger_price = float(row.get("trigger_price") or 0)
-        if current_price:
-            if order_type == "stop_loss":
-                distance = ((current_price - trigger_price) / current_price) * 100
-            else:
-                distance = ((trigger_price - current_price) / current_price) * 100
-        else:
-            distance = 0.0
-        return_item = {
-            "id": int(row.get("id") or 0),
-            "accountId": row.get("account_id"),
-            "symbol": symbol,
-            "price": trigger_price,
-            "stopPrice": trigger_price if order_type == "stop_loss" else None,
-            "profitPrice": trigger_price if order_type == "take_profit" else None,
-            "quantity": float(row.get("quantity") or 0),
-            "currentPrice": round(current_price, 4),
-            "distance": round(distance, 2),
-            "status": row.get("status") or "active",
-            "note": row.get("note") or "",
-            "updatedAt": row.get("updated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else None,
-            "createdAt": row.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else None,
-            "dataSource": "risk-order-snapshot",
-        }
-        results.append(return_item)
-    return results
+    return _load_risk_orders(user_id, order_type, account_id)
 
 
 def _build_risk_snapshot_payload(

@@ -1,126 +1,214 @@
 # Web Portal
 
-职责：
+Web Portal 是 Refactor V2 的统一前端工作台，默认端口 `3100`。它使用 Vue 3、Vite、Element Plus、ECharts、Vue Router，并提供 Web、Capacitor 移动端和 Electron 桌面端入口。
 
-- 新版统一前端入口
-- 用户视角页面编排
-- 分析、交易、策略、风控页面整合
+## 做了什么
 
-迁移来源：
+- 登录、会话、动态菜单、平台能力控制。
+- App 启动时刷新平台 bootstrap，避免新增菜单被旧 `localStorage.platform_bootstrap` 缓存隐藏。
+- 市场中心：实时行情、股票池、自选池、标的详情、历史 K 线、智能推荐、市场舆情、财经快讯。
+- 研究中心：AI 研判、策略管理、策略回测、自选池量化策略扫描。
+- 交易中心：交易台、持仓、订单、券商连接。
+- 治理中心：风控、通知中心、任务中心、系统设置、用户管理。
+- 移动端：Android/iOS Capacitor 工程和 live reload 调试脚本。
+- 桌面端：Electron 本地壳。
 
-- `web/src/`
-
-当前状态：
-
-- 已可在 `3100` 启动
-- 已接入 `user-center` / `market-service` / `analysis-service` / `strategy-service` / `trade-service` / `scheduler-service` / `risk-service` / `api-gateway`
-- 当前已落地登录页、重构工作台、市场页、分析页、策略页、交易页、个人中心、调度页、风控页、通知页
-- 后续继续扩展为更完整的策略编排、跨服务调度和用户中心视图
-- 已接入 Capacitor，可生成 Android / iOS 原生壳；iOS 工程默认使用 Swift
-
-当前路由：
+## 关键页面
 
 - `/login`
 - `/dashboard`
-- `/trading`
-- `/positions`
-- `/orders`
+- `/market`
 - `/stock-pool`
+- `/watchlist-pool`
+- `/watchlist-pool/:symbol/scan-result`
 - `/symbol/:symbol`
+- `/kline`
+- `/recommendations`
+- `/sentiment-center`
+- `/finance-news`
 - `/ai-analysis`
 - `/strategy`
 - `/backtest`
+- `/trading`
+- `/positions`
+- `/orders`
 - `/risk`
-- `/market`
-- `/kline`
-- `/recommendations`
-- `/finance-news`
-- `/profile`
-- `/broker-management`
 - `/notifications`
+- `/scheduler-center`
 - `/settings`
 - `/user-management`
-- `/scheduler-center`
+- `/profile`
+- `/broker-management`
 
-移动端目录：
+## 使用
 
-- Android 原生工程：`apps/web-portal/android/`
-- iOS 原生工程：`apps/web-portal/ios/`
+```bash
+cd apps/frontend/web-portal
+npm install
+npm run dev
+```
 
-常用命令：
+或从模块入口：
 
-- `npm run assets:generate`
-- `npm run mobile:prepare`
-- `npm run mobile:build`
-- `npm run android:add`
-- `npm run ios:add`
-- `npm run cap:sync`
-- `npm run android:open`
-- `npm run ios:open`
-- `npm run android:build`
-- `npm run android:debug`
-- `npm run ios:build`
-- `npm run ios:debug`
-- `npm run ios:preflight`
-- `npm run android:release`
-- `npm run ios:archive`
-- `npm run ios:export:ipa`
-- `npm run trade:regression`
-- `npm run verify:platform`
-- `npm run mobile:debug`
-- `npm run mobile:release`
+```bash
+cd apps/frontend
+./run.sh
+```
 
-原生增强：
+Docker compose 访问：
 
-- 已接入 Android 返回键处理、状态栏样式同步、键盘弹出时底部导航避让
-- Android / iOS / macOS 都会根据容器自动走对应的接口基地址，并优先复用统一的 `VITE_NATIVE_API_BASE_URL`
+```text
+http://127.0.0.1:3100
+```
 
-联调说明：
+默认本地 smoke 账号：
 
-- Android 模拟器默认请求 `http://10.0.2.2:3100`
-- iOS 模拟器默认请求 `http://127.0.0.1:3100`
-- macOS Electron 默认请求 `http://127.0.0.1:3100`
-- 真机或其他环境建议优先在 `apps/web-portal/.env` 里设置 `VITE_NATIVE_API_BASE_URL`，再按需覆盖 `VITE_ANDROID_API_BASE_URL` / `VITE_IOS_API_BASE_URL` / `VITE_DESKTOP_API_BASE_URL`
-- Electron 主进程运行时支持 `REFV2_DESKTOP_API_BASE`，未设置时会自动复用 `VITE_NATIVE_API_BASE_URL`
-- 环境变量样例文件位于仓库根目录：`/.env.example`
-- 原生端快捷样例文件位于：`apps/web-portal/.env.mobile.example`
+- `admin`
+- `admin123`
 
-模拟器调试：
+## API 访问模式
 
-- `npm run android:debug` 会自动复用或启动本机 Android 模拟器，开启 live reload，并为 `3100` 建立 `adb reverse`
-- `npm run ios:debug` 会自动复用或启动本机 iOS Simulator，并以 `127.0.0.1:3100` 进入 live reload
-- `npm run mobile:debug` 会串行拉起 iOS 和 Android 两端的 live reload 调试
-- 三个命令都会先检查 `3100` 的 Vite dev server；若未运行，会自动在后台启动
-- 如需指定设备，可设置 `ANDROID_AVD_NAME` 或 `IOS_SIMULATOR_UDID`
-- 如需改 live reload 地址，可设置 `CAPACITOR_LIVE_RELOAD_HOST`，默认是 `127.0.0.1`
+前端默认通过 nginx 或 Vite dev server 的 `/svc/*` 代理访问后端。除 `/svc/gateway/...` 外，这些路径会直连对应服务：
 
-iOS 构建前置检查：
+- `/svc/user/...`
+- `/svc/market/...`
+- `/svc/sentiment/...`
+- `/svc/analysis/...`
+- `/svc/strategy/...`
+- `/svc/trade/...`
+- `/svc/scheduler/...`
+- `/svc/risk/...`
+- `/svc/gateway/...`
 
-- `npm run ios:preflight` 会自动检查 `DEVELOPER_DIR`、Xcode CLI 与 iOS Simulator Runtime
-- 默认校验 `iOS 26.4` runtime，缺失时会自动执行 `xcodebuild -downloadPlatform iOS`
-- 如需切换目标 runtime，可设置 `IOS_SIM_RUNTIME_VERSION`
+请求层会自动附加 `Authorization: Bearer <token>`。
 
-交易回归：
+## 行情来源规则
 
-- `npm run trade:regression` 会自动登录、读取交易账户、检查 `/svc/trade/health` 是否暴露 Longbridge 观测信息
-- 该回归还会验证下单链路不再返回 `502`，并要求错误返回包含参考价来源元数据
+- 当前价、盘前、盘中、盘后、夜盘价只展示 Longbridge quote/push 返回值；WebSocket 首帧也标记为长桥订阅首帧，不再叫数据库快照。
+- `/api/v1/market/quote-snapshots` 只用于历史趋势、历史扫描、推荐快照等回看场景，不作为股票池、实时行情、自选池台账或交易台当前价兜底。
+- 如果长桥实时行情暂未返回，页面显示“等待长桥实时”，不回退到股票底库 `current_price`。
 
-平台验证：
+## 常用命令
 
-- `npm run verify:platform` 会串行执行 Python 测试、Web 单元测试；若本地 phase1 栈已运行，再额外检查各服务 `/health` 是否满足统一契约
+```bash
+npm run dev
+npm run build
+npm run test:unit
+npm run smoke:web
+npm run smoke:web:critical
+npm run trade:regression
+npm run verify:platform
+```
 
-打包与资源：
+移动端：
 
-- 当前移动端版本号已与前端版本 `0.1.0` 对齐
-- 已增加默认移动端图标和启动页生成脚本，可重复执行 `npm run assets:generate`
-- 如需连续构建 Android + iOS，优先使用 `npm run mobile:build`，该命令会先统一同步 Capacitor 资源，再串行构建两端，避免并发触发 `cap sync`
+```bash
+npm run assets:generate
+npm run mobile:prepare
+npm run android:debug
+npm run ios:debug
+npm run mobile:build
+```
 
-发布说明：
+桌面端：
 
-- Android release 支持两种签名配置方式：`android/keystore.properties` 或环境变量 `ANDROID_STORE_FILE` / `ANDROID_STORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`
-- Android 签名样例位于 `apps/web-portal/android/keystore.properties.example`
-- 执行 `npm run android:release` 后可在 `apps/web-portal/android/app/build/outputs/` 获取 `aab/apk` release 产物
-- 若未提供正式 keystore，release APK 会自动回退到 debug keystore 签名，便于本地安装测试；正式上架仍建议配置自己的发布签名
-- iOS 归档命令为 `npm run ios:archive`，默认输出到 `apps/web-portal/ios/build/App.xcarchive`
-- iOS 导出 ipa 命令为 `npm run ios:export:ipa`，默认读取 `apps/web-portal/ios/App/ExportOptions.plist`
-- iOS 导出参数样例位于 `apps/web-portal/ios/App/ExportOptions.plist.example`
+```bash
+npm run desktop:dev
+npm run desktop:smoke
+```
+
+## 舆情中心
+
+入口：
+
+```text
+/sentiment-center
+```
+
+页面读取：
+
+- `getSentimentBootstrap()`
+- `getSentimentOverview()`
+
+展示：
+
+- 市场情绪摘要。
+- 标的热度表。
+- 风险词。
+- AI 配置复用信息。
+- GitHub 参考项目和量化只读边界。
+
+## 自选股票池
+
+入口：
+
+```text
+/watchlist-pool
+/watchlist-pool/:symbol/scan-result
+```
+
+展示：
+
+- 自选标的台账列表，包含市场、类型、Longbridge 实时价、盘前/盘后/夜盘价、添加时间、扫描目标、最新扫描、盘前/盘后扫描开关。
+- 点击“扫描结果”进入二级页面，展示该标的最近趋势扫描、风险等级、技术评分、指标和最新 AI 研判。
+- 点击“AI研判”可跳转到 AI 研判页继续分析。
+
+相关任务：
+
+- `/scheduler-center` 中的自选股盘前/盘后复核任务提供“机会股自动买入”开关。
+- 自动买入默认关闭；开启后仍受最多标的数、单标预算、单票仓位上限、最低置信度控制。
+
+## 自选池量化策略
+
+入口：
+
+```text
+/strategy
+```
+
+展示：
+
+- 自选池量化策略卡片，支持均衡、动量、突破、回归四种扫描 profile。
+- 多因子评分表：标的、评分、价格、策略标签、风险等级、命中原因。
+- 扫描默认不下单；点击“受控下单”后，后端仍校验量化开关、账户权限、自选池范围、重复决策、预算和仓位上限。
+
+## 服务状态墙
+
+入口：
+
+```text
+/dashboard
+```
+
+页面读取：
+
+- `getApiHealth()`
+- `/svc/gateway/api/v1/system/observability`
+- `/svc/gateway/api/v1/system/catalog`
+
+展示：
+
+- Gateway 观测来源和 catalog 同步状态。
+- `user-center`、`market-service`、`analysis-service`、`strategy-service`、`trade-service`、`sentiment-service`、`scheduler-service`、`risk-service`、`agno-sidecar` 的状态、端口、basePath 和告警数。
+
+## 验证
+
+```bash
+npm run test:unit -- \
+  tests/unit/api-health.spec.js \
+  tests/unit/dashboard-shell.spec.js \
+  tests/unit/app-bootstrap.spec.js \
+  tests/unit/market-sentiment.spec.js \
+  tests/unit/watchlist-pool.spec.js \
+  tests/unit/watchlist-scan-result.spec.js \
+  tests/unit/scheduler-center-agent-run.spec.js \
+  tests/unit/finance-news-notifications.spec.js
+
+npm run build
+SMOKE_PAGE_FILTER=sentiment-center,notifications npm run smoke:web
+```
+
+## 注意事项
+
+- 如果 Docker Hub metadata EOF 导致镜像无法正常 rebuild，可先 `npm run build`，再把 `dist` 同步到当前 nginx 容器验证运行态。
+- 新增菜单或权限后，刷新页面会触发 `getUsersBootstrap()` 自动更新本地 `localStorage.platform_bootstrap`；一般不再需要手动清缓存。

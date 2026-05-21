@@ -469,9 +469,9 @@ def _fetch_stock_pool_rows(
             "market": row[2] or table_config['market'],
             "sector": row[3] or "",
             "group_id": row[4],
-            "price": float(row[5]) if row[5] is not None else None,
-            "change_percent": float(row[6]) if row[6] is not None else None,
-            "volume": int(row[7]) if row[7] is not None else None,
+            "price": None,
+            "change_percent": None,
+            "volume": None,
             "market_cap": float(row[8]) if row[8] is not None else None,
             "pe": float(row[9]) if row[9] is not None else None,
             "prev_close": None,
@@ -480,14 +480,33 @@ def _fetch_stock_pool_rows(
             "low": None,
             "change": None,
             "turnover": None,
-            "quote_source": "universe",
+            "quote_source": "pending",
             "quote_snapshot_at": None,
-            "quoteReady": bool(row[5] is not None or row[6] is not None or row[7] is not None),
+            "quoteReady": False,
             "type": table_config['type']
         })
 
-    quote_snapshots = _load_quote_snapshot_map([item["symbol"] for item in items])
-    return [_merge_quote_snapshot(item, quote_snapshots.get(item["symbol"])) for item in items]
+    live_quotes = _fetch_live_quotes([item["symbol"] for item in items], user_id=user_id)
+    merged_items: List[Dict[str, Any]] = []
+    for item in items:
+        symbol = _normalize_market_symbol(item["symbol"])
+        quote = live_quotes.get(symbol) or {}
+        last_price = quote.get("last_price")
+        merged_items.append({
+            **item,
+            "price": float(last_price) if last_price not in (None, "") else None,
+            "change": quote.get("change"),
+            "change_percent": quote.get("change_percent"),
+            "prev_close": quote.get("prev_close"),
+            "open": quote.get("open"),
+            "high": quote.get("high"),
+            "low": quote.get("low"),
+            "volume": quote.get("volume"),
+            "quote_source": "longbridge-live" if quote else "pending",
+            "quote_snapshot_at": quote.get("timestamp") or quote.get("updated_at") or None,
+            "quoteReady": bool(quote),
+        })
+    return merged_items
 
 
 def _count_stock_pool_rows(
@@ -734,9 +753,9 @@ def _lookup_universe_snapshot(symbol: str) -> Dict[str, Any]:
             "market": row.get("market") or HistoricalMarketDataService.detect_market(normalized_symbol),
             "sector": row.get("display_category") or "",
             "type": table_config["type"],
-            "price": float(row.get("current_price") or 0),
-            "change_percent": float(row.get("change_percent") or 0),
-            "volume": int(row.get("volume") or 0),
+            "price": None,
+            "change_percent": None,
+            "volume": None,
             "market_cap": float(row.get("market_cap") or 0),
             "pe": float(row.get("pe_ratio") or 0) if row.get("pe_ratio") is not None else None,
             "pb": None,
@@ -746,20 +765,20 @@ def _lookup_universe_snapshot(symbol: str) -> Dict[str, Any]:
             "low": None,
             "change": None,
             "turnover": None,
-            "quote_source": "universe",
+            "quote_source": "metadata",
             "quote_snapshot_at": None,
-            "quoteReady": bool(row.get("current_price") or row.get("change_percent") is not None or row.get("volume") is not None),
+            "quoteReady": False,
         }
-        return _merge_quote_snapshot(base_snapshot, QuoteSnapshotService.get_latest(normalized_symbol, max_age_minutes=20))
-    return _merge_quote_snapshot({
+        return base_snapshot
+    return {
         "symbol": normalized_symbol,
         "name": normalized_symbol,
         "market": HistoricalMarketDataService.detect_market(normalized_symbol),
         "sector": "",
         "type": "stock",
-        "price": 0.0,
-        "change_percent": 0.0,
-        "volume": 0,
+        "price": None,
+        "change_percent": None,
+        "volume": None,
         "market_cap": 0.0,
         "pe": None,
         "pb": None,
@@ -769,10 +788,10 @@ def _lookup_universe_snapshot(symbol: str) -> Dict[str, Any]:
         "low": None,
         "change": None,
         "turnover": None,
-        "quote_source": "universe",
+        "quote_source": "metadata",
         "quote_snapshot_at": None,
         "quoteReady": False,
-    }, QuoteSnapshotService.get_latest(normalized_symbol, max_age_minutes=20))
+    }
 
 
 def _search_universe(keyword: str, market: str = 'ALL', limit: int = 20) -> List[Dict[str, Any]]:
@@ -2044,10 +2063,8 @@ def get_stock_quotes():
             normalized_symbol = _normalize_market_symbol(symbol)
             snapshot = _lookup_universe_snapshot(normalized_symbol)
             quote = live_quotes.get(normalized_symbol) or {}
-            last_price = float(quote.get("last_price") or snapshot.get("price") or 0)
+            last_price = float(quote.get("last_price") or 0)
             change_percent = quote.get("change_percent")
-            if change_percent is None:
-                change_percent = snapshot.get("change_percent")
             prev_close = float(quote.get("prev_close") or 0)
             change = quote.get("change")
             if change is None:
@@ -2062,10 +2079,12 @@ def get_stock_quotes():
                 "price": round(last_price, 4) if last_price else None,
                 "change": round(float(change or 0), 4) if last_price else None,
                 "change_percent": round(float(change_percent or 0), 4) if change_percent is not None else None,
-                "volume": int(quote.get("volume") or snapshot.get("volume") or 0) if (quote.get("volume") is not None or snapshot.get("volume") is not None) else None,
+                "volume": int(quote.get("volume") or 0) if quote.get("volume") is not None else None,
                 "market_cap": snapshot.get("market_cap"),
                 "pe": snapshot.get("pe"),
-                "pb": snapshot.get("pb")
+                "pb": snapshot.get("pb"),
+                "quote_source": "longbridge-live" if quote else "pending",
+                "quoteReady": bool(quote)
             })
 
         return jsonify({

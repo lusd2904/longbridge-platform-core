@@ -85,6 +85,13 @@ describe('SchedulerCenter agent run routing', () => {
           category: 'analysis',
           scheduleType: 'daily',
           enabled: true,
+          settings: {
+            autoBuyEnabled: false,
+            autoBuyMaxSymbols: 2,
+            autoBuyMaxAmount: 2000,
+            autoBuyMaxPositionRatio: 0.08,
+            autoBuyMinConfidence: 72
+          },
           status: { state: 'success', lastRunAt: '2026-05-20 08:30:00' }
         }
       ]
@@ -186,6 +193,24 @@ describe('SchedulerCenter agent run routing', () => {
     })
   })
 
+  it('does not change run status for default acknowledged review', async () => {
+    const { default: SchedulerCenter } = await import('../../src/views/system/SchedulerCenter.vue')
+    const wrapper = shallowMount(SchedulerCenter, mountOptions)
+
+    await flushPromises()
+
+    await wrapper.vm.submitAgentRunReviewAction(
+      'run-20260520-001',
+      'watchlist_pre_open_review'
+    )
+    await flushPromises()
+
+    expect(reviewAgentRunMock).toHaveBeenCalledWith('run-20260520-001', {
+      action: 'acknowledged',
+      reason: '已复核'
+    })
+  })
+
   it('renders skipped scheduler and agent states without unknown labels', async () => {
     routeState.query = {}
     getPlatformTasksMock.mockResolvedValueOnce({
@@ -228,5 +253,88 @@ describe('SchedulerCenter agent run routing', () => {
     expect(wrapper.vm.agentRunStatusLabel('skipped')).toBe('已跳过')
     expect(wrapper.vm.agentRunStatusTone('skipped')).toBe('muted')
     expect(wrapper.text()).toContain('状态: 已跳过')
+  })
+
+  it('saves watchlist auto-buy settings with position controls', async () => {
+    routeState.query = {}
+    const { default: SchedulerCenter } = await import('../../src/views/system/SchedulerCenter.vue')
+    const wrapper = shallowMount(SchedulerCenter, mountOptions)
+
+    await flushPromises()
+
+    const task = wrapper.vm.tasks[0]
+    expect(wrapper.text()).toContain('机会股自动买入')
+    expect(task.settings).toMatchObject({
+      autoBuyEnabled: false,
+      autoBuyMaxSymbols: 2,
+      autoBuyMaxAmount: 2000,
+      autoBuyMaxPositionRatio: 0.08,
+      autoBuyMinConfidence: 72
+    })
+
+    task.settings.autoBuyEnabled = true
+    task.settings.autoBuyMaxSymbols = 3
+    task.settings.autoBuyMaxAmount = 5000
+    task.settings.autoBuyMaxPositionRatio = 0.12
+    task.settings.autoBuyMinConfidence = 80
+
+    await wrapper.vm.saveTask(task)
+
+    expect(updatePlatformTaskMock).toHaveBeenCalledWith('watchlist_pre_open_review', expect.objectContaining({
+      settings: expect.objectContaining({
+        autoBuyEnabled: true,
+        autoBuyMaxSymbols: 3,
+        autoBuyMaxAmount: 5000,
+        autoBuyMaxPositionRatio: 0.12,
+        autoBuyMinConfidence: 80
+      })
+    }))
+  })
+
+  it('normalizes zero position ratio consistently with backend contract', async () => {
+    routeState.query = {}
+    const { default: SchedulerCenter } = await import('../../src/views/system/SchedulerCenter.vue')
+    const wrapper = shallowMount(SchedulerCenter, mountOptions)
+
+    await flushPromises()
+
+    const task = wrapper.vm.tasks[0]
+    task.settings.autoBuyMaxPositionRatio = 0
+
+    await wrapper.vm.saveTask(task)
+
+    expect(updatePlatformTaskMock).toHaveBeenCalledWith('watchlist_pre_open_review', expect.objectContaining({
+      settings: expect.objectContaining({
+        autoBuyMaxPositionRatio: 0
+      })
+    }))
+    expect(wrapper.vm.tasks[0].settings.autoBuyMaxPositionRatio).toBe(0)
+  })
+
+  it('hides auto-buy controls for non-agent tasks', async () => {
+    routeState.query = {}
+    getPlatformTasksMock.mockResolvedValueOnce({
+      data: [
+        {
+          taskKey: 'quote_snapshot_refresh',
+          taskName: '行情快照刷新',
+          category: 'readmodel',
+          scheduleType: 'interval',
+          enabled: true,
+          settings: {
+            autoBuyEnabled: true
+          },
+          status: { state: 'success' }
+        }
+      ]
+    })
+
+    const { default: SchedulerCenter } = await import('../../src/views/system/SchedulerCenter.vue')
+    const wrapper = shallowMount(SchedulerCenter, mountOptions)
+
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('机会股自动买入')
+    expect(wrapper.vm.tasks[0].settings).toEqual({ autoBuyEnabled: true })
   })
 })

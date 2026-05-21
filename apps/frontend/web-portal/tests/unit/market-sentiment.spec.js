@@ -184,7 +184,7 @@ describe('MarketSentiment page', () => {
     expect(wrapper.vm.aiConfig.baseUrl).toBe('http://sub2api:8080/v1')
     expect(wrapper.vm.githubAdoption.decision).toBe('native-contract-first')
     expect(wrapper.vm.githubCandidates).toHaveLength(2)
-    expect(wrapper.vm.recommendedStackText).toContain('FinNLP collectors')
+    expect(wrapper.vm.localizedRecommendedStackText).toContain('FinNLP 采集器')
     expect(wrapper.vm.filteredSymbols).toHaveLength(1)
   })
 
@@ -195,11 +195,14 @@ describe('MarketSentiment page', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('GitHub 选型与量化边界')
-    expect(wrapper.text()).toContain('FinNLP collectors / FinBERT optional scoring / sub2api synthesis')
-    expect(wrapper.text()).toContain('reuse LONGBRIDGE_AI_* / sub2api')
+    expect(wrapper.text()).toContain('FinNLP 采集器 / 可选 FinBERT 评分 / sub2api 综合')
+    expect(wrapper.text()).toContain('复用 LONGBRIDGE_AI_* / sub2api')
+    expect(wrapper.text()).toContain('本地契约优先')
     expect(wrapper.text()).toContain('只读证据，不触发交易执行')
     expect(wrapper.text()).toContain('FinNLP')
     expect(wrapper.text()).toContain('TickerPulse AI / BettaFish')
+    expect(wrapper.text()).not.toContain('native-contract-first')
+    expect(wrapper.text()).not.toContain('FinNLP collectors')
   })
 
   it('reloads market-specific overview and keeps routing entrypoints', async () => {

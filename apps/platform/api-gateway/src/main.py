@@ -91,7 +91,13 @@ SERVICE_REGISTRY = {
         "port": _config_port("REF_SENTIMENT_SERVICE_PORT", 8106),
         "url": _service_url("REF_SENTIMENT_SERVICE_URL", "REF_SENTIMENT_SERVICE_PORT", 8106),
         "basePath": "/api/v1/sentiment",
-        "description": "舆情接口预留，占位中",
+        "description": "舆情 read model、GitHub 参考项目和只读量化信号",
+    },
+    "agno-sidecar": {
+        "port": _config_port("REF_AGNO_SIDECAR_PORT", 3200),
+        "url": _service_url("REF_AGNO_SIDECAR_URL", "REF_AGNO_SIDECAR_PORT", 3200),
+        "basePath": "/api/v1/agent/watchlist-review",
+        "description": "Agno-compatible watchlist review 只读复核 sidecar",
     },
 }
 

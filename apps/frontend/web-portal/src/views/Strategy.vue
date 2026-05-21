@@ -20,6 +20,231 @@
 
     <MetricStrip class="strategy-overview-strip" :items="strategyOverviewItems" />
 
+    <el-card class="watchlist-quant-card">
+      <template #header>
+        <SectionCardHeader
+          title="自选池量化策略"
+          :badge="watchlistQuantBadge"
+        >
+          <template #actions>
+            <div class="template-library-meta">
+              <el-tag size="small" :type="quantStatus.enabled ? 'success' : 'info'">
+                {{ quantStatus.enabled ? '量化开关已开' : '量化开关关闭' }}
+              </el-tag>
+              <el-tag size="small" :type="quantStatus.autoExecute ? 'warning' : 'info'">
+                {{ quantStatus.autoExecute ? '允许自动执行' : '默认仅扫描' }}
+              </el-tag>
+            </div>
+          </template>
+        </SectionCardHeader>
+      </template>
+      <div class="watchlist-quant-shell">
+        <div class="watchlist-quant-toolbar">
+          <el-select v-model="watchlistQuantControls.profile" style="width: 138px">
+            <el-option label="均衡策略" value="balanced" />
+            <el-option label="动量优先" value="momentum" />
+            <el-option label="突破优先" value="breakout" />
+            <el-option label="回归优先" value="reversion" />
+          </el-select>
+          <label class="watchlist-quant-control">
+            <span>最低评分</span>
+            <el-input-number
+              v-model="watchlistQuantControls.minConfidence"
+              :min="0"
+              :max="100"
+              :step="1"
+              controls-position="right"
+              class="watchlist-quant-number"
+            />
+          </label>
+          <label class="watchlist-quant-control">
+            <span>单票预算</span>
+            <el-input-number
+              v-model="watchlistQuantControls.maxAmount"
+              :min="0"
+              :step="500"
+              controls-position="right"
+              class="watchlist-quant-number"
+            />
+          </label>
+          <label class="watchlist-quant-control">
+            <span>最多标的</span>
+            <el-input-number
+              v-model="watchlistQuantControls.maxSymbols"
+              :min="1"
+              :max="10"
+              :step="1"
+              controls-position="right"
+              class="watchlist-quant-small-number"
+            />
+          </label>
+          <div class="watchlist-quant-actions">
+            <el-button type="primary" :loading="watchlistQuantLoading" @click="runWatchlistQuant(false)">
+              扫描自选池
+            </el-button>
+            <el-button type="warning" :loading="watchlistQuantExecuting" @click="runWatchlistQuant(true)">
+              受控下单
+            </el-button>
+          </div>
+        </div>
+        <div class="watchlist-quant-metrics">
+          <div v-for="item in watchlistQuantMetrics" :key="item.label" class="watchlist-quant-metric">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+            <small>{{ item.note }}</small>
+          </div>
+        </div>
+        <el-table
+          class="watchlist-quant-table"
+          :data="watchlistQuantRows"
+          size="small"
+          style="width: 100%"
+          :empty-text="watchlistQuantResult ? '本次未筛出达到阈值的机会股' : '尚未扫描'"
+        >
+          <el-table-column prop="symbol" label="标的" width="118">
+            <template #default="{ row }">
+              <div class="watchlist-quant-symbol">
+                <strong>{{ row.symbol }}</strong>
+                <span>{{ row.name }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="confidence" label="评分" width="86">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.confidence >= 80 ? 'success' : row.confidence >= 72 ? 'warning' : 'info'">
+                {{ row.confidence }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="price" label="价格" width="92">
+            <template #default="{ row }">{{ formatNumber(row.price) }}</template>
+          </el-table-column>
+          <el-table-column prop="strategyTags" label="策略标签" min-width="170">
+            <template #default="{ row }">
+              <div class="watchlist-quant-tags">
+                <el-tag
+                  v-for="tag in (row.strategyTags || []).slice(0, 3)"
+                  :key="`${row.symbol}-${tag}`"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ tag }}
+                </el-tag>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="riskLevel" label="风险" width="78">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.riskLevel === 'high' ? 'danger' : row.riskLevel === 'medium' ? 'warning' : 'success'">
+                {{ riskLevelName(row.riskLevel) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="reason" label="命中原因" min-width="240" show-overflow-tooltip />
+        </el-table>
+        <div class="watchlist-quant-detail-grid">
+          <section class="watchlist-quant-panel">
+            <div class="watchlist-panel-head">
+              <div>
+                <strong>扫描历史</strong>
+                <span>{{ watchlistQuantHistoryRows.length }} 条最近记录</span>
+              </div>
+              <el-button size="small" :loading="watchlistQuantHistoryLoading" @click="loadWatchlistQuantHistory">
+                刷新
+              </el-button>
+            </div>
+            <el-table
+              class="watchlist-quant-table compact"
+              :data="watchlistQuantHistoryRows"
+              size="small"
+              style="width: 100%"
+              empty-text="暂无扫描历史"
+            >
+              <el-table-column prop="createdAt" label="时间" width="142">
+                <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+              </el-table-column>
+              <el-table-column prop="strategyProfile" label="策略" width="86">
+                <template #default="{ row }">{{ profileName(row.strategyProfile) }}</template>
+              </el-table-column>
+              <el-table-column prop="opportunityCount" label="机会" width="64" />
+              <el-table-column label="执行" width="82">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.executed ? 'warning' : 'info'">
+                    {{ row.executed ? '已执行' : '仅扫描' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="候选摘要" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">{{ formatHistorySymbols(row) }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+          <section class="watchlist-quant-panel">
+            <div class="watchlist-panel-head">
+              <div>
+                <strong>策略复盘</strong>
+                <span>{{ watchlistBacktestResult?.symbol || watchlistBacktestControls.symbol }} 历史评分回放</span>
+              </div>
+              <el-button type="primary" size="small" :loading="watchlistBacktestLoading" @click="runWatchlistBacktest">
+                开始复盘
+              </el-button>
+            </div>
+            <div class="watchlist-backtest-toolbar">
+              <el-input
+                v-model="watchlistBacktestControls.symbol"
+                placeholder="AAPL.US"
+                class="watchlist-backtest-symbol"
+                clearable
+              />
+              <el-select v-model="watchlistBacktestControls.profile" style="width: 122px">
+                <el-option label="均衡" value="balanced" />
+                <el-option label="动量" value="momentum" />
+                <el-option label="突破" value="breakout" />
+                <el-option label="回归" value="reversion" />
+              </el-select>
+              <el-input-number
+                v-model="watchlistBacktestControls.lookbackDays"
+                :min="20"
+                :max="260"
+                :step="10"
+                controls-position="right"
+                class="watchlist-quant-small-number"
+              />
+            </div>
+            <div class="watchlist-backtest-metrics">
+              <div v-for="item in watchlistBacktestMetrics" :key="item.label">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </div>
+            </div>
+            <el-table
+              class="watchlist-quant-table compact"
+              :data="watchlistBacktestRows"
+              size="small"
+              style="width: 100%"
+              empty-text="尚未复盘"
+            >
+              <el-table-column prop="tradeDate" label="日期" width="96" />
+              <el-table-column prop="confidence" label="评分" width="64" />
+              <el-table-column prop="signal" label="信号" width="70">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.signal === 'BUY' ? 'success' : 'info'">
+                    {{ row.signal === 'BUY' ? '买入' : '观察' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="forward5dReturn" label="5日后" width="74">
+                <template #default="{ row }">{{ formatPercent(row.forward5dReturn) }}</template>
+              </el-table-column>
+              <el-table-column label="标签" min-width="150" show-overflow-tooltip>
+                <template #default="{ row }">{{ (row.tags || []).slice(0, 3).join(' / ') || '-' }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+        </div>
+      </div>
+    </el-card>
+
     <el-card class="template-library-card">
       <template #header>
         <SectionCardHeader
@@ -477,6 +702,10 @@ import {
   updateStrategy,
   deleteStrategy as apiDeleteStrategy,
   getStrategyMonitorSummary,
+  getQuantStatus,
+  getWatchlistQuantHistory,
+  runWatchlistQuantBacktest,
+  runWatchlistQuantStrategy,
   runStrategyMonitor
 } from '../api/analysis.js'
 import { useRouter } from 'vue-router'
@@ -488,8 +717,16 @@ const router = useRouter()
 const loading = ref(false)
 const monitoring = ref(false)
 const executingStrategyId = ref(null)
+const watchlistQuantLoading = ref(false)
+const watchlistQuantExecuting = ref(false)
+const watchlistQuantHistoryLoading = ref(false)
+const watchlistBacktestLoading = ref(false)
 const strategies = ref([])
 const monitorSummary = ref({ overview: {}, alerts: [] })
+const quantStatus = ref({ enabled: false, autoExecute: false, signals: [] })
+const watchlistQuantResult = ref(null)
+const watchlistQuantHistory = ref([])
+const watchlistBacktestResult = ref(null)
 const strategyDataReady = ref(false)
 const createDialogVisible = ref(false)
 const templateCatalog = ref([])
@@ -562,6 +799,19 @@ const strategySortOptions = [
   { label: '按最近触发排序', value: 'triggered_desc' },
   { label: '按名称排序', value: 'name_asc' }
 ]
+const watchlistQuantControls = ref({
+  profile: 'balanced',
+  minConfidence: 72,
+  maxAmount: 2000,
+  maxSymbols: 2,
+  maxPositionRatio: 0.08,
+  limit: 80
+})
+const watchlistBacktestControls = ref({
+  symbol: 'AAPL.US',
+  profile: 'balanced',
+  lookbackDays: 90
+})
 
 const readStoredCodes = (key) => {
   if (typeof window === 'undefined') {
@@ -736,6 +986,60 @@ const strategyOverviewItems = computed(() => ([
     tone: strategyView.value === 'all' ? 'info' : 'healthy'
   }
 ]))
+const watchlistQuantRows = computed(() => {
+  const opportunities = watchlistQuantResult.value?.opportunities
+  const candidates = watchlistQuantResult.value?.candidates
+  const rows = Array.isArray(opportunities) && opportunities.length ? opportunities : Array.isArray(candidates) ? candidates : []
+  return rows.slice(0, 12)
+})
+const watchlistQuantBadge = computed(() => {
+  if (!watchlistQuantResult.value) {
+    return '待扫描'
+  }
+  return `${watchlistQuantResult.value.opportunityCount || 0} 个机会 / ${watchlistQuantResult.value.targetCount || 0} 个自选`
+})
+const watchlistQuantMetrics = computed(() => {
+  const data = watchlistQuantResult.value || {}
+  return [
+    {
+      label: '自选标的',
+      value: data.targetCount ?? '--',
+      note: `已评估 ${data.evaluatedCount ?? '--'}`
+    },
+    {
+      label: '机会股',
+      value: data.opportunityCount ?? '--',
+      note: `阈值 ${watchlistQuantControls.value.minConfidence}`
+    },
+    {
+      label: '执行状态',
+      value: data.autoTrade?.submittedCount ?? (data.executed ? '已执行' : '未执行'),
+      note: data.autoTrade?.reason || 'scan-only'
+    },
+    {
+      label: '仓位控制',
+      value: `${watchlistQuantControls.value.maxSymbols} 只`,
+      note: `单票 ${watchlistQuantControls.value.maxAmount}`
+    }
+  ]
+})
+const watchlistQuantHistoryRows = computed(() => {
+  const rows = Array.isArray(watchlistQuantHistory.value) ? watchlistQuantHistory.value : []
+  return rows.slice(0, 8)
+})
+const watchlistBacktestRows = computed(() => {
+  const rows = Array.isArray(watchlistBacktestResult.value?.points) ? watchlistBacktestResult.value.points : []
+  return rows.slice(-8).reverse()
+})
+const watchlistBacktestMetrics = computed(() => {
+  const summary = watchlistBacktestResult.value?.summary || {}
+  return [
+    { label: '信号数', value: summary.signalCount ?? '--' },
+    { label: '胜率', value: summary.hitRate === undefined ? '--' : `${summary.hitRate}%` },
+    { label: '5日均值', value: summary.avgForward5dReturn === undefined ? '--' : formatPercent(summary.avgForward5dReturn) },
+    { label: '最新评分', value: summary.latestConfidence ?? '--' }
+  ]
+})
 const toTimestamp = (value) => {
   const time = value ? new Date(value).getTime() : 0
   return Number.isFinite(time) ? time : 0
@@ -867,6 +1171,30 @@ const loadMonitorSummary = async () => {
     monitorSummary.value = res.data || { overview: {}, alerts: [] }
   } catch (error) {
     console.error('加载监控摘要失败:', error)
+  }
+}
+
+const loadQuantStatus = async () => {
+  try {
+    const res = await getQuantStatus()
+    quantStatus.value = res.data || { enabled: false, autoExecute: false, signals: [] }
+  } catch (error) {
+    console.error('加载量化状态失败:', error)
+    quantStatus.value = { enabled: false, autoExecute: false, signals: [] }
+  }
+}
+
+const loadWatchlistQuantHistory = async () => {
+  watchlistQuantHistoryLoading.value = true
+  try {
+    const res = await getWatchlistQuantHistory({ limit: 12 })
+    const payload = res?.data || {}
+    watchlistQuantHistory.value = Array.isArray(payload.items) ? payload.items : []
+  } catch (error) {
+    console.error('加载自选池量化扫描历史失败:', error)
+    watchlistQuantHistory.value = []
+  } finally {
+    watchlistQuantHistoryLoading.value = false
   }
 }
 
@@ -1062,6 +1390,123 @@ const formatDate = (date) => {
   return new Date(date).toLocaleString('zh-CN')
 }
 
+const formatNumber = (value) => {
+  const number = Number(value || 0)
+  if (!Number.isFinite(number) || number <= 0) {
+    return '--'
+  }
+  return number.toFixed(number >= 100 ? 2 : 4)
+}
+
+const formatPercent = (value) => {
+  const number = Number(value || 0)
+  if (!Number.isFinite(number)) {
+    return '--'
+  }
+  return `${number > 0 ? '+' : ''}${number.toFixed(2)}%`
+}
+
+const profileName = (profile) => {
+  const names = {
+    balanced: '均衡',
+    momentum: '动量',
+    breakout: '突破',
+    reversion: '回归'
+  }
+  return names[profile] || profile || '-'
+}
+
+const formatHistorySymbols = (row) => {
+  const items = Array.isArray(row?.items) ? row.items : []
+  const symbols = items
+    .filter((item) => item?.isOpportunity || Number(item?.confidence || 0) >= 72)
+    .slice(0, 4)
+    .map((item) => `${item.symbol}(${item.confidence})`)
+  return symbols.length ? symbols.join(' / ') : '未筛出达标机会'
+}
+
+const riskLevelName = (level) => {
+  const names = {
+    high: '高',
+    medium: '中',
+    low: '低'
+  }
+  return names[level] || '中'
+}
+
+const buildWatchlistQuantPayload = (execute = false) => ({
+  execute,
+  profile: watchlistQuantControls.value.profile,
+  minConfidence: Number(watchlistQuantControls.value.minConfidence || 72),
+  maxAmount: Number(watchlistQuantControls.value.maxAmount || 0),
+  maxSymbols: Number(watchlistQuantControls.value.maxSymbols || 2),
+  maxPositionRatio: Number(watchlistQuantControls.value.maxPositionRatio || 0.08),
+  limit: Number(watchlistQuantControls.value.limit || 80),
+  source: execute ? 'strategy-page-auto-buy' : 'strategy-page-scan'
+})
+
+const buildWatchlistBacktestPayload = () => ({
+  symbol: String(watchlistBacktestControls.value.symbol || '').trim().toUpperCase(),
+  profile: watchlistBacktestControls.value.profile,
+  lookbackDays: Number(watchlistBacktestControls.value.lookbackDays || 90),
+  minConfidence: Number(watchlistQuantControls.value.minConfidence || 72)
+})
+
+const runWatchlistQuant = async (execute = false) => {
+  if (execute) {
+    try {
+      await ElMessageBox.confirm('将只对自选股池中达到阈值的标的提交受控买入，继续执行？', '自选池量化下单', {
+        confirmButtonText: '继续',
+        cancelButtonText: '取消',
+        type: 'warning'
+      })
+    } catch (error) {
+      return
+    }
+  }
+
+  watchlistQuantLoading.value = !execute
+  watchlistQuantExecuting.value = execute
+  try {
+    const res = await runWatchlistQuantStrategy(buildWatchlistQuantPayload(execute))
+    watchlistQuantResult.value = res.data || null
+    const count = Number(watchlistQuantResult.value?.opportunityCount || 0)
+    if (execute) {
+      const submitted = Number(watchlistQuantResult.value?.autoTrade?.submittedCount || 0)
+      ElMessage.success(submitted > 0 ? `已提交 ${submitted} 笔受控委托` : '执行完成，未产生新的委托')
+      await loadQuantStatus()
+      await loadWatchlistQuantHistory()
+      return
+    }
+    await loadWatchlistQuantHistory()
+    ElMessage.success(count > 0 ? `扫描完成，发现 ${count} 个机会` : '扫描完成，暂无达标机会')
+  } catch (error) {
+    ElMessage.error((execute ? '下单失败: ' : '扫描失败: ') + (error.message || '未知错误'))
+  } finally {
+    watchlistQuantLoading.value = false
+    watchlistQuantExecuting.value = false
+  }
+}
+
+const runWatchlistBacktest = async () => {
+  const payload = buildWatchlistBacktestPayload()
+  if (!payload.symbol) {
+    ElMessage.warning('请输入复盘标的')
+    return
+  }
+  watchlistBacktestLoading.value = true
+  try {
+    const res = await runWatchlistQuantBacktest(payload)
+    watchlistBacktestResult.value = res.data || null
+    const signalCount = Number(watchlistBacktestResult.value?.summary?.signalCount || 0)
+    ElMessage.success(signalCount > 0 ? `复盘完成，出现 ${signalCount} 次买入信号` : '复盘完成，未出现买入信号')
+  } catch (error) {
+    ElMessage.error('复盘失败: ' + (error.message || '未知错误'))
+  } finally {
+    watchlistBacktestLoading.value = false
+  }
+}
+
 const runMonitorNow = async () => {
   monitoring.value = true
   try {
@@ -1079,7 +1524,13 @@ const runMonitorNow = async () => {
 const refreshData = async () => {
   strategyDataReady.value = false
   try {
-    await Promise.all([loadStrategies(), loadMonitorSummary(), loadStrategyTemplates()])
+    await Promise.all([
+      loadStrategies(),
+      loadMonitorSummary(),
+      loadStrategyTemplates(),
+      loadQuantStatus(),
+      loadWatchlistQuantHistory()
+    ])
   } finally {
     strategyDataReady.value = true
   }
@@ -1164,6 +1615,191 @@ onMounted(() => {
 
 .strategy-overview-strip {
   margin-bottom: 20px;
+}
+
+.watchlist-quant-card {
+  margin-bottom: 20px;
+}
+
+.watchlist-quant-card :deep(.el-card__body) {
+  padding: 14px 20px 18px;
+}
+
+.watchlist-quant-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.watchlist-quant-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.watchlist-quant-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.watchlist-quant-number {
+  width: 136px;
+}
+
+.watchlist-quant-small-number {
+  width: 112px;
+}
+
+.watchlist-quant-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.watchlist-quant-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(154px, 1fr));
+  gap: 10px;
+}
+
+.watchlist-quant-metric {
+  display: grid;
+  gap: 4px;
+  min-height: 74px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border-soft) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 86%, var(--surface-muted) 14%);
+
+  span,
+  small {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  strong {
+    color: var(--text-emphasis);
+    font-size: 20px;
+    line-height: 1.1;
+  }
+}
+
+.watchlist-quant-table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.watchlist-quant-table.compact {
+  min-width: 0;
+}
+
+.watchlist-quant-symbol {
+  display: grid;
+  gap: 2px;
+
+  strong {
+    color: var(--text-emphasis);
+    font-size: 13px;
+  }
+
+  span {
+    color: var(--text-secondary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.watchlist-quant-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.watchlist-quant-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 14px;
+}
+
+.watchlist-quant-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border-soft) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-soft) 84%, var(--surface-muted) 16%);
+}
+
+.watchlist-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+
+  > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  strong {
+    color: var(--text-emphasis);
+    font-size: 14px;
+  }
+
+  span {
+    color: var(--text-secondary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.watchlist-backtest-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.watchlist-backtest-symbol {
+  width: 132px;
+}
+
+.watchlist-backtest-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+
+  > div {
+    display: grid;
+    gap: 4px;
+    min-height: 58px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border-soft) 76%, transparent);
+  }
+
+  span {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+
+  strong {
+    color: var(--text-emphasis);
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
 }
 
 .template-library-card {
@@ -1668,12 +2304,14 @@ onMounted(() => {
 
 @media (max-width: 1100px) {
   .template-grid,
+  .watchlist-quant-detail-grid,
   .summary-strip,
   .stats-row {
     grid-template-columns: 1fr;
   }
 
   .template-toolbar,
+  .watchlist-backtest-toolbar,
   .drawer-actions,
   .strategy-toolbar {
     flex-direction: column;
@@ -1686,6 +2324,14 @@ onMounted(() => {
 
   .strategy-search {
     width: 100%;
+  }
+
+  .watchlist-backtest-symbol {
+    width: 100%;
+  }
+
+  .watchlist-backtest-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

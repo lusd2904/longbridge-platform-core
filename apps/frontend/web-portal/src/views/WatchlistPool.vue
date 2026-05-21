@@ -7,7 +7,8 @@
         <div class="hero-tags">
           <span class="hero-tag">{{ `${formatCount(filteredWatchlist.length)} / ${formatCount(watchlist.length)} 标的` }}</span>
           <span class="hero-tag">{{ `${activeSessionLabel}目标 ${formatCount(activeSessionTargetCount)}` }}</span>
-          <span class="hero-tag">{{ `分组 ${formatCount(groupedWatchlist.length)}` }}</span>
+          <span class="hero-tag">{{ `市场分组 ${formatCount(groupedWatchlist.length)}` }}</span>
+          <span class="hero-tag">{{ realtimeQuoteTag }}</span>
           <span class="hero-tag">{{ scanTargetUpdatedAt ? `目标更新 ${formatDateTime(scanTargetUpdatedAt)}` : '等待扫描目标' }}</span>
         </div>
       </div>
@@ -60,163 +61,170 @@
       </el-card>
     </section>
 
-    <section class="workspace-grid">
-      <div class="watchlist-column">
-        <el-card class="panel-card">
-          <template #header>
-            <div class="panel-head">
-              <div>
-                <span class="panel-kicker">Grouped Universe</span>
-                <h3>按类型 / 市场组织</h3>
-              </div>
-              <el-tag effect="plain" size="large">{{ formatCount(groupedWatchlist.length) }} 组</el-tag>
-            </div>
-          </template>
-
-          <div v-if="loadingWatchlist && !watchlist.length" class="panel-empty">
-            <el-skeleton :rows="6" animated />
+    <el-card class="panel-card ledger-card">
+      <template #header>
+        <div class="panel-head">
+          <div>
+            <span class="panel-kicker">Watchlist Ledger</span>
+            <h3>自选标的台账</h3>
           </div>
-
-          <div v-else-if="groupedWatchlist.length" class="group-list">
-            <section
-              v-for="group in groupedWatchlist"
-              :key="group.key"
-              class="group-card"
-            >
-              <header class="group-head">
-                <div>
-                  <strong>{{ group.title }}</strong>
-                  <span>{{ `${formatCount(group.items.length)} 只 · ${activeSessionLabel}目标 ${formatCount(group.activeSessionTargetCount)}` }}</span>
-                </div>
-                <div class="group-pills">
-                  <el-tag effect="plain" size="small">{{ `开盘前 ${formatCount(group.preEnabledCount)}` }}</el-tag>
-                  <el-tag effect="plain" size="small">{{ `收盘后 ${formatCount(group.afterEnabledCount)}` }}</el-tag>
-                </div>
-              </header>
-
-              <div class="watchlist-table">
-                <article
-                  v-for="item in group.items"
-                  :key="item.key"
-                  class="watchlist-row"
-                >
-                  <div class="row-main">
-                    <div class="row-symbols">
-                      <strong>{{ item.symbol }}</strong>
-                      <span>{{ item.name }}</span>
-                    </div>
-                    <div class="row-meta">
-                      <el-tag size="small" effect="plain">{{ marketLabel(item.market) }}</el-tag>
-                      <el-tag size="small" effect="plain">{{ typeLabel(item.type) }}</el-tag>
-                      <span>{{ `添加于 ${formatDateTime(item.addedAt)}` }}</span>
-                      <span>{{ `扫描标的 ${formatCount(item.scanTargetCount)}` }}</span>
-                      <span>{{ `开盘前 ${formatCount(item.sessionCounts.pre_market)} / 收盘后 ${formatCount(item.sessionCounts.after_market)}` }}</span>
-                    </div>
-                  </div>
-
-                  <div class="row-actions">
-                    <label class="toggle-item">
-                      <span>开盘前</span>
-                      <el-switch
-                        :model-value="item.preMarketEnabled"
-                        :loading="isRowPending(item.key, 'pre_market')"
-                        @change="toggleScan(item, 'pre_market', $event)"
-                      />
-                    </label>
-                    <label class="toggle-item">
-                      <span>收盘后</span>
-                      <el-switch
-                        :model-value="item.afterMarketEnabled"
-                        :loading="isRowPending(item.key, 'after_market')"
-                        @change="toggleScan(item, 'after_market', $event)"
-                      />
-                    </label>
-                    <el-button
-                      type="danger"
-                      plain
-                      :icon="Delete"
-                      :loading="isRowRemoving(item.key)"
-                      @click="removeItem(item)"
-                    >
-                      移除
-                    </el-button>
-                  </div>
-                </article>
-              </div>
-            </section>
+          <div class="target-head-meta">
+            <el-tag effect="plain" size="large">{{ formatCount(filteredWatchlist.length) }} 条</el-tag>
+            <el-button text :icon="Refresh" :loading="loadingTargets" @click="loadScanTargets(activeSession)">
+              刷新扫描目标
+            </el-button>
           </div>
+        </div>
+      </template>
 
-          <div v-else class="panel-empty">
-            <el-empty description="当前没有符合条件的自选标的" />
-          </div>
-        </el-card>
+      <div class="target-summary">
+        <span>{{ targetSummaryText }}</span>
+        <span>{{ scanTargetUpdatedAt ? `更新时间 ${formatDateTime(scanTargetUpdatedAt)}` : '尚未返回扫描目标' }}</span>
       </div>
 
-      <div class="targets-column">
-        <el-card class="panel-card targets-card">
-          <template #header>
-            <div class="panel-head">
-              <div>
-                <span class="panel-kicker">Session Targets</span>
-                <h3>{{ `${activeSessionLabel}扫描目标` }}</h3>
-              </div>
-              <div class="target-head-meta">
-                <el-tag effect="plain" size="large">{{ formatCount(activeSessionTargetCount) }} 个</el-tag>
-                <el-button text :icon="Refresh" :loading="loadingTargets" @click="loadScanTargets(activeSession)">
-                  刷新目标
-                </el-button>
-              </div>
+      <el-table
+        :data="watchlistLedgerRows"
+        v-loading="loadingWatchlist"
+        style="width: 100%"
+        class="ledger-table"
+      >
+        <template #empty>
+          <div class="panel-empty table-empty">
+            <strong>当前没有符合条件的自选标的</strong>
+            <span>从股票池添加自选后，这里会按台账展示扫描开关、目标数和最新扫描结果入口。</span>
+          </div>
+        </template>
+        <el-table-column prop="symbol" label="代码" width="122">
+          <template #default="{ row }">
+            <button type="button" class="symbol-link" @click="openScanResult(row)">
+              {{ row.symbol }}
+            </button>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="market" label="市场" width="92">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ marketLabel(row.market) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="type" label="类型" width="92">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ typeLabel(row.type) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="长桥实时行情" min-width="230">
+          <template #default="{ row }">
+            <div class="quote-stack">
+              <strong>{{ formatQuotePrice(row.realtimePrice) }}</strong>
+              <span>{{ `盘前 ${formatQuotePrice(row.preMarketPrice)} / 盘后 ${formatQuotePrice(row.postMarketPrice)}` }}</span>
+              <small>{{ `夜盘 ${formatQuotePrice(row.overnightPrice)} · ${row.quoteTimeLabel}` }}</small>
             </div>
           </template>
+        </el-table-column>
+        <el-table-column label="添加时间" min-width="150">
+          <template #default="{ row }">{{ formatDateTime(row.addedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="扫描目标" width="140">
+          <template #default="{ row }">
+            <div class="scan-count-stack">
+              <strong>{{ formatCount(row.scanTargetCount) }}</strong>
+              <span>{{ `开盘前 ${formatCount(row.sessionCounts.pre_market)} / 收盘后 ${formatCount(row.sessionCounts.after_market)}` }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="最新扫描" min-width="150">
+          <template #default="{ row }">{{ formatDateTime(row.lastScanAt) }}</template>
+        </el-table-column>
+        <el-table-column label="开盘前" width="96" align="center">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.preMarketEnabled"
+              :loading="isRowPending(row.key, 'pre_market')"
+              @change="toggleScan(row, 'pre_market', $event)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="收盘后" width="96" align="center">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.afterMarketEnabled"
+              :loading="isRowPending(row.key, 'after_market')"
+              @change="toggleScan(row, 'after_market', $event)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="260" fixed="right">
+          <template #default="{ row }">
+            <div class="table-action-group">
+              <el-button size="small" type="primary" link @click="openScanResult(row)">扫描结果</el-button>
+              <el-button size="small" type="info" link @click="openAIAnalysis(row)">AI研判</el-button>
+              <el-button
+                size="small"
+                type="danger"
+                link
+                :loading="isRowRemoving(row.key)"
+                @click="removeItem(row)"
+              >
+                移除
+              </el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
 
-          <div class="target-summary">
-            <span>{{ targetSummaryText }}</span>
-            <span>{{ scanTargetUpdatedAt ? `更新时间 ${formatDateTime(scanTargetUpdatedAt)}` : '尚未返回扫描目标' }}</span>
+    <el-card class="panel-card targets-ledger-card">
+      <template #header>
+        <div class="panel-head">
+          <div>
+            <span class="panel-kicker">Session Targets</span>
+            <h3>{{ `${activeSessionLabel}扫描目标` }}</h3>
           </div>
+          <el-tag effect="plain" size="large">{{ formatCount(activeSessionTargetCount) }} 个</el-tag>
+        </div>
+      </template>
 
-          <el-table
-            :data="scanTargets"
-            v-loading="loadingTargets"
-            height="100%"
-            class="targets-table"
-          >
-            <template #empty>
-              <div class="panel-empty table-empty">
-                <strong>{{ activeSessionLabel }}暂无扫描目标</strong>
-                <span>{{ scanTargetError || '启用对应扫描开关后，这里会展示按 session 生成的扫描标的。' }}</span>
-              </div>
-            </template>
-            <el-table-column prop="symbol" label="代码" width="112" />
-            <el-table-column prop="name" label="名称" min-width="160" />
-            <el-table-column prop="market" label="市场" width="88">
-              <template #default="{ row }">
-                <el-tag size="small" effect="plain">{{ marketLabel(row.market) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="type" label="类型" width="88">
-              <template #default="{ row }">
-                <el-tag size="small" effect="plain">{{ typeLabel(row.type) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="source" label="来源" width="120">
-              <template #default="{ row }">
-                <span>{{ row.source || '--' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="score" label="评分" width="88">
-              <template #default="{ row }">
-                <span>{{ formatScore(row.score) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="reason" label="说明" min-width="220" show-overflow-tooltip>
-              <template #default="{ row }">
-                <span>{{ row.reason || '--' }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </div>
-    </section>
+      <el-table :data="scanTargets" v-loading="loadingTargets" style="width: 100%">
+        <template #empty>
+          <div class="panel-empty table-empty">
+            <strong>{{ activeSessionLabel }}暂无扫描目标</strong>
+            <span>{{ scanTargetError || '启用对应扫描开关后，这里会展示按 session 生成的扫描标的。' }}</span>
+          </div>
+        </template>
+        <el-table-column prop="symbol" label="代码" width="122">
+          <template #default="{ row }">
+            <button type="button" class="symbol-link" @click="openScanResult(row)">
+              {{ row.symbol }}
+            </button>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="名称" min-width="180" />
+        <el-table-column prop="market" label="市场" width="92">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ marketLabel(row.market) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="type" label="类型" width="92">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ typeLabel(row.type) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="source" label="来源" width="130">
+          <template #default="{ row }">{{ row.source || '--' }}</template>
+        </el-table-column>
+        <el-table-column prop="score" label="评分" width="96">
+          <template #default="{ row }">{{ formatScore(row.score) }}</template>
+        </el-table-column>
+        <el-table-column prop="reason" label="说明" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.reason || '--' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" link @click="openScanResult(row)">查看结果</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
   </div>
 </template>
 
@@ -226,15 +234,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Collection,
   DataLine,
-  Delete,
   Refresh,
   Search,
   Star,
   Timer
 } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { request } from '../utils/requestPure.js'
 
 const MARKET_API_BASE = '/svc/market/api/v1/market'
+const router = useRouter()
 const SESSION_FIELD_MAP = {
   pre_market: 'pre_market_enabled',
   after_market: 'after_market_enabled'
@@ -265,6 +274,7 @@ const watchlist = ref([])
 const scanTargets = ref([])
 const loadingWatchlist = ref(false)
 const loadingTargets = ref(false)
+const loadingRealtimeQuotes = ref(false)
 const searchKeyword = ref('')
 const marketFilter = ref('')
 const typeFilter = ref('')
@@ -273,6 +283,7 @@ const scanTargetUpdatedAt = ref('')
 const scanTargetError = ref('')
 const pendingToggleMap = ref({})
 const pendingRemoveMap = ref({})
+const realtimeQuoteMap = ref({})
 let marketApiModulePromise = null
 let isAlive = true
 
@@ -296,6 +307,7 @@ const fallbackRemoveWatchlist = (symbol, market, type = 'stock') => request.dele
 const fallbackGetWatchlistScanTargets = (session) => request.post(`${MARKET_API_BASE}/watchlist/scan-targets`, {
   session: SESSION_API_VALUE_MAP[session] || session || ''
 })
+const fallbackGetStockQuotes = (symbols = []) => request.get(`${MARKET_API_BASE}/longbridge/quotes`, { symbols })
 
 const loadMarketApiModule = async () => {
   if (!marketApiModulePromise) {
@@ -338,6 +350,43 @@ const toNumber = (value, fallback = 0) => {
   return Number.isFinite(numeric) ? numeric : fallback
 }
 
+const toNullableNumber = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+const normalizeQuoteSession = (sessionQuote = null) => {
+  if (!sessionQuote || typeof sessionQuote !== 'object') {
+    return null
+  }
+  return {
+    ...sessionQuote,
+    price: toNullableNumber(sessionQuote.price ?? sessionQuote.last_price ?? sessionQuote.lastPrice ?? sessionQuote.last),
+    timestamp: sessionQuote.timestamp || sessionQuote.updatedAt || sessionQuote.updated_at || ''
+  }
+}
+
+const normalizeRealtimeQuote = (quote = {}) => {
+  const preMarketQuote = normalizeQuoteSession(quote.preMarketQuote ?? quote.pre_market_quote)
+  const postMarketQuote = normalizeQuoteSession(quote.postMarketQuote ?? quote.post_market_quote)
+  const overnightQuote = normalizeQuoteSession(quote.overnightQuote ?? quote.overnight_quote)
+  const timestamp = quote.quoteSnapshotAt || quote.quote_snapshot_at || quote.timestamp || quote.updatedAt || quote.updated_at ||
+    preMarketQuote?.timestamp || postMarketQuote?.timestamp || overnightQuote?.timestamp || ''
+  return {
+    ...quote,
+    symbol: String(quote.symbol || '').trim().toUpperCase(),
+    price: toNullableNumber(quote.price ?? quote.last_price ?? quote.lastPrice ?? quote.last_done ?? quote.last),
+    preMarketQuote,
+    postMarketQuote,
+    overnightQuote,
+    quoteSource: quote.quoteSource || quote.quote_source || quote.dataSource || quote.source || 'longbridge-live',
+    timestamp
+  }
+}
+
 const extractList = (payload, preferredKeys = []) => {
   if (Array.isArray(payload)) {
     return payload
@@ -349,6 +398,15 @@ const extractList = (payload, preferredKeys = []) => {
   }
   if (Array.isArray(payload?.data)) {
     return payload.data
+  }
+  if (Array.isArray(payload?.payload)) {
+    return payload.payload
+  }
+  if (Array.isArray(payload?.data?.payload)) {
+    return payload.data.payload
+  }
+  if (Array.isArray(payload?.data?.data?.payload)) {
+    return payload.data.data.payload
   }
   if (Array.isArray(payload?.items)) {
     return payload.items
@@ -419,6 +477,7 @@ const normalizeWatchlistItem = (item = {}) => {
     market,
     type,
     addedAt: item?.addedAt || item?.added_at || item?.create_time || item?.created_at || item?.createdAt || '',
+    lastScanAt: item?.lastScanAt || item?.last_scan_at || item?.scan_at || item?.scanAt || '',
     preMarketEnabled,
     afterMarketEnabled,
     sessionCounts,
@@ -455,10 +514,34 @@ const formatScore = (value) => {
   }
   return Number.isFinite(Number(value)) ? Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) : String(value)
 }
+const formatQuotePrice = (value) => {
+  const numeric = toNullableNumber(value)
+  return numeric === null ? '--' : numeric.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 })
+}
 const marketLabel = (market) => MARKET_LABEL_MAP[String(market || '').toUpperCase()] || String(market || '--')
 const typeLabel = (type) => TYPE_LABEL_MAP[String(type || '').toLowerCase()] || String(type || '--').toUpperCase()
 
 const activeSessionLabel = computed(() => SESSION_LABEL_MAP[activeSession.value] || activeSession.value)
+const watchlistLedgerRows = computed(() => filteredWatchlist.value.slice().sort((left, right) => {
+  const marketDiff = MARKET_SORT_ORDER.indexOf(left.market) - MARKET_SORT_ORDER.indexOf(right.market)
+  if (marketDiff !== 0) return marketDiff
+  const typeDiff = TYPE_SORT_ORDER.indexOf(left.type) - TYPE_SORT_ORDER.indexOf(right.type)
+  if (typeDiff !== 0) return typeDiff
+  return left.symbol.localeCompare(right.symbol)
+}).map((item) => {
+  const quote = realtimeQuoteMap.value[item.symbol] || {}
+  const quoteTimestamp = quote.timestamp || ''
+  return {
+    ...item,
+    realtimePrice: quote.price,
+    preMarketPrice: quote.preMarketQuote?.price,
+    postMarketPrice: quote.postMarketQuote?.price,
+    overnightPrice: quote.overnightQuote?.price,
+    quoteSource: quote.quoteSource || '',
+    quoteTimestamp,
+    quoteTimeLabel: quoteTimestamp ? formatDateTime(quoteTimestamp) : '等待长桥实时'
+  }
+}))
 
 const filteredWatchlist = computed(() => {
   const keyword = String(searchKeyword.value || '').trim().toLowerCase()
@@ -525,6 +608,13 @@ const activeSessionTargetCount = computed(() => {
   }
   return filteredWatchlist.value.reduce((sum, item) => sum + toNumber(item.sessionCounts?.[activeSession.value], 0), 0)
 })
+const realtimeQuoteTag = computed(() => {
+  if (loadingRealtimeQuotes.value) {
+    return '长桥实时加载中'
+  }
+  const resolvedCount = watchlistLedgerRows.value.filter((item) => item.realtimePrice !== null && item.realtimePrice !== undefined).length
+  return resolvedCount ? `长桥实时 ${formatCount(resolvedCount)} / ${formatCount(watchlistLedgerRows.value.length)}` : '等待长桥实时'
+})
 
 const stats = computed(() => [
   {
@@ -577,6 +667,41 @@ const setPendingState = (bucket, key, session, value) => {
 const isRowPending = (key, session) => Boolean(pendingToggleMap.value?.[key]?.[session])
 const isRowRemoving = (key) => Boolean(pendingRemoveMap.value?.[key]?.remove)
 
+const loadRealtimeQuotes = async (items = watchlist.value) => {
+  const symbols = Array.from(new Set(
+    (Array.isArray(items) ? items : [])
+      .map((item) => String(item.symbol || '').trim().toUpperCase())
+      .filter(Boolean)
+  ))
+  if (!symbols.length) {
+    realtimeQuoteMap.value = {}
+    return
+  }
+
+  loadingRealtimeQuotes.value = true
+  try {
+    const getStockQuotesApi = await resolveMarketApiMethod('getStockQuotes', fallbackGetStockQuotes)
+    const response = await getStockQuotesApi(symbols)
+    const rawQuotes = extractList(response, ['quotes', 'payload'])
+    realtimeQuoteMap.value = Object.fromEntries(
+      rawQuotes
+        .map(normalizeRealtimeQuote)
+        .map((quote) => [quote.symbol, quote])
+        .filter(([symbol]) => Boolean(symbol))
+    )
+  } catch (error) {
+    if (!isAlive && isFetchAbortLikeError(error)) {
+      return
+    }
+    realtimeQuoteMap.value = {}
+    console.warn('加载长桥实时行情失败:', error)
+  } finally {
+    if (isAlive) {
+      loadingRealtimeQuotes.value = false
+    }
+  }
+}
+
 const loadWatchlist = async () => {
   loadingWatchlist.value = true
   try {
@@ -584,6 +709,7 @@ const loadWatchlist = async () => {
     const response = await getWatchlistApi()
     const rawItems = extractList(response, ['watchlist'])
     watchlist.value = rawItems.map(normalizeWatchlistItem).filter((item) => item.symbol)
+    await loadRealtimeQuotes(watchlist.value)
   } catch (error) {
     if (!isAlive && isFetchAbortLikeError(error)) {
       return
@@ -677,6 +803,21 @@ const removeItem = async (item) => {
   }
 }
 
+const openScanResult = (item) => {
+  router.push({
+    name: 'WatchlistScanResult',
+    params: { symbol: item.symbol },
+    query: { market: item.market, session: activeSession.value }
+  })
+}
+
+const openAIAnalysis = (item) => {
+  router.push({
+    name: 'AIAnalysis',
+    query: { symbol: item.symbol, market: item.market }
+  })
+}
+
 watch(activeSession, (session) => {
   loadScanTargets(session)
 })
@@ -701,8 +842,7 @@ onUnmounted(() => {
 
 .hero-panel,
 .panel-card,
-.stat-card,
-.group-card {
+.stat-card {
   border: 1px solid color-mix(in srgb, var(--accent-strong) 14%, transparent);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 94%, transparent), color-mix(in srgb, var(--surface-emphasis) 96%, transparent));
   box-shadow: var(--shadow-strong);
@@ -827,15 +967,6 @@ onUnmounted(() => {
   color: var(--text-muted);
 }
 
-.workspace-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.95fr);
-  gap: 14px;
-  align-items: stretch;
-}
-
-.watchlist-column,
-.targets-column,
 .panel-card {
   min-width: 0;
 }
@@ -852,110 +983,59 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.group-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.symbol-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent-strong);
+  font-weight: 700;
+  cursor: pointer;
 }
 
-.group-card {
-  padding: 12px;
-  border-radius: 14px;
-}
-
-.group-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 10px;
-}
-
-.group-head strong {
-  display: block;
-  font-size: 14px;
-  color: var(--text-emphasis);
-}
-
-.group-head span {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.group-pills {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.watchlist-table {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.watchlist-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent-strong) 10%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
-}
-
-.row-main {
-  min-width: 0;
-}
-
-.row-symbols {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
-.row-symbols strong {
-  font-size: 15px;
-  color: var(--text-emphasis);
-}
-
-.row-symbols span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-secondary);
-}
-
-.row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.row-actions {
+.table-action-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.toggle-item {
-  display: inline-flex;
+.scan-count-stack {
+  display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: 68px;
-  font-size: 11px;
+  gap: 2px;
+}
+
+.scan-count-stack strong {
+  color: var(--text-emphasis);
+}
+
+.scan-count-stack span {
+  font-size: 12px;
   color: var(--text-secondary);
 }
 
-.targets-card :deep(.el-card__body) {
+.quote-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.35;
+}
+
+.quote-stack strong {
+  color: var(--text-emphasis);
+}
+
+.quote-stack span,
+.quote-stack small {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ledger-card :deep(.el-card__body),
+.targets-ledger-card :deep(.el-card__body) {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 540px;
 }
 
 .target-head-meta {

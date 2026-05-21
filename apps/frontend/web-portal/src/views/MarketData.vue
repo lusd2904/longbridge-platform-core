@@ -88,7 +88,7 @@
         </div>
         <div class="quote-sync-metrics">
           <span class="metric-pill">实时 {{ realtimeReadyCount }}/{{ pagedQuotes.length }}</span>
-          <span class="metric-pill subdued">快照 {{ snapshotFallbackCount }}</span>
+          <span class="metric-pill subdued">长桥实时 {{ pulledRealtimeCount }}</span>
           <span v-if="quotePendingCount" class="metric-pill subdued">待补齐 {{ quotePendingCount }}</span>
         </div>
       </div>
@@ -255,12 +255,12 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
-import { addStockToPool, getMarketInsightHistory, getMarketInsightsAtTime, getStockPool } from '../api/market.js'
+import { addStockToPool, getMarketInsightHistory, getMarketInsightsAtTime, getStockPool, getStockQuotes } from '../api/market.js'
 import { runPlatformTask } from '../api/platform.js'
 import { useStockQuotes } from '../composables/useWebSocket.js'
 import { getAccess, getCurrentUser } from '../utils/auth.js'
 import { formatCurrency as formatCurrencyValue, formatPercent as formatPercentDisplay } from '../utils/formatters.js'
-import { getQuoteSnapshotAt, summarizeQuoteSnapshotCoverage } from '../utils/quoteSnapshot.js'
+import { summarizeQuoteSnapshotCoverage } from '../utils/quoteSnapshot.js'
 import { buildMarketInsightReadModelSummary, buildStockPoolReadModelSummary, formatQuoteCoverageLabel, formatQuoteSnapshotTimeLabel } from '../utils/readModelSource.js'
 import ReadModelSourceStrip from '../components/common/ReadModelSourceStrip.vue'
 import { useAdaptiveLayout } from '../composables/useAdaptiveLayout.js'
@@ -293,6 +293,7 @@ const selectedRows = ref([])
 let searchTimer = null
 let marketDataRequestId = 0
 let insightRequestId = 0
+const pulledQuoteMap = ref({})
 
 const marketMobileSections = computed(() => ([
   { value: 'pulse', label: '脉冲', note: currentMarketInsight.value?.generatedAt || '市场节奏' },
@@ -347,28 +348,35 @@ const toTimestampMs = (value) => {
 const isQuoteRealtime = (row = {}) => {
   const mode = String(row.quoteMode ?? row.quote_mode ?? '').trim().toLowerCase()
   if (mode) {
-    return mode === 'push'
+    return mode === 'push' || mode === 'pull' || mode === 'longbridge-live'
   }
-  return Boolean(row.isRealtime)
+  const source = String(row.quoteSource ?? row.quote_source ?? '').trim().toLowerCase()
+  return Boolean(row.isRealtime || source.startsWith('longbridge-'))
 }
-const hasSnapshotFallback = (row = {}) => {
+const hasLongbridgeQuote = (row = {}) => {
+  const source = String(row.quoteSource ?? row.quote_source ?? '').trim().toLowerCase()
   return Boolean(
-    row.quoteReady ||
-    row.quote_ready ||
-    row.quoteSnapshotAt ||
-    row.quote_snapshot_at ||
-    row.snapshotAt ||
-    row.snapshot_at
+    source.startsWith('longbridge-') &&
+    (
+      row.quoteReady ||
+      row.quote_ready ||
+      row.quoteSnapshotAt ||
+      row.quote_snapshot_at ||
+      row.snapshotAt ||
+      row.snapshot_at ||
+      row.timestamp
+    )
   )
 }
 const quoteSourceLabel = (row = {}) => {
-  if (isQuoteRealtime(row)) return '实时'
-  if (hasSnapshotFallback(row)) return '快照'
-  return '待补齐'
+  const mode = String(row.quoteMode ?? row.quote_mode ?? '').trim().toLowerCase()
+  if (mode === 'push') return '长桥推送'
+  if (isQuoteRealtime(row) || hasLongbridgeQuote(row)) return '长桥实时'
+  return '待长桥'
 }
 const quoteSourceTone = (row = {}) => {
   if (isQuoteRealtime(row)) return 'realtime'
-  if (hasSnapshotFallback(row)) return 'snapshot'
+  if (hasLongbridgeQuote(row)) return 'realtime'
   return 'pending'
 }
 const resolveRealtimePrice = (realtime = {}, fallback = {}) => {
@@ -394,13 +402,14 @@ const resolveRealtimeChangePercent = (realtime = {}, fallback = {}) => {
 }
 const mergeRealtimeQuote = (row = {}) => {
   const symbol = String(row.symbol || '').toUpperCase()
-  const realtime = liveQuoteMap.value[symbol]
+  const realtime = liveQuoteMap.value[symbol] || pulledQuoteMap.value[symbol]
   if (!realtime) {
     return row
   }
   const realtimeTimestamp = realtime.timestamp || realtime.pushReceivedAt || realtime.updatedAt || ''
   const fallbackTimestamp = row.updatedAt || row.quoteSnapshotAt || row.snapshotAt || ''
-  if (toTimestampMs(realtimeTimestamp) && toTimestampMs(fallbackTimestamp) > toTimestampMs(realtimeTimestamp)) {
+  const existingSource = String(row.quoteSource || row.quote_source || '').toLowerCase()
+  if (existingSource.startsWith('longbridge-') && toTimestampMs(realtimeTimestamp) && toTimestampMs(fallbackTimestamp) > toTimestampMs(realtimeTimestamp)) {
     return row
   }
 
@@ -417,7 +426,7 @@ const mergeRealtimeQuote = (row = {}) => {
     row.change,
     prevClose ? price - prevClose : 0
   ) ?? 0
-  const quoteMode = String(realtime.quoteMode ?? realtime.quote_mode ?? '').trim() || 'push'
+  const quoteMode = String(realtime.quoteMode ?? realtime.quote_mode ?? '').trim() || (liveQuoteMap.value[symbol] ? 'push' : 'pull')
   const timestamp = realtime.timestamp || realtime.pushReceivedAt || row.updatedAt || null
 
   return {
@@ -436,8 +445,8 @@ const mergeRealtimeQuote = (row = {}) => {
     quoteReady: true,
     quoteMode,
     quote_mode: quoteMode,
-    quoteSource: realtime.quoteSource || realtime.quote_source || (quoteMode === 'push' ? 'longbridge-push' : 'quote-snapshot'),
-    quote_source: realtime.quoteSource || realtime.quote_source || (quoteMode === 'push' ? 'longbridge-push' : 'quote-snapshot'),
+    quoteSource: realtime.quoteSource || realtime.quote_source || (quoteMode === 'push' ? 'longbridge-push' : 'longbridge-live'),
+    quote_source: realtime.quoteSource || realtime.quote_source || (quoteMode === 'push' ? 'longbridge-push' : 'longbridge-live'),
     isRealtime: quoteMode === 'push',
     snapshotAt: realtime.snapshotAt || row.snapshotAt || row.quoteSnapshotAt || null,
     quoteSnapshotAt: realtime.snapshotAt || row.quoteSnapshotAt || row.updatedAt || null
@@ -448,43 +457,50 @@ const pagedQuotes = computed(() => pagedQuotesBase.value.map((item) => mergeReal
 const quoteCoverage = computed(() => summarizeQuoteSnapshotCoverage(pagedQuotesBase.value))
 const quoteReadyCount = computed(() => quoteCoverage.value.readyCount)
 const realtimeReadyCount = computed(() => pagedQuotes.value.filter((item) => isQuoteRealtime(item)).length)
-const snapshotFallbackCount = computed(() => pagedQuotes.value.filter((item) => !isQuoteRealtime(item) && hasSnapshotFallback(item)).length)
+const pushReadyCount = computed(() => pagedQuotes.value.filter((item) => String(item.quoteMode || item.quote_mode || '').includes('push')).length)
+const pulledRealtimeCount = computed(() => pagedQuotes.value.filter((item) => !String(item.quoteMode || item.quote_mode || '').includes('push') && hasLongbridgeQuote(item)).length)
 const quotePendingCount = computed(() => quoteCoverage.value.pendingCount)
 const quoteSyncActive = computed(() => wsConnected.value && pagedQuotes.value.length > 0)
 const quoteSyncTitle = computed(() => {
-  if (realtimeReadyCount.value === pagedQuotes.value.length && pagedQuotes.value.length) {
+  if (pushReadyCount.value === pagedQuotes.value.length && pagedQuotes.value.length) {
     return '当前页标的实时推送中'
   }
-  if (realtimeReadyCount.value > 0) {
-    return '当前页标的部分实时推送，剩余使用快照兜底'
+  if (pushReadyCount.value > 0) {
+    return '当前页标的部分长桥推送，剩余使用长桥实时拉取'
+  }
+  if (pulledRealtimeCount.value > 0) {
+    return '当前页标的已用长桥实时拉取补齐'
   }
   return '当前页标的已订阅，等待实时推送'
 })
 const quoteSyncHint = computed(() => {
-  if (snapshotFallbackCount.value > 0) {
-    return '快照数据仅作兜底，收到 push 后会立即覆盖最新价、涨跌、成交量与高低价。'
+  if (pulledRealtimeCount.value > 0) {
+    return '长桥实时拉取先补齐当前价，收到 push 后会继续覆盖最新价、涨跌、成交量与高低价。'
   }
   return '页面仅对当前页与当前可见基准标的保持订阅。'
 })
 const quoteSnapshotUpdatedAt = computed(() => quoteCoverage.value.latestSnapshotAt || '')
-const quoteSnapshotTag = computed(() => formatQuoteSnapshotTimeLabel(quoteSnapshotUpdatedAt.value, formatDateTime))
+const quoteSnapshotTag = computed(() => formatQuoteSnapshotTimeLabel(quoteSnapshotUpdatedAt.value, formatDateTime, {
+  prefix: '长桥实时',
+  emptyLabel: '等待长桥实时'
+}))
 const quoteStatusTag = computed(() => {
-  if (realtimeReadyCount.value > 0) {
+  if (pushReadyCount.value > 0) {
     return {
       type: 'success',
-      text: snapshotFallbackCount.value > 0 ? '实时 + 快照兜底' : '实时推送'
+      text: pulledRealtimeCount.value > 0 ? '推送 + 长桥实时' : '实时推送'
     }
   }
-  if (snapshotFallbackCount.value > 0) {
+  if (pulledRealtimeCount.value > 0) {
     return {
-      type: wsConnected.value ? 'info' : 'warning',
-      text: wsConnected.value ? '已订阅，快照兜底' : '报价快照'
+      type: wsConnected.value ? 'info' : 'success',
+      text: wsConnected.value ? '已订阅，长桥实时' : '长桥实时'
     }
   }
   if (wsConnected.value && pagedQuotes.value.length) {
     return { type: 'info', text: '等待实时推送' }
   }
-  return { type: 'warning', text: '等待报价快照' }
+  return { type: 'warning', text: '等待长桥实时' }
 })
 const marketHeroChips = computed(() => ([
   { text: quoteStatusTag.value.text, tone: quoteStatusTag.value.type === 'success' ? 'healthy' : quoteStatusTag.value.type },
@@ -497,8 +513,8 @@ const marketHeroChips = computed(() => ([
 ]))
 const marketInsightQuoteCoverageLabel = computed(() => (
   formatQuoteCoverageLabel(quoteCoverage.value, {
-    prefix: '报价快照',
-    emptyLabel: '报价快照待补齐'
+    prefix: '长桥实时',
+    emptyLabel: '长桥实时待补齐'
   })
 ))
 const marketInsightSummary = computed(() => buildMarketInsightReadModelSummary(
@@ -516,18 +532,21 @@ const stockPoolSummary = computed(() => buildStockPoolReadModelSummary(
     total: totalQuotes.value,
     marketLabel: marketName.value,
     quoteCoverageLabel: quoteReadyCount.value
-      ? `报价快照 ${quoteReadyCount.value}/${pagedQuotes.value.length || 0}`
-      : '报价快照待补齐'
+      ? `长桥实时 ${quoteReadyCount.value}/${pagedQuotes.value.length || 0}`
+      : '长桥实时待补齐'
   }
 ))
 const marketReadModelStatus = computed(() => {
+  if (quoteReadyCount.value > 0) {
+    return '长桥实时行情'
+  }
   if (wsConnected.value && pagedQuotes.value.length) {
     return realtimeReadyCount.value ? '实时行情在线' : '已订阅实时行情'
   }
-  if (quoteReadyCount.value > 0 || marketInsightSummary.value.updatedAt || stockPoolSummary.value.updatedAt || totalQuotes.value > 0) {
-    return '行情快照兜底'
+  if (marketInsightSummary.value.updatedAt || stockPoolSummary.value.updatedAt || totalQuotes.value > 0) {
+    return '等待长桥实时行情'
   }
-  return '等待行情快照'
+  return '等待长桥实时行情'
 })
 const marketReadModelStatusType = computed(() => (
   realtimeReadyCount.value > 0
@@ -561,12 +580,16 @@ const marketReadModelTags = computed(() => {
 })
 const marketIndices = computed(() => {
   const benchmarks = currentMarketInsight.value?.benchmarks || []
-  return benchmarks.slice(0, 4).map((item) => ({
-    ...item,
-    price: resolveRealtimePrice(liveQuoteMap.value[item.symbol], item),
-    changePercent: resolveRealtimeChangePercent(liveQuoteMap.value[item.symbol], item),
-    roleLabel: benchmarkRoleLabel(item.role)
-  }))
+  return benchmarks.slice(0, 4).map((item) => {
+    const symbol = String(item.symbol || '').trim().toUpperCase()
+    const quote = liveQuoteMap.value[symbol] || pulledQuoteMap.value[symbol] || {}
+    return {
+      ...item,
+      price: quote?.price || quote?.last_price ? resolveRealtimePrice(quote, {}) : null,
+      changePercent: quote?.price || quote?.last_price ? resolveRealtimeChangePercent(quote, {}) : null,
+      roleLabel: benchmarkRoleLabel(item.role)
+    }
+  })
 })
 const marketHeroMetrics = computed(() => [
   {
@@ -582,7 +605,7 @@ const marketHeroMetrics = computed(() => [
   {
     label: '报价进度',
     value: `${realtimeReadyCount.value}/${pagedQuotes.value.length || 0}`,
-    note: wsConnected.value ? '实时推送覆盖' : '快照兜底',
+    note: wsConnected.value ? '实时推送覆盖' : '长桥实时拉取',
     tone: wsConnected.value ? 'healthy' : ''
   }
 ])
@@ -601,29 +624,51 @@ const marketIndexMetrics = computed(() => (
   }))
 ))
 
-const inferQuoteReady = (row = {}) => {
-  const quoteBase = Boolean(
-    row.price ||
-    row.prevClose ||
-    row.prev_close ||
-    row.high ||
-    row.low ||
-    row.open ||
-    row.quoteSnapshotAt ||
-    row.quote_snapshot_at
-  )
-  return row.quoteReady ?? row.quote_ready ?? quoteBase
+const loadLongbridgeQuoteMap = async (rows = [], requestId = marketDataRequestId) => {
+  const symbols = Array.from(new Set(
+    (Array.isArray(rows) ? rows : [])
+      .map((row) => String(row.symbol || '').trim().toUpperCase())
+      .filter(Boolean)
+  ))
+  if (!symbols.length) {
+    return {}
+  }
+
+  try {
+    const quoteRes = await getStockQuotes(symbols)
+    if (requestId !== marketDataRequestId) {
+      return {}
+    }
+    return Object.fromEntries(
+      (Array.isArray(quoteRes?.data) ? quoteRes.data : [])
+        .map((quote) => [String(quote?.symbol || '').trim().toUpperCase(), quote])
+        .filter(([symbol]) => Boolean(symbol))
+    )
+  } catch (error) {
+    console.warn('长桥实时行情拉取失败:', error)
+    return {}
+  }
 }
 
-const normalizeQuoteRow = (row = {}) => {
-  const price = Number(row.price ?? 0)
-  const prevClose = Number(row.prevClose ?? row.prev_close ?? 0)
-  const change = Number(row.change ?? (prevClose ? price - prevClose : 0))
-  const changePercent = Number(
-    row.changePercent ??
-    row.change_percent ??
-    (prevClose ? (change / prevClose) * 100 : 0)
+const normalizeQuoteRow = (row = {}, liveQuote = null) => {
+  const quote = liveQuote || {}
+  const price = pickPositiveNumber(quote.price, quote.last_price, quote.lastPrice)
+  const prevClose = pickPositiveNumber(quote.prevClose, quote.prev_close)
+  const change = pickFiniteNumber(
+    quote.change,
+    quote.change_value,
+    price !== null && prevClose ? price - prevClose : null
   )
+  const changePercent = pickFiniteNumber(
+    quote.changePercent,
+    quote.change_percent,
+    quote.change_rate,
+    prevClose ? (change / prevClose) * 100 : null
+  )
+  const timestamp = quote.quoteSnapshotAt || quote.quote_snapshot_at || quote.timestamp || quote.updatedAt || quote.updated_at || null
+  const quoteReady = Boolean(price || timestamp)
+  const quoteMode = quoteReady ? (quote.quoteMode || quote.quote_mode || 'pull') : 'pending'
+  const quoteSource = quote.quoteSource || quote.quote_source || (quoteReady ? 'longbridge-live' : '')
 
   return {
     ...row,
@@ -637,18 +682,20 @@ const normalizeQuoteRow = (row = {}) => {
     prev_close: prevClose,
     changePercent,
     change_percent: changePercent,
-    volume: Number(row.volume ?? 0),
-    high: Number(row.high ?? 0) > 0 ? Number(row.high) : price,
-    low: Number(row.low ?? 0) > 0 ? Number(row.low) : price,
+    volume: pickFiniteNumber(quote.volume, null),
+    high: pickPositiveNumber(quote.high, price),
+    low: pickPositiveNumber(quote.low, price),
     marketCap: Number(row.marketCap ?? row.market_cap ?? 0),
     market_cap: Number(row.marketCap ?? row.market_cap ?? 0),
     pe: row.pe === null || row.pe === undefined ? null : Number(row.pe),
-    quoteReady: inferQuoteReady(row),
-    quoteMode: inferQuoteReady(row) ? 'snapshot' : 'pending',
-    quote_mode: inferQuoteReady(row) ? 'snapshot' : 'pending',
-    quoteSource: row.quoteSource || row.quote_source || '',
-    quoteSnapshotAt: getQuoteSnapshotAt(row),
-    updatedAt: row.updatedAt || getQuoteSnapshotAt(row) || null
+    quoteReady,
+    quoteMode,
+    quote_mode: quoteMode,
+    quoteSource,
+    quote_source: quoteSource,
+    quoteSnapshotAt: timestamp,
+    quote_snapshot_at: timestamp,
+    updatedAt: timestamp
   }
 }
 
@@ -730,7 +777,15 @@ const loadMarketData = async () => {
     }
 
     const baseRows = Array.isArray(poolRes?.data) ? poolRes.data : []
-    quotes.value = baseRows.map((row) => normalizeQuoteRow(row))
+    const quoteMap = await loadLongbridgeQuoteMap(baseRows, requestId)
+    if (requestId !== marketDataRequestId) {
+      return
+    }
+    pulledQuoteMap.value = quoteMap
+    quotes.value = baseRows.map((row) => {
+      const symbol = String(row.symbol || '').trim().toUpperCase()
+      return normalizeQuoteRow(row, quoteMap[symbol] || null)
+    })
     totalQuotes.value = Number(poolRes?.total || quotes.value.length || 0)
     stockPoolMeta.value = poolRes?.meta && typeof poolRes.meta === 'object' ? poolRes.meta : {}
     hasLoadedMarketData.value = true
@@ -925,10 +980,10 @@ const quotePlaceholderLabel = (row = {}, field = 'price') => {
   if (isQuoteRealtime(row)) {
     return '实时中'
   }
-  if (hasSnapshotFallback(row)) {
-    return field === 'change' || field === 'changePercent' ? '快照缺失' : '快照兜底'
+  if (hasLongbridgeQuote(row)) {
+    return field === 'change' || field === 'changePercent' ? '长桥缺失' : '长桥实时'
   }
-  return '待推送'
+  return '待长桥'
 }
 const approximateChange = (row = {}) => {
   const price = Number(row.price || 0)

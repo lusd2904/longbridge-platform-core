@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -11,7 +13,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 
-PORT = int(os.getenv("REF_AGNO_SIDECAR_PORT", "3200"))
+REFACTOR_ROOT = Path(__file__).resolve().parents[4]
+if str(REFACTOR_ROOT) not in sys.path:
+    sys.path.insert(0, str(REFACTOR_ROOT))
+
+from apps.runtime_shared.health import build_dependency_status, build_health_payload
+
+
+PORT = int(os.getenv("REF_AGNO_SIDECAR_PORT", os.getenv("SERVICE_PORT", "3200")))
 AI_BASE_URL = str(os.getenv("LONGBRIDGE_AI_BASE_URL") or "http://sub2api:8080/v1").strip().rstrip("/")
 AI_CHAT_URL = str(os.getenv("LONGBRIDGE_AI_URL") or f"{AI_BASE_URL}/chat/completions").strip()
 AI_API_KEY = str(os.getenv("LONGBRIDGE_AI_API_KEY") or "").strip()
@@ -184,18 +193,33 @@ def _normalize_result(result: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
 
 @app.get("/health")
 async def health() -> Dict[str, Any]:
-    return {
-        "success": True,
-        "service": "agno-compatible-sidecar",
-        "status": "healthy",
-        "aiConfig": {
-            "provider": "sub2api",
-            "baseUrl": AI_BASE_URL,
-            "chatCompletionsUrl": AI_CHAT_URL,
-            "model": AI_MODEL,
-        },
-        "safety": "review-only",
+    ai_config = {
+        "provider": "sub2api",
+        "baseUrl": AI_BASE_URL,
+        "chatCompletionsUrl": AI_CHAT_URL,
+        "model": AI_MODEL,
     }
+    return build_health_payload(
+        service="agno-sidecar",
+        version=app.version,
+        port=PORT,
+        status="healthy",
+        deps={
+            "ai-gateway": build_dependency_status(
+                "ai-gateway",
+                "healthy" if AI_CHAT_URL else "degraded",
+                detail="configured; review endpoints degrade safely when unavailable",
+                optional=True,
+                observed=ai_config,
+            )
+        },
+        capabilities=["agno-team-run", "watchlist-review", "review-only-fallback"],
+        extra={
+            "success": True,
+            "aiConfig": ai_config,
+            "safety": "review-only",
+        },
+    )
 
 
 @app.post("/teams/sub2api-team/runs")

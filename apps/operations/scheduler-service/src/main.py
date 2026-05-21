@@ -217,6 +217,50 @@ def _analysis_summary(payload: Any, session_name: str) -> str:
     return f"自选股 {session_name} 复核已完成，仅生成 AI 建议，不执行交易"[:255]
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
+def _safe_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
+
+
+def _safe_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
+
+
+def _watchlist_auto_buy_settings(session_name: str) -> Dict[str, Any]:
+    task_key = f"watchlist_{session_name}_review"
+    policy = SystemTaskService.get_policy(task_key) or {}
+    settings = policy.get("settings") if isinstance(policy.get("settings"), dict) else {}
+    return {
+        "enabled": _coerce_bool(settings.get("autoBuyEnabled"), False),
+        "maxSymbols": _safe_int(settings.get("autoBuyMaxSymbols"), 2, 1, 10),
+        "maxAmount": _safe_float(settings.get("autoBuyMaxAmount"), 2000.0, 0.0, 100000000.0),
+        "maxPositionRatio": _safe_float(settings.get("autoBuyMaxPositionRatio"), 0.08, 0.0, 1.0),
+        "minConfidence": _safe_int(settings.get("autoBuyMinConfidence"), 72, 0, 100),
+    }
+
+
 def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
     flag_column = "scan_before_open" if session_name == "pre_open" else "scan_after_close"
     max_users = max(1, min(int(os.getenv("REF_WATCHLIST_REVIEW_MAX_USERS", "50")), 200))
@@ -283,11 +327,13 @@ def _request_watchlist_review_for_user(session_name: str, user: Dict[str, Any]) 
     if user_id <= 0:
         raise RuntimeError("watchlist review 用户无效")
     service_token = generate_token(user_id, str(user.get("username") or "scheduler-service"), str(user.get("role") or "user"))
+    auto_buy_settings = _watchlist_auto_buy_settings(session_name)
     payload = {
         "session": session_name,
         "userId": user_id,
         "triggerSource": "scheduler",
-        "dryRun": True,
+        "dryRun": not auto_buy_settings["enabled"],
+        "autoBuy": auto_buy_settings,
     }
     request_body = json.dumps(payload).encode("utf-8")
     request = urlrequest.Request(
@@ -401,8 +447,10 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
         status = "skipped"
     else:
         status = "success"
+    auto_buy_enabled = _watchlist_auto_buy_settings(session_name)["enabled"]
     summary = (
-        f"自选股 {session_name} 复核已提交，用户 {len(users)} 个，成功 {success_count} 个，跳过 {skipped_count} 个，失败 {len(failures)} 个；后台生成 AI 建议，不执行交易"
+        f"自选股 {session_name} 复核已提交，用户 {len(users)} 个，成功 {success_count} 个，跳过 {skipped_count} 个，失败 {len(failures)} 个；"
+        f"{'机会股自动买入已开启并受仓位控制' if auto_buy_enabled else '后台生成 AI 建议，不执行交易'}"
     )
     _write_job_status(
         job_name,
@@ -573,7 +621,7 @@ class SchedulerRuntime:
                 "scheduler": position_monitor_scheduler,
             },
             "quant_trading": {
-                "title": "AI 量化交易",
+                "title": "自选池量化交易",
                 "scope": "user",
                 "scheduler": quant_trading_scheduler,
             },
@@ -1120,7 +1168,7 @@ TASK_RUNNERS: Dict[str, Callable[[int], Dict[str, Any]]] = {
     "risk_overview_snapshot_refresh": _run_risk_overview_snapshot_refresh,
     "symbol_content_cache_refresh": _run_symbol_content_cache_refresh,
     "position_monitor": lambda user_id: StrategyMonitorService.run_monitor(user_id=user_id, source="manual"),
-    "quant_trading": lambda user_id: QuantTradingService.run_cycle(user_id=user_id, source="manual", execute=False),
+    "quant_trading": lambda user_id: QuantTradingService.run_watchlist_strategy_cycle(user_id=user_id, source="manual", execute=False),
     "bootstrap_market_history_2024": lambda user_id: MarketHistoryBootstrapService.run_once(
         user_id=user_id,
         batch_size=SystemTaskService.get_batch_size("bootstrap_market_history_2024", 160),

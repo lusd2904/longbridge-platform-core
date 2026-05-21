@@ -526,8 +526,22 @@ const HEALTH_TARGETS = [
   ['analysis-service', 'analysis_service'],
   ['strategy-service', 'strategy_service'],
   ['trade-service', 'trade_service'],
+  ['sentiment-service', 'sentiment_service'],
   ['scheduler-service', 'scheduler_service'],
-  ['risk-service', 'risk_service']
+  ['risk-service', 'risk_service'],
+  ['agno-sidecar', 'agno_sidecar']
+]
+
+const directHealthTargets = [
+  ['gateway', 'gateway'],
+  ['user', 'user_center'],
+  ['market', 'market_service'],
+  ['analysis', 'analysis_service'],
+  ['strategy', 'strategy_service'],
+  ['trade', 'trade_service'],
+  ['sentiment', 'sentiment_service'],
+  ['scheduler', 'scheduler_service'],
+  ['risk', 'risk_service']
 ]
 
 function normalizeHealthStatus(status = 'unknown') {
@@ -541,12 +555,18 @@ function normalizeHealthStatus(status = 'unknown') {
 
 function normalizeHealthServiceEntry(serviceKey, alias, payload = {}) {
   const resolvedStatus = normalizeHealthStatus(payload?.status || payload?.data?.status || 'unknown')
+  const observed = payload?.observed && typeof payload.observed === 'object' ? payload.observed : {}
   return {
     status: resolvedStatus,
     status_text: payload?.status_text || (resolvedStatus === 'healthy' ? '运行正常' : resolvedStatus === 'degraded' ? '部分受限' : resolvedStatus === 'unhealthy' ? '异常' : resolvedStatus === 'disabled' ? '未启用' : '待确认'),
     service: payload?.service || serviceKey,
     version: payload?.version || '',
-    port: payload?.port || payload?.data?.port || null,
+    port: payload?.port || payload?.data?.port || observed?.port || null,
+    url: payload?.url || observed?.url || '',
+    basePath: payload?.basePath || observed?.basePath || '',
+    description: payload?.description || '',
+    latency_ms: payload?.latency_ms ?? null,
+    reachable: typeof payload?.reachable === 'boolean' ? payload.reachable : observed?.reachable,
     phase: payload?.phase || '',
     checked_at: payload?.checked_at || '',
     alert_count: Array.isArray(payload?.alerts) ? payload.alerts.length : 0,
@@ -555,7 +575,7 @@ function normalizeHealthServiceEntry(serviceKey, alias, payload = {}) {
   }
 }
 
-function buildHealthSummary(services = {}, environment = 'development', phase = '') {
+function buildHealthSummary(services = {}, environment = 'development', phase = '', extra = {}) {
   let healthyCount = 0
   let degradedCount = 0
   let unhealthyCount = 0
@@ -588,7 +608,8 @@ function buildHealthSummary(services = {}, environment = 'development', phase = 
       degraded: degradedCount,
       unhealthy: unhealthyCount,
       alerts: alertCount
-    }
+    },
+    ...extra
   })
 }
 
@@ -596,21 +617,54 @@ async function getGatewayObservabilityHealth() {
   const res = await serviceGet('gateway', '/api/v1/system/observability')
   const payload = res?.data || {}
   const deps = payload?.deps && typeof payload.deps === 'object' ? payload.deps : {}
+  let catalogPayload = {}
+  let catalogAvailable = false
+
+  try {
+    const catalogRes = await serviceGet('gateway', '/api/v1/system/catalog')
+    catalogPayload = catalogRes?.data || {}
+    catalogAvailable = true
+  } catch (catalogError) {
+    console.warn('Failed to load gateway catalog, using observability registry only:', catalogError)
+  }
+
+  const registry = {
+    ...(
+      payload?.registry && typeof payload.registry === 'object'
+        ? payload.registry
+        : {}
+    ),
+    ...(
+      catalogPayload?.services && typeof catalogPayload.services === 'object'
+        ? catalogPayload.services
+        : {}
+    )
+  }
+
   const services = {
     gateway: normalizeHealthServiceEntry('gateway', 'gateway', {
       service: payload?.service || 'api-gateway',
       status: payload?.status || 'unknown',
       alerts: payload?.alerts || [],
+      port: catalogPayload?.gateway?.port || null,
+      basePath: '/api/v1/system',
+      description: '服务目录和依赖观测',
       checked_at: new Date().toISOString()
     })
   }
 
   HEALTH_TARGETS.slice(1).forEach(([serviceKey, alias]) => {
     const entry = deps[serviceKey] || {}
+    const catalogEntry = registry[serviceKey] || {}
     services[alias] = normalizeHealthServiceEntry(serviceKey, alias, {
       service: entry?.service || serviceKey,
-      version: entry?.version || '',
-      port: entry?.observed?.port || null,
+      version: entry?.version || catalogEntry?.version || '',
+      port: entry?.observed?.port || catalogEntry?.port || null,
+      url: entry?.observed?.url || catalogEntry?.url || '',
+      basePath: entry?.observed?.basePath || catalogEntry?.basePath || '',
+      description: catalogEntry?.description || entry?.detail || '',
+      latency_ms: entry?.latency_ms ?? null,
+      reachable: entry?.observed?.reachable,
       phase: entry?.phase || '',
       checked_at: payload?.checked_at || new Date().toISOString(),
       status: entry?.status || 'unknown',
@@ -625,7 +679,12 @@ async function getGatewayObservabilityHealth() {
   return buildHealthSummary(
     services,
     payload?.environment || 'development',
-    payload?.phase || ''
+    payload?.phase || '',
+    {
+      source: 'api-gateway-observability',
+      catalog_source: catalogAvailable ? 'api-gateway-catalog' : 'api-gateway-observability-registry',
+      catalog_available: catalogAvailable
+    }
   )
 }
 
@@ -654,13 +713,39 @@ function parseDecimalValue(value, fallback = 0) {
 }
 
 function normalizeQuotePayload(row = {}) {
-  const price = parseDecimalValue(row.last_done ?? row.last_price ?? row.price, 0)
+  const normalizeSessionQuote = (sessionQuote = null) => {
+    if (!sessionQuote || typeof sessionQuote !== 'object') {
+      return null
+    }
+    const sessionPrice = parseDecimalValue(sessionQuote.last ?? sessionQuote.last_done ?? sessionQuote.last_price ?? sessionQuote.price, 0)
+    const sessionPrevClose = parseDecimalValue(sessionQuote.prev_close ?? sessionQuote.prevClose, 0)
+    return {
+      ...sessionQuote,
+      price: sessionPrice,
+      last_price: sessionPrice,
+      lastPrice: sessionPrice,
+      prevClose: sessionPrevClose,
+      prev_close: sessionPrevClose,
+      high: parseDecimalValue(sessionQuote.high, 0),
+      low: parseDecimalValue(sessionQuote.low, 0),
+      volume: Number(sessionQuote.volume || 0),
+      turnover: parseDecimalValue(sessionQuote.turnover, 0),
+      timestamp: sessionQuote.timestamp || sessionQuote.updatedAt || sessionQuote.updated_at || ''
+    }
+  }
+  const price = parseDecimalValue(row.last_done ?? row.last_price ?? row.price ?? row.last, 0)
   const prevClose = parseDecimalValue(row.prev_close ?? row.prevClose, 0)
   const changePercent = parseDecimalValue(
-    row.change_rate ?? row.changePercent ?? row.change_percent,
+    row.change_rate ?? row.changePercent ?? row.change_percent ?? row.change_percentage,
     prevClose ? ((price - prevClose) / prevClose) * 100 : 0
   )
   const name = row.name_cn || row.name_en || row.name_hk || row.name || row.symbol_name || row.company_name || ''
+  const preMarketQuote = normalizeSessionQuote(row.pre_market_quote ?? row.preMarketQuote)
+  const postMarketQuote = normalizeSessionQuote(row.post_market_quote ?? row.postMarketQuote)
+  const overnightQuote = normalizeSessionQuote(row.overnight_quote ?? row.overnightQuote)
+  const timestamp = row.timestamp || row.updatedAt || row.updated_at ||
+    preMarketQuote?.timestamp || postMarketQuote?.timestamp || overnightQuote?.timestamp || ''
+  const quoteSource = row.quoteSource || row.quote_source || row.dataSource || row.source || 'longbridge-live'
 
   return {
     ...row,
@@ -672,12 +757,26 @@ function normalizeQuotePayload(row = {}) {
     prev_close: prevClose,
     changePercent,
     change_percent: changePercent,
-    change: parseDecimalValue(row.change, prevClose ? price - prevClose : 0),
+    change: parseDecimalValue(row.change ?? row.change_value, prevClose ? price - prevClose : 0),
     volume: Number(row.volume || 0),
     high: parseDecimalValue(row.high, 0),
     low: parseDecimalValue(row.low, 0),
     open: parseDecimalValue(row.open, 0),
-    currency: row.currency || ''
+    turnover: parseDecimalValue(row.turnover, 0),
+    currency: row.currency || '',
+    timestamp,
+    updatedAt: timestamp || row.updatedAt || row.updated_at || '',
+    quoteSource,
+    quote_source: quoteSource,
+    quoteSnapshotAt: timestamp || null,
+    quote_snapshot_at: timestamp || null,
+    quoteReady: Boolean(price || prevClose || timestamp),
+    preMarketQuote,
+    pre_market_quote: preMarketQuote,
+    postMarketQuote,
+    post_market_quote: postMarketQuote,
+    overnightQuote,
+    overnight_quote: overnightQuote
   }
 }
 
@@ -1169,19 +1268,8 @@ export const getApiHealth = async () => {
     console.warn('Failed to load gateway observability, falling back to direct health probes:', gatewayError)
   }
 
-  const healthTargets = [
-    ['gateway', 'gateway'],
-    ['user', 'user_center'],
-    ['market', 'market_service'],
-    ['analysis', 'analysis_service'],
-    ['strategy', 'strategy_service'],
-    ['trade', 'trade_service'],
-    ['scheduler', 'scheduler_service'],
-    ['risk', 'risk_service']
-  ]
-
   const results = await Promise.allSettled(
-    healthTargets.map(async ([service]) => ({ service, payload: await serviceGet(service, '/health') }))
+    directHealthTargets.map(async ([service]) => ({ service, payload: await serviceGet(service, '/health') }))
   )
 
   const services = {}
@@ -1189,7 +1277,7 @@ export const getApiHealth = async () => {
   let phase = ''
 
   results.forEach((result, index) => {
-    const [serviceKey, alias] = healthTargets[index]
+    const [serviceKey, alias] = directHealthTargets[index]
 
     if (result.status === 'fulfilled') {
       const payload = result.value?.payload || {}
@@ -1217,7 +1305,11 @@ export const getApiHealth = async () => {
     }
   })
 
-  return buildHealthSummary(services, environment, phase)
+  return buildHealthSummary(services, environment, phase, {
+    source: 'direct-service-health',
+    catalog_source: 'unavailable',
+    catalog_available: false
+  })
 }
 
 export const getPlatformRoles = () => serviceGet('user', '/api/v1/platform/roles')
@@ -1778,6 +1870,14 @@ export const getLatestTrendScans = async (params = {}) => {
   }
 }
 
+export const getLatestSymbolAnalysis = async (symbol) => {
+  const normalizedSymbol = String(symbol || '').trim()
+  if (!normalizedSymbol) {
+    return Promise.reject(new Error('股票代码不能为空'))
+  }
+  return serviceGet('analysis', `/api/v1/analysis/symbols/${encodeURIComponent(normalizedSymbol)}/latest`)
+}
+
 export const getAIModels = () => serviceGet('analysis', '/api/v1/analysis/models')
 export const testAIConnection = (data = {}) => servicePost('analysis', '/api/v1/analysis/test-connection', data)
 export const getRecommendations = async (params = {}) => {
@@ -1798,6 +1898,9 @@ export const refreshRecommendations = async (data = {}) => {
 }
 export const getQuantStatus = () => serviceGet('strategy', '/api/v1/strategy/quant/status')
 export const runQuantCycle = (data = {}) => servicePost('strategy', '/api/v1/strategy/quant/run', data)
+export const runWatchlistQuantStrategy = (data = {}) => servicePost('strategy', '/api/v1/strategy/quant/watchlist/run', data)
+export const getWatchlistQuantHistory = (params = {}) => serviceGet('strategy', '/api/v1/strategy/quant/watchlist/history', params)
+export const runWatchlistQuantBacktest = (data = {}) => servicePost('strategy', '/api/v1/strategy/quant/watchlist/backtest', data)
 export const getMarketHistory = async (params = {}) => {
   const res = await serviceGet('market', '/api/v1/market/history', params)
   return {

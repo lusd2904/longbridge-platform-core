@@ -218,7 +218,7 @@ def _build_stock_pool_meta(
     items: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     updated_candidates = [
-        str(item.get("updated_at") or item.get("updatedAt") or item.get("quote_snapshot_at") or item.get("quoteSnapshotAt") or "")
+        str(item.get("updated_at") or item.get("updatedAt") or "")
         for item in items
         if isinstance(item, dict)
     ]
@@ -226,11 +226,11 @@ def _build_stock_pool_meta(
     return {
         "readModel": "stock-pool",
         "defaultMode": "database",
-        "dataSource": "snapshot",
+        "dataSource": "market_universe",
         "snapshotAt": snapshot_at,
         "sources": {
             "universe": "market_universe",
-            "quotes": "quote_snapshots",
+            "quotes": "longbridge-live",
         },
         "market": str(market or "").strip().upper() or "ALL",
         "query": {
@@ -1647,6 +1647,48 @@ def _extract_live_source(response: Any, fallback: str = "longbridge-live") -> st
     return fallback
 
 
+def _first_live_quote(payload: Any, symbol: str) -> Optional[Dict[str, Any]]:
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+    rows = payload if isinstance(payload, list) else [payload] if isinstance(payload, dict) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_symbol = HistoricalMarketDataService.normalize_symbol(row.get("symbol") or normalized_symbol)
+        if row_symbol == normalized_symbol:
+            return row
+    return rows[0] if rows and isinstance(rows[0], dict) else None
+
+
+async def _load_symbol_live_quote(user_id: int, symbol: str) -> Optional[Dict[str, Any]]:
+    normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+    try:
+        response = await _load_longbridge_quotes(user_id=int(user_id), symbols=[normalized_symbol])
+        payload = _extract_live_payload(response, [])
+        quote = _first_live_quote(to_plain(payload), normalized_symbol)
+        if not quote:
+            return None
+        source = _extract_live_source(response, "longbridge-live")
+        timestamp = (
+            quote.get("timestamp")
+            or quote.get("updated_at")
+            or quote.get("updatedAt")
+            or (quote.get("pre_market_quote") or {}).get("timestamp")
+            or (quote.get("post_market_quote") or {}).get("timestamp")
+            or (quote.get("overnight_quote") or {}).get("timestamp")
+        )
+        return {
+            **quote,
+            "symbol": normalized_symbol,
+            "source": source,
+            "dataSource": source,
+            "timestamp": timestamp,
+            "snapshotAt": timestamp,
+        }
+    except Exception as exc:
+        LOGGER.warning("Longbridge live quote failed for symbol overview: symbol=%s error=%s", normalized_symbol, exc)
+        return None
+
+
 def _cached_content_payload(
     *,
     symbol: str,
@@ -1743,10 +1785,12 @@ def _build_symbol_overview_meta(
     snapshots = overview.get("snapshots") if isinstance(overview.get("snapshots"), dict) else {}
     daily_snapshot = snapshots.get("daily") if isinstance(snapshots.get("daily"), dict) else {}
     history_summary = history.get("summary") if isinstance(history.get("summary"), dict) else {}
+    quote_source = str((quote_snapshot or {}).get("dataSource") or (quote_snapshot or {}).get("source") or "longbridge-live")
     snapshot_candidates = [
         str(daily_snapshot.get("snapshotDate") or ""),
         str(history_summary.get("latestDate") or ""),
         str((quote_snapshot or {}).get("snapshotAt") or ""),
+        str((quote_snapshot or {}).get("timestamp") or ""),
         str(content_cache.get("updatedAt") or ""),
         str((latest_ai_payload or {}).get("analysis_time") or (latest_ai_payload or {}).get("created_at") or ""),
         str((latest_trend_scan or {}).get("analysisTime") or ""),
@@ -1769,7 +1813,7 @@ def _build_symbol_overview_meta(
             "fundamentals": "market_universe",
             "indicators": "indicator_snapshots",
             "history": "historical_market_data",
-            "quote": "quote_snapshots",
+            "quote": quote_source,
             "marketInsight": "market_insight_snapshots",
             "marketScan": "daily_market_ai_scans",
             "trendScan": "daily_symbol_trend_ai_scans",
@@ -1778,6 +1822,7 @@ def _build_symbol_overview_meta(
         },
         "historyCount": len(history_items),
         "hasQuoteSnapshot": bool((quote_snapshot or {}).get("snapshotAt") or (quote_snapshot or {}).get("price")),
+        "hasRealtimeQuote": bool(quote_snapshot),
         "hasAiAnalysis": bool(latest_ai_payload),
         "hasTrendScan": bool(latest_trend_scan),
         "contentCount": int(content_cache.get("totalCount") or 0),
@@ -2526,7 +2571,7 @@ async def symbol_overview(
         latest_trend_scan = None
         market_insight = None
         market_scan = None
-        quote_snapshot = QuoteSnapshotService.get_latest(normalized_symbol, max_age_minutes=20)
+        quote_snapshot = await _load_symbol_live_quote(user_id, normalized_symbol)
         content_cache = _empty_content_cache_bundle()
         deferred_sections = [
             "history",
@@ -2577,7 +2622,7 @@ async def symbol_overview(
     }
     market_scans = {item["market"]: item for item in DailyMarketScanService.get_latest_scans()}
     latest_trend_scan = DailySymbolTrendScanService.get_latest_for_symbol(normalized_symbol)
-    quote_snapshot = QuoteSnapshotService.get_latest(normalized_symbol, max_age_minutes=20)
+    quote_snapshot = await _load_symbol_live_quote(user_id, normalized_symbol)
     content_cache = _content_cache_bundle(normalized_symbol)
 
     payload = {

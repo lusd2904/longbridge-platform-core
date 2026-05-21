@@ -33,6 +33,7 @@ from apps.intelligence.module_shared import (
     DailySymbolTrendScanService,
     FinanceBriefingService,
     HistoricalMarketDataService,
+    QuantTradingService,
     RecommendationService,
     bootstrap_runtime,
     build_dependency_status,
@@ -404,6 +405,152 @@ def _normalize_watchlist_sidecar_result(raw_payload: object, *, run_id: str, sce
         degraded=bool(data.get("degraded", payload.get("degraded", False))),
         error=data.get("error", payload.get("error")),
     )
+
+
+def _safe_watchlist_float(value: object, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number == number else default
+
+
+def _safe_watchlist_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _watchlist_text_contains_buy_signal(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return any(token in text for token in ("buy", "long", "看多", "买入", "机会", "增持", "positive", "bullish", "success"))
+
+
+def _normalize_watchlist_opportunity(raw_item: object, target_map: Dict[str, dict]) -> Optional[dict]:
+    if isinstance(raw_item, str):
+        symbol = HistoricalMarketDataService.normalize_symbol(raw_item)
+        item = {"symbol": symbol}
+    elif isinstance(raw_item, dict):
+        item = dict(raw_item)
+        symbol = HistoricalMarketDataService.normalize_symbol(
+            item.get("symbol") or item.get("ticker") or item.get("code")
+        )
+    else:
+        return None
+    if not symbol:
+        return None
+
+    target = target_map.get(symbol) or {}
+    signal_text = item.get("signal") or item.get("side") or item.get("action") or item.get("decision") or item.get("recommendation")
+    if signal_text and not _watchlist_text_contains_buy_signal(signal_text):
+        return None
+    if not signal_text and not _watchlist_text_contains_buy_signal(item.get("summary") or item.get("reason") or item.get("title")):
+        return None
+
+    price = _safe_watchlist_float(
+        item.get("price")
+        or item.get("lastPrice")
+        or item.get("latestClose")
+        or item.get("closePrice")
+        or target.get("price")
+        or target.get("lastPrice")
+        or target.get("latestClose")
+    )
+    if price <= 0:
+        trend_scan = DailySymbolTrendScanService.get_latest_for_symbol(symbol)
+        indicators = trend_scan.get("indicators") if isinstance(trend_scan, dict) else {}
+        price = _safe_watchlist_float(
+            (indicators or {}).get("latestClose")
+            or (indicators or {}).get("closePrice")
+            or (trend_scan or {}).get("latestClose")
+        )
+
+    confidence = _safe_watchlist_int(
+        item.get("confidence")
+        or item.get("score")
+        or item.get("weight")
+        or target.get("confidence")
+        or target.get("score"),
+        0,
+    )
+    if confidence <= 1 and _safe_watchlist_float(item.get("confidence"), 0) > 0:
+        confidence = int(_safe_watchlist_float(item.get("confidence"), 0) * 100)
+
+    return {
+        "symbol": symbol,
+        "name": item.get("name") or target.get("name") or symbol,
+        "market": item.get("market") or target.get("market") or detect_market(symbol),
+        "price": price,
+        "confidence": confidence,
+        "reason": item.get("reason") or item.get("summary") or item.get("advice") or "自选复核识别为机会股",
+        "source": item.get("source") or "watchlist-review",
+    }
+
+
+def _extract_watchlist_opportunities(result: dict, sidecar_payload: dict) -> List[dict]:
+    targets = sidecar_payload.get("targets") if isinstance(sidecar_payload.get("targets"), list) else []
+    target_map = {
+        HistoricalMarketDataService.normalize_symbol(item.get("symbol") if isinstance(item, dict) else item): item
+        for item in targets
+        if HistoricalMarketDataService.normalize_symbol(item.get("symbol") if isinstance(item, dict) else item)
+    }
+    raw_candidates: List[object] = []
+    for key in ("opportunities", "opportunityStocks", "buyCandidates", "signals", "reviewAdvice"):
+        value = result.get(key)
+        if isinstance(value, list):
+            raw_candidates.extend(value)
+    opportunities: List[dict] = []
+    seen: set[str] = set()
+    for raw_item in raw_candidates:
+        item = _normalize_watchlist_opportunity(raw_item, target_map)
+        if not item or item["symbol"] in seen:
+            continue
+        seen.add(item["symbol"])
+        opportunities.append(item)
+    return opportunities
+
+
+def _maybe_execute_watchlist_auto_buy(result: dict, sidecar_payload: dict) -> dict:
+    auto_buy = sidecar_payload.get("autoBuy") if isinstance(sidecar_payload.get("autoBuy"), dict) else {}
+    enabled = str(auto_buy.get("enabled") or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    if not enabled or bool(sidecar_payload.get("dryRun", True)):
+        result["autoTrade"] = {"enabled": enabled, "executed": False, "reason": "dry-run-or-disabled"}
+        return result
+
+    opportunities = _extract_watchlist_opportunities(result, sidecar_payload)
+    if not opportunities:
+        result["autoTrade"] = {"enabled": True, "executed": False, "reason": "no-opportunities", "signals": []}
+        return result
+
+    try:
+        execution = QuantTradingService.execute_watchlist_opportunities(
+            user_id=int(sidecar_payload.get("userId") or sidecar_payload.get("user_id") or 1),
+            opportunities=opportunities,
+            source=str(sidecar_payload.get("scene") or "watchlist-review"),
+            max_symbols=_safe_watchlist_int(auto_buy.get("maxSymbols"), 2),
+            max_amount=_safe_watchlist_float(auto_buy.get("maxAmount"), 2000),
+            max_position_ratio=_safe_watchlist_float(auto_buy.get("maxPositionRatio"), 0.08),
+            min_confidence=_safe_watchlist_int(auto_buy.get("minConfidence"), 72),
+        )
+        result["autoTrade"] = {"enabled": True, **execution}
+        result["evidence"] = [
+            *(_coerce_watchlist_list(result.get("evidence"))),
+            {
+                "type": "auto-trade",
+                "submittedCount": execution.get("submittedCount"),
+                "positionControl": execution.get("positionControl"),
+            },
+        ]
+    except Exception as exc:
+        result["autoTrade"] = {"enabled": True, "executed": False, "error": str(exc)[:500]}
+        result["riskFlags"] = [
+            *(_coerce_watchlist_list(result.get("riskFlags"))),
+            {"title": "自动买入失败", "message": str(exc)[:300]},
+        ]
+    return result
 
 
 def _decode_sidecar_error_body(exc: urllib_error.HTTPError) -> str:
@@ -960,6 +1107,8 @@ def _execute_watchlist_review(
             degraded=True,
             error=sidecar_error,
         )
+
+    result = _maybe_execute_watchlist_auto_buy(result, sidecar_payload)
 
     _record_watchlist_step(
         db_run_id=db_run_id,
@@ -1923,6 +2072,8 @@ async def watchlist_review(
         "triggerSource": trigger_source,
         "dryRun": dry_run,
     }
+    if isinstance(payload.get("autoBuy"), dict):
+        sidecar_payload["autoBuy"] = payload["autoBuy"]
 
     if not targets:
         return _build_watchlist_review_skipped_result(

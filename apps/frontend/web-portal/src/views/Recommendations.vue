@@ -229,7 +229,7 @@ import { BarChart, PieChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { getRecommendations, refreshRecommendations } from '../api/analysis.js'
-import { addStockToPool, getQuoteSnapshots } from '../api/market.js'
+import { addStockToPool, getStockQuotes } from '../api/market.js'
 import { formatCurrency, formatDecimal, formatPercent } from '../utils/formatters.js'
 import { buildQuoteSnapshotMap, mergeQuoteSnapshots, summarizeQuoteSnapshotCoverage } from '../utils/quoteSnapshot.js'
 import { buildRecommendationReadModelSummary, formatQuoteCoverageLabel } from '../utils/readModelSource.js'
@@ -294,7 +294,7 @@ const summaryParagraphs = computed(() => getReadableParagraphs(
 
 const quoteSnapshotCoverage = computed(() => {
   const coverage = summarizeQuoteSnapshotCoverage(recommendationData.value?.items || [])
-  return formatQuoteCoverageLabel(coverage, { prefix: '报价快照', emptyLabel: '等待报价快照' })
+  return formatQuoteCoverageLabel(coverage, { prefix: '长桥实时', emptyLabel: '等待长桥实时' })
 })
 const recommendationQuoteCoverage = computed(() => summarizeQuoteSnapshotCoverage(recommendationData.value?.items || []))
 const recommendationReadModelSummary = computed(() => buildRecommendationReadModelSummary(
@@ -303,8 +303,8 @@ const recommendationReadModelSummary = computed(() => buildRecommendationReadMod
     count: recommendationData.value?.candidate_count || items.value.length,
     profileLabel: recommendationData.value.profile_label || profileLabel.value,
     quoteCoverageLabel: recommendationQuoteCoverage.value.readyCount
-      ? `报价快照 ${recommendationQuoteCoverage.value.readyCount}/${recommendationQuoteCoverage.value.totalCount || 0}`
-      : '报价快照待补齐'
+      ? `长桥实时 ${recommendationQuoteCoverage.value.readyCount}/${recommendationQuoteCoverage.value.totalCount || 0}`
+      : '长桥实时待补齐'
   }
 ))
 const recommendationReadModelStatus = computed(() => recommendationReadModelSummary.value.statusText)
@@ -573,14 +573,14 @@ const loadRecommendations = async (forceRefresh = false) => {
       items: normalizedItems
     }
     try {
-      const quoteRes = await getQuoteSnapshots(normalizedItems.map((item) => item.symbol), { maxAgeMinutes: 20 })
+      const quoteRes = await getStockQuotes(normalizedItems.map((item) => item.symbol))
       const quoteMap = buildQuoteSnapshotMap(quoteRes?.data || [])
       recommendationData.value = {
         ...recommendationData.value,
         items: mergeQuoteSnapshots(normalizedItems, quoteMap)
       }
     } catch (quoteError) {
-      console.warn('推荐报价快照加载失败:', quoteError)
+      console.warn('推荐长桥实时行情加载失败:', quoteError)
     }
   } catch (error) {
     const message = String(error?.message || '')

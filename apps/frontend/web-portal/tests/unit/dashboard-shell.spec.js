@@ -63,16 +63,39 @@ vi.mock('../../src/api/platform.js', () => ({
           status: 'degraded',
           status_text: '部分受限',
           service: 'trade-service',
+          port: 8105,
+          basePath: '/api/v1/trade',
           alert_count: 1,
           details: {
             alerts: [
               { code: 'trade-outbox-backlog', level: 'warning', message: '交易 outbox 存在待发布积压', action: '检查 outbox repair' }
             ]
           }
+        },
+        sentiment_service: {
+          status: 'healthy',
+          status_text: '运行正常',
+          service: 'sentiment-service',
+          port: 8106,
+          basePath: '/api/v1/sentiment',
+          alert_count: 0,
+          details: {}
+        },
+        agno_sidecar: {
+          status: 'healthy',
+          status_text: '运行正常',
+          service: 'agno-sidecar',
+          port: 3200,
+          basePath: '/api/v1/agent/watchlist-review',
+          alert_count: 0,
+          details: {}
         }
       },
-      summary: { total: 2, healthy: 1, degraded: 1, unhealthy: 0, alerts: 1 },
-      environment: 'development'
+      summary: { total: 4, healthy: 3, degraded: 1, unhealthy: 0, alerts: 1 },
+      environment: 'development',
+      source: 'api-gateway-observability',
+      catalog_source: 'api-gateway-catalog',
+      catalog_available: true
     }
   }))
 }))
@@ -92,6 +115,7 @@ vi.mock('../../src/utils/api.js', async () => {
     getFinanceBriefings: vi.fn(async () => ({ data: [], meta: {} })),
     getRecommendations: vi.fn(async () => ({ data: { items: [{ symbol: 'AAPL.US', market: 'US' }], summary: 'ok' }, meta: {} })),
     getQuoteSnapshots: vi.fn(async () => ({ data: [] })),
+    getStockQuotes: vi.fn(async () => ({ data: [] })),
     getDashboardMarketInsights: vi.fn(async () => ({ success: true, data: [], meta: {} }))
   }
 })
@@ -129,6 +153,11 @@ describe('Dashboard shell', () => {
     expect(wrapper.text()).toContain('交易服务')
     expect(wrapper.text()).toContain('部分受限')
     expect(wrapper.text()).toContain('1 条告警')
+    expect(wrapper.text()).toContain('Gateway 观测 · Catalog 已同步')
+    expect(wrapper.text()).toContain('舆情服务')
+    expect(wrapper.text()).toContain('/api/v1/sentiment')
+    expect(wrapper.text()).toContain('Agno Sidecar')
+    expect(wrapper.text()).toContain(':3200')
     expect(wrapper.text()).not.toContain('常用入口')
     expect(wrapper.text()).not.toContain('运营告警')
     expect(wrapper.text()).not.toContain('交易执行')

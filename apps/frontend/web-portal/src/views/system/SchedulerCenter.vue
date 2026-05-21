@@ -63,6 +63,65 @@
               <el-input-number v-model="task.batchSize" :min="0" :step="10" @change="saveTask(task)" />
             </el-form-item>
           </el-form>
+
+          <div
+            v-if="isAgentReviewTask(task)"
+            class="auto-buy-settings"
+            :class="{ 'is-enabled': task.settings?.autoBuyEnabled }"
+          >
+            <div class="auto-buy-head">
+              <div>
+                <span class="agent-review-label">机会股自动买入</span>
+                <strong>{{ task.settings?.autoBuyEnabled ? '已开启' : '默认关闭' }}</strong>
+              </div>
+              <el-switch v-model="task.settings.autoBuyEnabled" @change="saveTask(task)" />
+            </div>
+            <p>
+              开启后，任务扫描出明确机会股时会尝试自动下单，并按以下参数控制买入数量、预算和单票仓位。
+            </p>
+            <div class="auto-buy-grid">
+              <label>
+                <span>最多标的</span>
+                <el-input-number
+                  v-model="task.settings.autoBuyMaxSymbols"
+                  :min="1"
+                  :max="10"
+                  :step="1"
+                  @change="saveTask(task)"
+                />
+              </label>
+              <label>
+                <span>单标预算</span>
+                <el-input-number
+                  v-model="task.settings.autoBuyMaxAmount"
+                  :min="0"
+                  :step="500"
+                  @change="saveTask(task)"
+                />
+              </label>
+              <label>
+                <span>单票仓位</span>
+                <el-input-number
+                  v-model="task.settings.autoBuyMaxPositionRatio"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  :precision="2"
+                  @change="saveTask(task)"
+                />
+              </label>
+              <label>
+                <span>最低置信</span>
+                <el-input-number
+                  v-model="task.settings.autoBuyMinConfidence"
+                  :min="0"
+                  :max="100"
+                  :step="1"
+                  @change="saveTask(task)"
+                />
+              </label>
+            </div>
+          </div>
         </div>
 
         <div class="task-status">
@@ -300,7 +359,7 @@ const acknowledgingAction = ref('')
 const routeQueryHydrated = ref(false)
 const createReviewActionForm = () => ({
   action: 'acknowledged',
-  newStatus: 'succeeded',
+  newStatus: '',
   reason: '',
   reviewNote: ''
 })
@@ -319,10 +378,11 @@ const AGENT_REVIEW_ACTIONS = [
   { key: 'needs_review', label: '需继续复核', doneLabel: '需继续复核', message: '已标记为需继续复核' },
   { key: 'dismissed', label: '忽略', doneLabel: '已忽略', message: '已忽略该复核结果' }
 ]
+const REVIEW_STATUS_UNCHANGED_OPTION = { value: '', label: '不改运行状态' }
 const AGENT_REVIEW_STATUS_OPTIONS = {
-  acknowledged: [{ value: 'succeeded', label: '运行成功' }],
-  needs_review: [{ value: 'failed', label: '运行失败' }],
-  dismissed: [{ value: 'cancelled', label: '已取消' }]
+  acknowledged: [REVIEW_STATUS_UNCHANGED_OPTION, { value: 'succeeded', label: '运行成功' }],
+  needs_review: [REVIEW_STATUS_UNCHANGED_OPTION, { value: 'failed', label: '运行失败' }],
+  dismissed: [REVIEW_STATUS_UNCHANGED_OPTION, { value: 'cancelled', label: '已取消' }]
 }
 const AGENT_REVIEW_TASK_KEYS = new Set(Object.keys(AGENT_REVIEW_TASK_SCENES))
 
@@ -335,6 +395,41 @@ const resolveAgentReviewTaskLabel = (scene) => {
   return matchedTask?.taskName || AGENT_REVIEW_SCENE_LABELS[scene] || 'Agent 复核'
 }
 const isAgentReviewTask = (task) => AGENT_REVIEW_TASK_KEYS.has(String(task?.taskKey || '').trim())
+const AUTO_BUY_DEFAULT_SETTINGS = {
+  autoBuyEnabled: false,
+  autoBuyMaxSymbols: 2,
+  autoBuyMaxAmount: 2000,
+  autoBuyMaxPositionRatio: 0.08,
+  autoBuyMinConfidence: 72
+}
+const normalizeAutoBuyBool = (value, fallback = false) => {
+  if (value === null || value === undefined || value === '') return fallback
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value > 0
+  const normalized = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) return false
+  return fallback
+}
+const normalizeAutoBuyNumber = (value, fallback, min, max) => {
+  const number = Number(value)
+  const safeNumber = Number.isFinite(number) ? number : fallback
+  return Math.min(Math.max(safeNumber, min), max)
+}
+const normalizeAutoBuySettings = (settings = {}) => ({
+  ...settings,
+  autoBuyEnabled: normalizeAutoBuyBool(settings.autoBuyEnabled, AUTO_BUY_DEFAULT_SETTINGS.autoBuyEnabled),
+  autoBuyMaxSymbols: Math.round(normalizeAutoBuyNumber(settings.autoBuyMaxSymbols, AUTO_BUY_DEFAULT_SETTINGS.autoBuyMaxSymbols, 1, 10)),
+  autoBuyMaxAmount: normalizeAutoBuyNumber(settings.autoBuyMaxAmount, AUTO_BUY_DEFAULT_SETTINGS.autoBuyMaxAmount, 0, 100000000),
+  autoBuyMaxPositionRatio: normalizeAutoBuyNumber(settings.autoBuyMaxPositionRatio, AUTO_BUY_DEFAULT_SETTINGS.autoBuyMaxPositionRatio, 0, 1),
+  autoBuyMinConfidence: Math.round(normalizeAutoBuyNumber(settings.autoBuyMinConfidence, AUTO_BUY_DEFAULT_SETTINGS.autoBuyMinConfidence, 0, 100))
+})
+const normalizeTaskPolicy = (task = {}) => ({
+  ...task,
+  settings: isAgentReviewTask(task)
+    ? normalizeAutoBuySettings(task.settings && typeof task.settings === 'object' ? task.settings : {})
+    : (task.settings && typeof task.settings === 'object' ? task.settings : {})
+})
 const taskStateLabel = (state) => ({
   idle: '空闲',
   running: '运行中',
@@ -665,7 +760,7 @@ const loadTasks = async () => {
   loading.value = true
   try {
     const res = await getPlatformTasks()
-    tasks.value = Array.isArray(res?.data) ? res.data : []
+    tasks.value = (Array.isArray(res?.data) ? res.data : []).map(normalizeTaskPolicy)
     await loadAgentRunSummaries(tasks.value)
   } catch (error) {
     console.error('加载任务失败:', error)
@@ -677,6 +772,10 @@ const loadTasks = async () => {
 
 const saveTask = async (task) => {
   try {
+    const normalizedTask = normalizeTaskPolicy(task)
+    if (isAgentReviewTask(task)) {
+      task.settings = normalizedTask.settings
+    }
     await updatePlatformTask(task.taskKey, {
       enabled: task.enabled,
       intervalSeconds: task.intervalSeconds,
@@ -685,8 +784,16 @@ const saveTask = async (task) => {
       maxRequestsPerMinute: task.maxRequestsPerMinute,
       batchSize: task.batchSize,
       description: task.description,
-      settings: task.settings || {}
+      settings: normalizedTask.settings || {}
     })
+    const index = tasks.value.findIndex((item) => item.taskKey === task.taskKey)
+    if (index >= 0) {
+      tasks.value[index] = {
+        ...tasks.value[index],
+        ...normalizedTask,
+        settings: normalizedTask.settings || {}
+      }
+    }
     ElMessage.success(`${task.taskName} 已更新`)
   } catch (error) {
     console.error('更新任务失败:', error)
@@ -1088,6 +1195,68 @@ watch(
   margin-bottom: 8px;
 }
 
+.auto-buy-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border-soft));
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-soft));
+}
+
+.auto-buy-settings.is-enabled {
+  border-color: color-mix(in srgb, var(--success) 32%, var(--border-soft));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface-soft));
+}
+
+.auto-buy-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+
+  > div {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  strong {
+    color: var(--text-primary);
+    font-size: 14px;
+  }
+}
+
+.auto-buy-settings p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.auto-buy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  span {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  :deep(.el-input-number) {
+    width: 100%;
+  }
+}
+
 .agent-run-drawer :deep(.el-drawer) {
   background: var(--surface-strong);
 }
@@ -1309,6 +1478,12 @@ watch(
 @media (max-width: 1100px) {
   .overview-grid,
   .task-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .auto-buy-grid {
     grid-template-columns: 1fr;
   }
 }

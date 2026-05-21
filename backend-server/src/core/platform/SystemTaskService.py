@@ -130,7 +130,14 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "每天盘前生成自选股 AI 复核建议，仅产出分析建议，不执行任何交易。"
+            "settings": {
+                "autoBuyEnabled": False,
+                "autoBuyMaxSymbols": 2,
+                "autoBuyMaxAmount": 2000,
+                "autoBuyMaxPositionRatio": 0.08,
+                "autoBuyMinConfidence": 72
+            },
+            "description": "每天盘前生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。"
         },
         "watchlist_post_close_review": {
             "taskName": "自选股盘后复核",
@@ -145,7 +152,14 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "每天盘后生成自选股 AI 复核建议，仅产出分析建议，不执行任何交易。"
+            "settings": {
+                "autoBuyEnabled": False,
+                "autoBuyMaxSymbols": 2,
+                "autoBuyMaxAmount": 2000,
+                "autoBuyMaxPositionRatio": 0.08,
+                "autoBuyMinConfidence": 72
+            },
+            "description": "每天盘后生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。"
         },
         "daily_symbol_trend_ai_scan": {
             "taskName": "逐股 AI 趋势扫描",
@@ -283,7 +297,7 @@ class SystemTaskService:
             "description": "按用户规则监控持仓与告警。"
         },
         "quant_trading": {
-            "taskName": "AI量化交易",
+            "taskName": "自选池量化交易",
             "category": "user",
             "scheduleType": "interval",
             "enabled": True,
@@ -295,7 +309,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "user",
             "singleRun": False,
-            "description": "用户侧 AI 量化分析与自动执行。"
+            "description": "只对用户自选股池做多因子策略扫描；自动执行仍受量化开关、账户权限、仓位和长桥模拟账户约束。"
         },
         "bootstrap_market_history_2024": {
             "taskName": "2024起全量历史回补",
@@ -383,7 +397,7 @@ class SystemTaskService:
                     1 if policy["allowAdminToggle"] else 0,
                     policy["userScope"],
                     1 if policy["singleRun"] else 0,
-                    json.dumps({}, ensure_ascii=False),
+                    json.dumps(policy.get("settings", {}) or {}, ensure_ascii=False),
                     policy["description"]
                 )
             )
@@ -408,6 +422,8 @@ class SystemTaskService:
         if not row and not base:
             return {}
 
+        base_settings = base.get("settings") if isinstance(base.get("settings"), dict) else {}
+        stored_settings = cls._json_load(row.get("settings_json"))
         merged = {
             "taskKey": row.get("task_key") or task_key,
             "taskName": row.get("task_name") or base.get("taskName") or task_key,
@@ -423,7 +439,10 @@ class SystemTaskService:
             "userScope": row.get("user_scope") or base.get("userScope") or "system",
             "singleRun": bool(row.get("single_run") if row else base.get("singleRun", False)),
             "lastCursor": row.get("last_cursor"),
-            "settings": cls._json_load(row.get("settings_json")),
+            "settings": {
+                **base_settings,
+                **stored_settings,
+            },
             "description": row.get("description") or base.get("description") or ""
         }
         return merged

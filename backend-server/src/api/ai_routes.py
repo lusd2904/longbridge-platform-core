@@ -677,15 +677,16 @@ def run_quant_cycle():
         payload = request.get_json(silent=True) or {}
         account_id = payload.get('account_id')
         execute = payload.get('execute')
-        result = QuantTradingService.run_cycle(
+        execute_flag = None if execute is None else str(execute).strip().lower() in {'1', 'true', 'yes', 'on'}
+        result = QuantTradingService.run_watchlist_strategy_cycle(
             user_id=getattr(request, 'user_id', 1),
             account_id=int(account_id) if account_id else None,
             source='manual',
-            execute=bool(execute) if execute is not None else None
+            execute=execute_flag
         )
         return jsonify({
             "success": True,
-            "message": "AI量化交易分析已完成",
+            "message": "自选池量化策略扫描已完成",
             "data": result
         })
     except ValueError as exc:

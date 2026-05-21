@@ -52,12 +52,13 @@ case "$MODULE_NAME" in
         if [ -d "$ROOT_DIR/apps/market/sentiment-service/src" ] && is_true "${REF_SENTIMENT_ENABLED:-false}"; then
             start_service "sentiment-service" "apps/market/sentiment-service" "${REF_SENTIMENT_SERVICE_PORT:-8106}"
         else
-            echo "sentiment-service 已跳过（未启用或仍为占位）"
+            echo "sentiment-service 已跳过（未启用）"
         fi
         ;;
     intelligence)
         start_service "analysis-service" "apps/intelligence/analysis-service" "${REF_ANALYSIS_SERVICE_PORT:-8103}"
         start_service "strategy-service" "apps/intelligence/strategy-service" "${REF_STRATEGY_SERVICE_PORT:-8104}"
+        start_service "agno-sidecar" "apps/intelligence/agno-sidecar" "${REF_AGNO_SIDECAR_PORT:-3200}"
         ;;
     trading)
         start_service "trade-service" "apps/trading/trade-service" "${REF_TRADE_SERVICE_PORT:-8105}"

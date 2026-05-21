@@ -12,6 +12,9 @@ const messageMocks = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn()
 }))
+const messageBoxMocks = vi.hoisted(() => ({
+  confirm: vi.fn(async () => undefined)
+}))
 
 const marketApiMocks = vi.hoisted(() => ({
   addStockToPool: vi.fn(async () => ({})),
@@ -161,6 +164,7 @@ const marketApiMocks = vi.hoisted(() => ({
     }
   })),
   getQuoteSnapshots: vi.fn(async () => ({ data: [] })),
+  getStockQuotes: vi.fn(async () => ({ data: [] })),
   getLongbridgeAnnouncements: vi.fn(async () => ({ data: { payload: [] } })),
   getLongbridgeDepth: vi.fn(async () => ({ data: { payload: { bids: [], asks: [] } } })),
   getLongbridgeNews: vi.fn(async () => ({ data: { payload: [] } })),
@@ -238,6 +242,10 @@ vi.mock('element-plus', async () => {
       ...(actual.ElMessage || {}),
       success: messageMocks.success,
       error: messageMocks.error
+    },
+    ElMessageBox: {
+      ...(actual.ElMessageBox || {}),
+      confirm: messageBoxMocks.confirm
     }
   }
 })
@@ -327,7 +335,7 @@ const riskApiMocks = vi.hoisted(() => ({
   cancelTakeProfit: vi.fn(async () => ({}))
 }))
 
-vi.mock('../../src/api/analysis.js', () => ({
+const analysisApiMocks = vi.hoisted(() => ({
   getRecommendations: vi.fn(async () => ({
     data: {
       generated_at: '2026-03-27T08:00:00Z',
@@ -435,6 +443,63 @@ vi.mock('../../src/api/analysis.js', () => ({
       ]
     }
   })),
+  getQuantStatus: vi.fn(async () => ({
+    data: {
+      enabled: false,
+      autoExecute: false,
+      signals: []
+    }
+  })),
+  getWatchlistQuantHistory: vi.fn(async () => ({
+    data: {
+      items: [
+        {
+          cycleId: 'qt-test',
+          strategyProfile: 'balanced',
+          targetCount: 1,
+          evaluatedCount: 1,
+          opportunityCount: 1,
+          executed: false,
+          createdAt: '2026-03-27T09:20:00Z',
+          items: [
+            { symbol: 'AAPL.US', confidence: 82, isOpportunity: true }
+          ]
+        }
+      ],
+      total: 1
+    }
+  })),
+  runWatchlistQuantBacktest: vi.fn(async () => ({
+    data: {
+      symbol: 'AAPL.US',
+      status: 'completed',
+      summary: {
+        signalCount: 2,
+        hitRate: 50,
+        avgForward5dReturn: 1.2,
+        latestConfidence: 78
+      },
+      points: [
+        {
+          tradeDate: '2026-03-20',
+          confidence: 78,
+          signal: 'BUY',
+          forward5dReturn: 1.2,
+          tags: ['站上20日线']
+        }
+      ]
+    }
+  })),
+  runWatchlistQuantStrategy: vi.fn(async () => ({
+    data: {
+      targetCount: 1,
+      evaluatedCount: 1,
+      opportunityCount: 0,
+      candidates: [],
+      opportunities: [],
+      autoTrade: { enabled: false, executed: false, reason: 'not-requested' }
+    }
+  })),
   runStrategyMonitor: vi.fn(async () => ({ data: { alertCount: 0 } })),
   getFinanceBriefings: vi.fn(async () => ({
     data: [
@@ -454,6 +519,8 @@ vi.mock('../../src/api/analysis.js', () => ({
     }
   }))
 }))
+
+vi.mock('../../src/api/analysis.js', () => analysisApiMocks)
 
 vi.mock('../../src/api/market.js', () => marketApiMocks)
 
@@ -588,6 +655,38 @@ describe('market shell pages', () => {
     expect(wrapper.find('page-hero-stub').exists()).toBe(true)
     expect(wrapper.find('metric-strip-stub').exists()).toBe(true)
     expect(wrapper.findAll('section-card-header-stub').length).toBeGreaterThanOrEqual(3)
+    expect(wrapper.text()).toContain('扫描历史')
+    expect(wrapper.text()).toContain('策略复盘')
+  })
+
+  it('maps strategy watchlist quant actions to scan and backtest APIs', async () => {
+    analysisApiMocks.runWatchlistQuantStrategy.mockClear()
+    analysisApiMocks.runWatchlistQuantBacktest.mockClear()
+    const wrapper = shallowMount(Strategy, mountOptions)
+    await flushPromises()
+
+    await wrapper.vm.runWatchlistQuant(false)
+    await flushPromises()
+
+    expect(analysisApiMocks.runWatchlistQuantStrategy).toHaveBeenCalledWith(expect.objectContaining({
+      execute: false,
+      profile: 'balanced',
+      minConfidence: 72,
+      maxAmount: 2000,
+      maxSymbols: 2,
+      source: 'strategy-page-scan'
+    }))
+
+    wrapper.vm.watchlistBacktestControls.symbol = 'msft.us'
+    await wrapper.vm.runWatchlistBacktest()
+    await flushPromises()
+
+    expect(analysisApiMocks.runWatchlistQuantBacktest).toHaveBeenCalledWith(expect.objectContaining({
+      symbol: 'MSFT.US',
+      profile: 'balanced',
+      lookbackDays: 90,
+      minConfidence: 72
+    }))
   })
 
   it('uses shared page shell components in risk management view', async () => {

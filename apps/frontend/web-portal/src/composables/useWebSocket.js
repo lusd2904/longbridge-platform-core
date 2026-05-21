@@ -263,7 +263,8 @@ function normalizeQuoteRowForState(row = {}, previousQuote = {}, options = {}) {
   )
   const prevClose = resolvePrevClose(row, previousQuote)
   const changePercent = resolveChangePercent(row, previousQuote, lastPrice, prevClose)
-  const quoteMode = isPushSource ? 'push' : 'snapshot'
+  const quoteMode = isPushSource ? 'push' : 'pull'
+  const quoteSource = isPushSource ? 'longbridge-push' : 'longbridge-subscribe-snapshot'
 
   return {
     ...previousQuote,
@@ -285,8 +286,8 @@ function normalizeQuoteRowForState(row = {}, previousQuote = {}, options = {}) {
     timestamp,
     quoteMode,
     quote_mode: quoteMode,
-    quoteSource: isPushSource ? 'longbridge-push' : 'quote-snapshot',
-    quote_source: isPushSource ? 'longbridge-push' : 'quote-snapshot',
+    quoteSource,
+    quote_source: quoteSource,
     isRealtime: isPushSource,
     receivedAt: isPushSource ? timestamp : (previousQuote.receivedAt || timestamp),
     pushReceivedAt: isPushSource ? timestamp : (previousQuote.pushReceivedAt || null),

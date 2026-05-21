@@ -17,7 +17,7 @@ def _create_submit_order_saga(
     action: str,
     order_type: str,
 ) -> str:
-    return command_support._create_saga(
+    saga_id = command_support._create_saga(
         user=user,
         account_id=ctx.account_id,
         saga_type="submit_order",
@@ -29,6 +29,18 @@ def _create_submit_order_saga(
         request_id=ctx.request_id,
         initial_event_type="trade.order.requested",
     )
+    if payload.source or payload.strategy_context:
+        command_support._record_saga_step(
+            saga_id,
+            "strategy_context",
+            "completed",
+            "已记录策略下单上下文",
+            {
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
+            },
+        )
+    return saga_id
 
 
 def _raise_submit_reference_price_failure(
@@ -63,7 +75,12 @@ def _raise_submit_reference_price_failure(
         order_id=None,
         request_id=ctx.request_id,
         client_ip=ctx.client_ip,
-        extra={"quote": quote_snapshot, "sagaId": saga_id},
+        extra={
+            "quote": quote_snapshot,
+            "sagaId": saga_id,
+            "source": payload.source,
+            "strategyContext": payload.strategy_context,
+        },
     )
     raise HTTPException(
         status_code=502,
@@ -71,7 +88,11 @@ def _raise_submit_reference_price_failure(
             message,
             reference_price=None,
             quote_snapshot=quote_snapshot,
-            extra={"sagaId": saga_id},
+            extra={
+                "sagaId": saga_id,
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
+            },
         ),
     )
 
@@ -121,6 +142,8 @@ def _run_submit_risk_gate(
                 "reason": risk_message,
                 "riskLevel": risk_level,
                 "symbol": symbol,
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
             },
         )
         command_support._audit_trade(
@@ -140,7 +163,12 @@ def _run_submit_risk_gate(
             order_id=None,
             request_id=ctx.request_id,
             client_ip=ctx.client_ip,
-            extra={"quote": quote_snapshot, "sagaId": saga_id},
+            extra={
+                "quote": quote_snapshot,
+                "sagaId": saga_id,
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
+            },
         )
         raise HTTPException(
             status_code=422,
@@ -148,7 +176,12 @@ def _run_submit_risk_gate(
                 risk_message,
                 reference_price=float(reference_price),
                 quote_snapshot=quote_snapshot,
-                extra={"sagaId": saga_id, "riskLevel": risk_level},
+                extra={
+                    "sagaId": saga_id,
+                    "riskLevel": risk_level,
+                    "source": payload.source,
+                    "strategyContext": payload.strategy_context,
+                },
             ),
         )
 
@@ -182,7 +215,13 @@ def _handle_broker_submission_failure(
     command_support._record_outbox_event(
         saga_id,
         "trade.order.failed",
-        {"sagaId": saga_id, "reason": message, "symbol": symbol},
+        {
+            "sagaId": saga_id,
+            "reason": message,
+            "symbol": symbol,
+            "source": payload.source,
+            "strategyContext": payload.strategy_context,
+        },
     )
     command_support._audit_trade(
         user=user,
@@ -297,6 +336,8 @@ def _handle_submit_persistence_failure(
             "sagaId": saga_id,
             "orderId": order_id,
             "compensationStatus": "cancelled" if compensation_ok else "cancel_failed",
+            "source": payload.source,
+            "strategyContext": payload.strategy_context,
         },
     )
     command_support._audit_trade(
@@ -316,7 +357,12 @@ def _handle_submit_persistence_failure(
         order_id=order_id,
         request_id=ctx.request_id,
         client_ip=ctx.client_ip,
-        extra={"sagaId": saga_id, "compensationOk": compensation_ok},
+        extra={
+            "sagaId": saga_id,
+            "compensationOk": compensation_ok,
+            "source": payload.source,
+            "strategyContext": payload.strategy_context,
+        },
     )
     raise HTTPException(
         status_code=500,
@@ -324,7 +370,12 @@ def _handle_submit_persistence_failure(
             compensation_message,
             reference_price=float(reference_price),
             quote_snapshot=quote_snapshot,
-            extra={"sagaId": saga_id, "compensationOk": compensation_ok},
+            extra={
+                "sagaId": saga_id,
+                "compensationOk": compensation_ok,
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
+            },
         ),
     ) from persistence_error
 
@@ -357,7 +408,11 @@ def _persist_submitted_order(
             risk_level=risk_level,
             quote_snapshot=quote_snapshot,
             message="券商下单结果缺少 order_id，无法确认订单状态",
-            extra={"brokerResult": broker_result},
+            extra={
+                "brokerResult": broker_result,
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
+            },
         )
 
     try:
@@ -366,7 +421,12 @@ def _persist_submitted_order(
             "broker_submit",
             "completed",
             "券商订单已提交",
-            {"orderId": order_id, "brokerResult": broker_result},
+            {
+                "orderId": order_id,
+                "brokerResult": broker_result,
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
+            },
         )
         command_support._upsert_projection(
             user_id=user.user_id,
@@ -390,6 +450,8 @@ def _persist_submitted_order(
                 "quantity": int(payload.quantity),
                 "accountId": ctx.account_id,
                 "referencePrice": float(reference_price),
+                "source": payload.source,
+                "strategyContext": payload.strategy_context,
             },
         )
         command_support._update_saga_status(
@@ -440,6 +502,9 @@ def _build_submit_success_response(
         "account_id": ctx.account_id,
         "account_name": command_support._account_display_name(ctx.account_row),
         "saga_id": saga_id,
+        "status": "submitted",
+        "source": payload.source,
+        "strategyContext": payload.strategy_context,
         **command_support._reference_price_meta(float(reference_price), quote_snapshot),
     }
 
@@ -523,7 +588,12 @@ def _submit_order(user: AuthUser, request: Request, payload: OrderSubmitRequest)
         order_id=order_id,
         request_id=ctx.request_id,
         client_ip=ctx.client_ip,
-        extra={"quote": quote_snapshot, "sagaId": saga_id},
+        extra={
+            "quote": quote_snapshot,
+            "sagaId": saga_id,
+            "source": payload.source,
+            "strategyContext": payload.strategy_context,
+        },
     )
     return _build_submit_success_response(
         ctx,

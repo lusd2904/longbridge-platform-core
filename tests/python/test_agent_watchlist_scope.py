@@ -142,6 +142,40 @@ def test_watchlist_review_reuses_recent_idempotent_run(monkeypatch) -> None:
     assert calls == {"create": 0, "worker": 0}
 
 
+def test_watchlist_review_preserves_auto_buy_payload_for_worker(monkeypatch) -> None:
+    module = _load_module("analysis_service_watchlist_auto_buy_payload_test", ANALYSIS_MAIN)
+    captured = {}
+
+    monkeypatch.setattr(module, "_load_watchlist_scan_targets", lambda *args, **kwargs: ["AAPL.US"])
+    monkeypatch.setattr(module, "_build_watchlist_idempotency_key", lambda **kwargs: "idem-auto-buy")
+    monkeypatch.setattr(module, "_find_recent_watchlist_run_by_idempotency_key", lambda **kwargs: None)
+    monkeypatch.setattr(module, "_create_watchlist_run", lambda **kwargs: captured.setdefault("created", kwargs) or 101)
+    monkeypatch.setattr(module, "_start_watchlist_review_worker", lambda **kwargs: captured.setdefault("worker", kwargs))
+
+    auto_buy = {
+        "enabled": True,
+        "maxSymbols": 3,
+        "maxAmount": 5000.0,
+        "maxPositionRatio": 0.12,
+        "minConfidence": 80,
+    }
+    result = asyncio.run(module.watchlist_review(
+        payload={
+            "session": "pre_open",
+            "targets": ["AAPL.US"],
+            "triggerSource": "scheduler",
+            "dryRun": False,
+            "autoBuy": auto_buy,
+        },
+        auth_session={"user_id": 1, "role": "admin"},
+    ))
+
+    assert result["accepted"] is True
+    assert captured["created"]["request_payload"]["autoBuy"] == auto_buy
+    assert captured["worker"]["sidecar_payload"]["autoBuy"] == auto_buy
+    assert captured["worker"]["sidecar_payload"]["dryRun"] is False
+
+
 def test_scheduler_does_not_fallback_to_first_active_user_when_watchlist_empty() -> None:
     list_users_source = _scheduler_function_source("_list_watchlist_review_users")
 
@@ -190,6 +224,129 @@ def test_scheduler_counts_skipped_reviews_separately_from_success() -> None:
     assert "skipped_count = len(skipped)" in run_source
     assert "len(users) - len(failures) - skipped_count" in run_source
     assert '"skippedCount": skipped_count' in run_source
+
+
+def test_scheduler_watchlist_auto_buy_settings_are_bounded(monkeypatch) -> None:
+    module = _load_module("scheduler_service_auto_buy_settings_test", SCHEDULER_MAIN)
+
+    monkeypatch.setattr(
+        module.SystemTaskService,
+        "get_policy",
+        lambda task_key: {
+            "settings": {
+                "autoBuyEnabled": "yes",
+                "autoBuyMaxSymbols": "99",
+                "autoBuyMaxAmount": "-5",
+                "autoBuyMaxPositionRatio": "bad-value",
+                "autoBuyMinConfidence": "101",
+            }
+        },
+    )
+
+    assert module._watchlist_auto_buy_settings("pre_open") == {
+        "enabled": True,
+        "maxSymbols": 10,
+        "maxAmount": 0.0,
+        "maxPositionRatio": 0.08,
+        "minConfidence": 100,
+    }
+
+
+def test_scheduler_watchlist_payload_disables_dry_run_when_auto_buy_enabled(monkeypatch) -> None:
+    module = _load_module("scheduler_service_auto_buy_payload_test", SCHEDULER_MAIN)
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"success": true, "data": {"status": "accepted"}}'
+
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        captured["payload"] = __import__("json").loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(module, "generate_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(
+        module,
+        "_watchlist_auto_buy_settings",
+        lambda session_name: {
+            "enabled": True,
+            "maxSymbols": 3,
+            "maxAmount": 5000.0,
+            "maxPositionRatio": 0.12,
+            "minConfidence": 80,
+        },
+    )
+    monkeypatch.setattr(module.urlrequest, "urlopen", fake_urlopen)
+
+    result = module._request_watchlist_review_for_user(
+        "pre_open",
+        {"userId": 7, "username": "alpha", "role": "user"},
+    )
+
+    assert result["success"] is True
+    assert captured["payload"]["dryRun"] is False
+    assert captured["payload"]["autoBuy"] == {
+        "enabled": True,
+        "maxSymbols": 3,
+        "maxAmount": 5000.0,
+        "maxPositionRatio": 0.12,
+        "minConfidence": 80,
+    }
+
+
+def test_scheduler_watchlist_payload_keeps_dry_run_when_auto_buy_disabled(monkeypatch) -> None:
+    module = _load_module("scheduler_service_auto_buy_disabled_payload_test", SCHEDULER_MAIN)
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"success": true, "data": {"status": "accepted"}}'
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = __import__("json").loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(module, "generate_token", lambda *args, **kwargs: "token")
+    monkeypatch.setattr(
+        module,
+        "_watchlist_auto_buy_settings",
+        lambda session_name: {
+            "enabled": False,
+            "maxSymbols": 3,
+            "maxAmount": 5000.0,
+            "maxPositionRatio": 0.0,
+            "minConfidence": 80,
+        },
+    )
+    monkeypatch.setattr(module.urlrequest, "urlopen", fake_urlopen)
+
+    result = module._request_watchlist_review_for_user(
+        "pre_open",
+        {"userId": 7, "username": "alpha", "role": "user"},
+    )
+
+    assert result["success"] is True
+    assert captured["payload"]["dryRun"] is True
+    assert captured["payload"]["autoBuy"] == {
+        "enabled": False,
+        "maxSymbols": 3,
+        "maxAmount": 5000.0,
+        "maxPositionRatio": 0.0,
+        "minConfidence": 80,
+    }
 
 
 def test_scheduler_runs_watchlist_review_for_listed_users_only(monkeypatch) -> None:

@@ -56,11 +56,11 @@ class QuantTradingScheduler:
                     if not self._should_run(user_id, interval):
                         continue
 
-                    result = QuantTradingService.run_cycle(user_id=user_id, source='scheduler', execute=None)
+                    result = QuantTradingService.run_watchlist_strategy_cycle(user_id=user_id, source='scheduler', execute=None)
                     self._update_job(
                         user_id,
                         'success',
-                        f"AI量化交易分析已完成，生成 {len(result.get('signals') or [])} 条建议"
+                        f"自选池量化策略已完成，发现 {int(result.get('opportunityCount') or 0)} 个机会"
                     )
                 except Exception as exc:
                     self._update_job(user_id, 'failed', str(exc)[:220])

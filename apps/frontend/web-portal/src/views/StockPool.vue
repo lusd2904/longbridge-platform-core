@@ -6,9 +6,9 @@
         <div class="hero-tags">
           <span class="hero-tag">{{ activeFilterLabel }}</span>
           <span class="hero-tag">{{ filteredSummary }}</span>
-          <span class="hero-tag">{{ quotesConnected ? '最新价在线' : '快照' }}</span>
-          <span class="hero-tag">{{ quoteSnapshotCoverageTag }}</span>
-          <span class="hero-tag">{{ quoteSnapshotTimeTag }}</span>
+          <span class="hero-tag">{{ quotesConnected ? '长桥推送在线' : '长桥实时拉取' }}</span>
+          <span class="hero-tag">{{ realtimeQuoteCoverageTag }}</span>
+          <span class="hero-tag">{{ realtimeQuoteTimeTag }}</span>
         </div>
       </div>
 
@@ -112,7 +112,7 @@
         <div class="table-head">
           <div>
             <h3>全量标的列表</h3>
-            <small class="table-meta">{{ quoteSnapshotMeta }}</small>
+            <small class="table-meta">{{ realtimeQuoteMeta }}</small>
           </div>
           <el-tag size="large" effect="plain">{{ formatCount(total) }} 条</el-tag>
         </div>
@@ -497,7 +497,7 @@ import {
   TrendCharts
 } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
-import { addStockToPool, addWatchlistStock, getMarketStatus, getStockPool, removeStockFromPool, syncMarketUniverse } from '../api/market.js'
+import { addStockToPool, addWatchlistStock, getMarketStatus, getStockPool, getStockQuotes, removeStockFromPool, syncMarketUniverse } from '../api/market.js'
 import { useStockQuotes } from '../composables/useWebSocket.js'
 import { getCurrentUser, isAdmin } from '../utils/auth.js'
 import { formatCurrency, formatDecimal, formatPercent } from '../utils/formatters.js'
@@ -532,6 +532,7 @@ let stockSearchTimer = null
 let latestStockRequestId = 0
 const watchlistOverrides = ref({})
 const watchlistSubmittingSymbol = ref('')
+const pulledQuoteMap = ref({})
 
 const hasValue = (value) => !(value === '' || value === null || value === undefined)
 const toNumberOrNull = (value) => {
@@ -602,7 +603,7 @@ const marketCounts = computed(() => {
 const totalUniverse = computed(() => Number(stockPoolStats.value?.total || total.value || 0))
 const etfUniverse = computed(() => Number(stockPoolStats.value?.etfs || 0))
 const stockUniverse = computed(() => Number(stockPoolStats.value?.stocks || Math.max(totalUniverse.value - etfUniverse.value, 0)))
-const quoteSnapshotCoverage = computed(() => summarizeQuoteSnapshotCoverage(stocks.value))
+const realtimeQuoteCoverage = computed(() => summarizeQuoteSnapshotCoverage(displayStocks.value))
 const effectiveMarketFilter = computed(() => columnFilters.value.market || filterMarket.value || '')
 const effectiveTypeFilter = computed(() => columnFilters.value.type || filterType.value || '')
 
@@ -615,9 +616,18 @@ const stockStats = computed(() => [
 
 const hasColumnFilters = computed(() => Object.values(columnFilters.value).some((value) => hasValue(value)))
 const queryResultTotal = computed(() => Number(stockPoolStats.value?.filtered_total || total.value || 0))
-const quoteSnapshotCoverageTag = computed(() => formatQuoteCoverageLabel(quoteSnapshotCoverage.value))
-const quoteSnapshotTimeTag = computed(() => formatQuoteSnapshotTimeLabel(quoteSnapshotCoverage.value.latestSnapshotAt, formatDateTime))
-const quoteSnapshotMeta = computed(() => formatQuoteCoverageMeta(quoteSnapshotCoverage.value, formatDateTime))
+const realtimeQuoteCoverageTag = computed(() => formatQuoteCoverageLabel(realtimeQuoteCoverage.value, {
+  prefix: '长桥实时',
+  emptyLabel: '等待长桥实时'
+}))
+const realtimeQuoteTimeTag = computed(() => formatQuoteSnapshotTimeLabel(realtimeQuoteCoverage.value.latestSnapshotAt, formatDateTime, {
+  prefix: '长桥实时',
+  emptyLabel: '等待实时行情'
+}))
+const realtimeQuoteMeta = computed(() => formatQuoteCoverageMeta(realtimeQuoteCoverage.value, formatDateTime, {
+  prefix: '长桥实时',
+  pendingText: '等待长桥实时行情'
+}))
 const getWatchlistKey = (row = {}) => [
   String(row.symbol || '').trim().toUpperCase(),
   String(row.market || '').trim().toUpperCase(),
@@ -634,10 +644,12 @@ const isWatchlisted = (row = {}) => {
 const displayStocks = computed(() => {
   return stocks.value.map((item) => {
     const symbol = String(item.symbol || '').trim().toUpperCase()
-    const quote = liveQuoteMap.value[symbol] || {}
+    const quote = liveQuoteMap.value[symbol] || pulledQuoteMap.value[symbol] || {}
     const livePrice = Number(quote.last_price ?? quote.price ?? item.price ?? 0)
     const liveChangePercent = quote.change_percent ?? quote.changePercent ?? item.change_percent
     const liveVolume = quote.volume ?? item.volume
+    const quoteTimestamp = quote.quoteSnapshotAt || quote.quote_snapshot_at || quote.timestamp || quote.updatedAt || item.quoteSnapshotAt || item.quote_snapshot_at || ''
+    const quoteSource = quote.quoteSource || quote.quote_source || item.quoteSource || item.quote_source || ''
     const watchlistKey = getWatchlistKey(item)
     const localWatchlistState = watchlistOverrides.value[watchlistKey]
     const watchlisted = localWatchlistState ?? Boolean(item.isWatchlisted ?? item.is_watchlisted)
@@ -649,6 +661,11 @@ const displayStocks = computed(() => {
         ? item.change_percent
         : Number(liveChangePercent),
       volume: liveVolume === null || liveVolume === undefined || liveVolume === '' ? item.volume : Number(liveVolume),
+      quoteSource,
+      quote_source: quoteSource,
+      quoteSnapshotAt: quoteTimestamp || null,
+      quote_snapshot_at: quoteTimestamp || null,
+      quoteReady: Boolean(livePrice || quoteTimestamp),
       isWatchlisted: watchlisted,
       is_watchlisted: watchlisted
     }
@@ -665,9 +682,9 @@ const stockPoolReadModelSummary = computed(() => buildStockPoolReadModelSummary(
       CN: 'A股',
       HK: '港股'
     }[effectiveMarketFilter.value] || effectiveMarketFilter.value) : '全部市场',
-    quoteCoverageLabel: quoteSnapshotCoverage.value.readyCount
-      ? `报价快照 ${quoteSnapshotCoverage.value.readyCount}/${quoteSnapshotCoverage.value.totalCount || 0}`
-      : '报价快照待补齐'
+    quoteCoverageLabel: realtimeQuoteCoverage.value.readyCount
+      ? `长桥实时 ${realtimeQuoteCoverage.value.readyCount}/${realtimeQuoteCoverage.value.totalCount || 0}`
+      : '长桥实时待补齐'
   }
 ))
 const stockPoolReadModelStatus = computed(() => {
@@ -680,8 +697,8 @@ const stockPoolReadModelStatusType = computed(() => (
   quotesConnected.value && displayStocks.value.length ? 'success' : stockPoolReadModelSummary.value.statusType
 ))
 const stockPoolReadModelUpdatedAt = computed(() => (
-  (quoteSnapshotCoverage.value.latestSnapshotAt || stockPoolReadModelSummary.value.updatedAt)
-    ? formatDateTime(quoteSnapshotCoverage.value.latestSnapshotAt || stockPoolReadModelSummary.value.updatedAt)
+  (realtimeQuoteCoverage.value.latestSnapshotAt || stockPoolReadModelSummary.value.updatedAt)
+    ? formatDateTime(realtimeQuoteCoverage.value.latestSnapshotAt || stockPoolReadModelSummary.value.updatedAt)
     : ''
 ))
 const stockPoolReadModelUpdatedPrefix = computed(() => (
@@ -690,7 +707,7 @@ const stockPoolReadModelUpdatedPrefix = computed(() => (
 const stockPoolReadModelTags = computed(() => ([
   ...(stockPoolReadModelSummary.value.tags || []),
   {
-    text: quotesConnected.value ? `最新价 ${streamSymbols.value.length} 个` : '快照',
+    text: quotesConnected.value ? `长桥推送 ${streamSymbols.value.length} 个` : '长桥实时拉取',
     type: quotesConnected.value ? 'success' : 'info'
   }
 ]))
@@ -787,6 +804,35 @@ const buildStockPoolParams = () => ({
   }
 })
 
+const loadRealtimeQuotes = async (items = [], requestId = latestStockRequestId) => {
+  const symbols = Array.from(new Set(
+    (Array.isArray(items) ? items : [])
+      .map((item) => String(item.symbol || '').trim().toUpperCase())
+      .filter(Boolean)
+  ))
+  if (!symbols.length) {
+    pulledQuoteMap.value = {}
+    return
+  }
+
+  try {
+    const quoteRes = await getStockQuotes(symbols)
+    if (requestId !== latestStockRequestId) {
+      return
+    }
+    pulledQuoteMap.value = Object.fromEntries(
+      (Array.isArray(quoteRes?.data) ? quoteRes.data : [])
+        .map((quote) => [String(quote?.symbol || '').trim().toUpperCase(), quote])
+        .filter(([symbol]) => Boolean(symbol))
+    )
+  } catch (error) {
+    if (requestId === latestStockRequestId) {
+      pulledQuoteMap.value = {}
+    }
+    console.warn('长桥实时行情拉取失败:', error)
+  }
+}
+
 const loadStocks = async () => {
   const requestId = ++latestStockRequestId
   loading.value = true
@@ -797,6 +843,7 @@ const loadStocks = async () => {
     }
     stockPoolMeta.value = res?.meta && typeof res.meta === 'object' ? res.meta : {}
     stocks.value = res.data || []
+    await loadRealtimeQuotes(stocks.value, requestId)
     total.value = Number((res?.filteredTotal ?? res?.total) || 0)
     hasLoadedStocks.value = true
     stockPoolStats.value = {

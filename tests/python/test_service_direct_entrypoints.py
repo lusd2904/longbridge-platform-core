@@ -16,6 +16,7 @@ SERVICES = {
     "apps/market/sentiment-service": "service=sentiment-service dir=apps/market/sentiment-service port=8106",
     "apps/intelligence/analysis-service": "service=analysis-service dir=apps/intelligence/analysis-service port=8103",
     "apps/intelligence/strategy-service": "service=strategy-service dir=apps/intelligence/strategy-service port=8104",
+    "apps/intelligence/agno-sidecar": "service=agno-sidecar dir=apps/intelligence/agno-sidecar port=3200",
     "apps/trading/trade-service": "service=trade-service dir=apps/trading/trade-service port=8105",
     "apps/governance/risk-service": "service=risk-service dir=apps/governance/risk-service port=8108",
     "apps/operations/scheduler-service": "service=scheduler-service dir=apps/operations/scheduler-service port=8107",
