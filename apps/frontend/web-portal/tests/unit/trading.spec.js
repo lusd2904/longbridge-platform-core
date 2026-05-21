@@ -224,7 +224,7 @@ describe('Trading search performance', () => {
     expect(marketMocks.getSymbolOverview).toHaveBeenCalledWith('AAPL.US')
     expect(findButtonByText(wrapper, '搜索').attributes('data-loading')).toBe('false')
     expect(wrapper.text()).toContain('$189.40')
-    expect(wrapper.text()).toContain('行情快照')
+    expect(wrapper.text()).toContain('长桥实时')
     expect(wrapper.text()).toContain('缓存公告标题')
     expect(wrapper.text()).toContain('等待深度')
     expect(wrapper.text()).toContain('等待逐笔')
@@ -426,7 +426,7 @@ describe('Trading search performance', () => {
 
     expect(wrapper.text()).toContain('$189.40')
     expect(wrapper.text()).toContain('Quote 降级')
-    expect(wrapper.text()).toContain('行情快照')
+    expect(wrapper.text()).toContain('长桥实时')
     expect(wrapper.text()).not.toContain('Quote 失败')
     expect(wrapper.text()).not.toContain('Longbridge CLI')
   })

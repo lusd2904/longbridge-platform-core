@@ -49,3 +49,21 @@ def test_ensure_paper_trading_reuses_cached_auth_status(monkeypatch) -> None:
     runtime.ensure_paper_trading()
 
     assert calls == [["auth", "status"]]
+
+
+def test_trade_context_cancel_order_accepts_plain_text_cli_success(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, timeout=None, expect_json=True, require_paper_account=True):
+        calls.append((args, timeout, expect_json, require_paper_account))
+        return "Order ord-1 cancelled.\n"
+
+    monkeypatch.setattr(runtime, "ensure_paper_trading", lambda: None)
+    monkeypatch.setattr(runtime, "run_longbridge_cli", fake_run)
+
+    result = runtime.CliTradeContext().cancel_order("ord-1")
+
+    assert result.success is True
+    assert result.order_id == "ord-1"
+    assert result.message == "Order ord-1 cancelled."
+    assert calls == [(["order", "cancel", "ord-1", "--yes"], 60, False, True)]

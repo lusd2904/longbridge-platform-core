@@ -674,4 +674,18 @@ class CliTradeContext:
 
     def cancel_order(self, order_id: str, **kwargs: Any) -> Any:
         ensure_paper_trading()
-        return _to_attr(run_longbridge_cli(["order", "cancel", order_id, "--yes"], timeout=60))
+        message = str(
+            run_longbridge_cli(
+                ["order", "cancel", order_id, "--yes"],
+                timeout=60,
+                expect_json=False,
+            )
+            or ""
+        ).strip()
+        return _to_attr(
+            {
+                "success": True,
+                "order_id": order_id,
+                "message": message or f"Order {order_id} cancel request accepted.",
+            }
+        )
