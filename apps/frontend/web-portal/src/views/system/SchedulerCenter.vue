@@ -122,6 +122,69 @@
               </label>
             </div>
           </div>
+
+          <div
+            v-if="isUsOpenAiTradeTask(task)"
+            class="auto-buy-settings"
+            :class="{ 'is-enabled': task.settings?.autoTradeEnabled }"
+          >
+            <div class="auto-buy-head">
+              <div>
+                <span class="agent-review-label">AI 自动交易</span>
+                <strong>{{ task.settings?.autoTradeEnabled ? '已开启' : '已关闭' }}</strong>
+              </div>
+              <el-switch v-model="task.settings.autoTradeEnabled" @change="saveTask(task)" />
+            </div>
+            <p>
+              仅在美股常规开盘时段按设定策略执行，并始终受纸账户与交易边界保护，不会绕过真实资金账户限制。
+            </p>
+            <div class="auto-buy-grid">
+              <label>
+                <span>最多标的</span>
+                <el-input-number
+                  v-model="task.settings.maxSymbols"
+                  :min="1"
+                  :max="20"
+                  :step="1"
+                  @change="saveTask(task)"
+                />
+              </label>
+              <label>
+                <span>组合仓位</span>
+                <el-input-number
+                  v-model="task.settings.targetPortfolioRatio"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  :precision="2"
+                  @change="saveTask(task)"
+                />
+              </label>
+              <label>
+                <span>最低置信</span>
+                <el-input-number
+                  v-model="task.settings.minConfidence"
+                  :min="0"
+                  :max="100"
+                  :step="1"
+                  @change="saveTask(task)"
+                />
+              </label>
+              <label>
+                <span>策略风格</span>
+                <el-select v-model="task.settings.strategyProfile" @change="saveTask(task)">
+                  <el-option label="均衡" value="balanced" />
+                  <el-option label="动量" value="momentum" />
+                  <el-option label="突破" value="breakout" />
+                  <el-option label="回归" value="reversion" />
+                </el-select>
+              </label>
+            </div>
+            <div class="agent-review-meta">
+              <span>市场 {{ task.settings?.market || 'US' }}</span>
+              <span>{{ task.settings?.regularSessionOnly ? '仅常规时段' : '允许非常规时段' }}</span>
+            </div>
+          </div>
         </div>
 
         <div class="task-status">
@@ -369,6 +432,7 @@ const AGENT_REVIEW_TASK_SCENES = {
   watchlist_pre_open_review: 'watchlist_pre_open_review',
   watchlist_post_close_review: 'watchlist_post_close_review'
 }
+const US_OPEN_AI_TRADE_TASK_KEY = 'watchlist_us_open_ai_trade'
 const AGENT_REVIEW_SCENE_LABELS = {
   watchlist_pre_open_review: '自选股盘前复核',
   watchlist_post_close_review: '自选股盘后复核'
@@ -395,6 +459,7 @@ const resolveAgentReviewTaskLabel = (scene) => {
   return matchedTask?.taskName || AGENT_REVIEW_SCENE_LABELS[scene] || 'Agent 复核'
 }
 const isAgentReviewTask = (task) => AGENT_REVIEW_TASK_KEYS.has(String(task?.taskKey || '').trim())
+const isUsOpenAiTradeTask = (task) => String(task?.taskKey || '').trim() === US_OPEN_AI_TRADE_TASK_KEY
 const AUTO_BUY_DEFAULT_SETTINGS = {
   autoBuyEnabled: false,
   autoBuyMaxSymbols: 2,
@@ -402,6 +467,16 @@ const AUTO_BUY_DEFAULT_SETTINGS = {
   autoBuyMaxPositionRatio: 0.08,
   autoBuyMinConfidence: 72
 }
+const AUTO_TRADE_DEFAULT_SETTINGS = {
+  autoTradeEnabled: true,
+  maxSymbols: 5,
+  targetPortfolioRatio: 0.70,
+  minConfidence: 72,
+  strategyProfile: 'balanced',
+  market: 'US',
+  regularSessionOnly: true
+}
+const AUTO_TRADE_STRATEGY_PROFILES = new Set(['balanced', 'momentum', 'breakout', 'reversion'])
 const normalizeAutoBuyBool = (value, fallback = false) => {
   if (value === null || value === undefined || value === '') return fallback
   if (typeof value === 'boolean') return value
@@ -424,10 +499,32 @@ const normalizeAutoBuySettings = (settings = {}) => ({
   autoBuyMaxPositionRatio: normalizeAutoBuyNumber(settings.autoBuyMaxPositionRatio, AUTO_BUY_DEFAULT_SETTINGS.autoBuyMaxPositionRatio, 0, 1),
   autoBuyMinConfidence: Math.round(normalizeAutoBuyNumber(settings.autoBuyMinConfidence, AUTO_BUY_DEFAULT_SETTINGS.autoBuyMinConfidence, 0, 100))
 })
+const normalizeAutoTradeSettings = (settings = {}) => {
+  const strategyProfile = String(settings.strategyProfile || AUTO_TRADE_DEFAULT_SETTINGS.strategyProfile).trim().toLowerCase()
+  return {
+    ...settings,
+    autoTradeEnabled: normalizeAutoBuyBool(settings.autoTradeEnabled, AUTO_TRADE_DEFAULT_SETTINGS.autoTradeEnabled),
+    maxSymbols: Math.round(normalizeAutoBuyNumber(settings.maxSymbols, AUTO_TRADE_DEFAULT_SETTINGS.maxSymbols, 1, 20)),
+    targetPortfolioRatio: normalizeAutoBuyNumber(
+      settings.targetPortfolioRatio,
+      AUTO_TRADE_DEFAULT_SETTINGS.targetPortfolioRatio,
+      0,
+      1
+    ),
+    minConfidence: Math.round(normalizeAutoBuyNumber(settings.minConfidence, AUTO_TRADE_DEFAULT_SETTINGS.minConfidence, 0, 100)),
+    strategyProfile: AUTO_TRADE_STRATEGY_PROFILES.has(strategyProfile)
+      ? strategyProfile
+      : AUTO_TRADE_DEFAULT_SETTINGS.strategyProfile,
+    market: String(settings.market || AUTO_TRADE_DEFAULT_SETTINGS.market).trim().toUpperCase() || AUTO_TRADE_DEFAULT_SETTINGS.market,
+    regularSessionOnly: normalizeAutoBuyBool(settings.regularSessionOnly, AUTO_TRADE_DEFAULT_SETTINGS.regularSessionOnly)
+  }
+}
 const normalizeTaskPolicy = (task = {}) => ({
   ...task,
   settings: isAgentReviewTask(task)
     ? normalizeAutoBuySettings(task.settings && typeof task.settings === 'object' ? task.settings : {})
+    : isUsOpenAiTradeTask(task)
+      ? normalizeAutoTradeSettings(task.settings && typeof task.settings === 'object' ? task.settings : {})
     : (task.settings && typeof task.settings === 'object' ? task.settings : {})
 })
 const taskStateLabel = (state) => ({
@@ -773,7 +870,7 @@ const loadTasks = async () => {
 const saveTask = async (task) => {
   try {
     const normalizedTask = normalizeTaskPolicy(task)
-    if (isAgentReviewTask(task)) {
+    if (isAgentReviewTask(task) || isUsOpenAiTradeTask(task)) {
       task.settings = normalizedTask.settings
     }
     await updatePlatformTask(task.taskKey, {

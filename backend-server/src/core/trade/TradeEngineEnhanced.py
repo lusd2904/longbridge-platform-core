@@ -10,7 +10,7 @@ from datetime import datetime
 from shared.longbridge import AdjustType, OrderSide, OrderType, TimeInForceType
 from utils.MonitorLink import MonitorLink
 from utils.LoggerUtil import get_logger, log_trade, log_error, log_risk_event
-from core.RiskManager import RiskManager, RiskConfig, RiskLevel
+from core.account.RiskManager import RiskManager, RiskConfig, RiskLevel
 from config.Config import AppConfig
 
 logger = get_logger(__name__)

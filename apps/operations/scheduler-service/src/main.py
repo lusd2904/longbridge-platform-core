@@ -261,6 +261,23 @@ def _watchlist_auto_buy_settings(session_name: str) -> Dict[str, Any]:
     }
 
 
+def _us_open_ai_trade_settings() -> Dict[str, Any]:
+    policy = SystemTaskService.get_policy("watchlist_us_open_ai_trade") or {}
+    settings = policy.get("settings") if isinstance(policy.get("settings"), dict) else {}
+    strategy_profile = str(settings.get("strategyProfile") or "balanced").strip().lower()
+    if strategy_profile not in {"balanced", "momentum", "breakout", "reversion"}:
+        strategy_profile = "balanced"
+    return {
+        "autoTradeEnabled": _coerce_bool(settings.get("autoTradeEnabled"), True),
+        "maxSymbols": _safe_int(settings.get("maxSymbols"), 5, 1, 20),
+        "targetPortfolioRatio": _safe_float(settings.get("targetPortfolioRatio"), 0.70, 0.0, 1.0),
+        "minConfidence": _safe_int(settings.get("minConfidence"), 72, 0, 100),
+        "strategyProfile": strategy_profile,
+        "market": str(settings.get("market") or "US").strip().upper() or "US",
+        "regularSessionOnly": _coerce_bool(settings.get("regularSessionOnly"), True),
+    }
+
+
 def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
     flag_column = "scan_before_open" if session_name == "pre_open" else "scan_after_close"
     max_users = max(1, min(int(os.getenv("REF_WATCHLIST_REVIEW_MAX_USERS", "50")), 200))
@@ -320,6 +337,29 @@ def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
         ]
 
     return []
+
+
+def _list_us_open_ai_trade_users() -> List[Dict[str, Any]]:
+    max_users = max(1, min(int(os.getenv("REF_WATCHLIST_US_OPEN_AI_TRADE_MAX_USERS", "50")), 200))
+    users = DbUtil.fetch_all(
+        """
+        SELECT id, username, role
+        FROM users
+        WHERE COALESCE(status, 'active') NOT IN ('disabled', 'locked')
+        ORDER BY id ASC
+        LIMIT %s
+        """,
+        (max_users,),
+    ) or []
+    return [
+        {
+            "userId": int(row.get("id") or 0),
+            "username": row.get("username") or f"user-{row.get('id')}",
+            "role": row.get("role") or "user",
+        }
+        for row in users
+        if int(row.get("id") or 0) > 0
+    ]
 
 
 def _request_watchlist_review_for_user(session_name: str, user: Dict[str, Any]) -> Dict[str, Any]:
@@ -473,6 +513,86 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
     }
 
 
+def _run_us_open_ai_trade_for_user(user: Dict[str, Any]) -> Dict[str, Any]:
+    user_id = int(user.get("userId") or user.get("id") or 0)
+    if user_id <= 0:
+        raise RuntimeError("美股开盘 AI 自动交易用户无效")
+    return QuantTradingService.run_us_open_watchlist_ai_trade(user_id=user_id, source="scheduler")
+
+
+def _run_us_open_ai_trade() -> Dict[str, Any]:
+    now = datetime.now()
+    job_name = "watchlist_us_open_ai_trade"
+    settings = _us_open_ai_trade_settings()
+    _write_job_status(job_name, "running", "美股开盘 AI 自动交易任务执行中")
+
+    if not settings["autoTradeEnabled"]:
+        message = "美股开盘 AI 自动交易已关闭；任务仍受纸账户与交易边界保护"
+        _write_job_status(job_name, "skipped", message, last_run_date=now.date(), last_run_at=now)
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "auto-trade-disabled",
+            "summary": message,
+            "userCount": 0,
+            "results": [],
+        }
+
+    users = _list_us_open_ai_trade_users()
+    if not users:
+        message = "美股开盘 AI 自动交易已跳过：没有可执行用户，且仍受纸账户与交易边界保护"
+        _write_job_status(job_name, "skipped", message, last_run_date=now.date(), last_run_at=now)
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "empty-users",
+            "summary": message,
+            "userCount": 0,
+            "results": [],
+        }
+
+    results: List[Dict[str, Any]] = []
+    failures: List[Dict[str, Any]] = []
+    for user in users:
+        user_id = int(user.get("userId") or 0)
+        try:
+            result = _run_us_open_ai_trade_for_user(user)
+            results.append(
+                {
+                    "userId": user_id,
+                    "username": user.get("username"),
+                    "result": result,
+                }
+            )
+        except Exception as exc:
+            failures.append({"userId": user_id, "message": str(exc)[:220]})
+            results.append(
+                {
+                    "userId": user_id,
+                    "username": user.get("username"),
+                    "error": str(exc)[:500],
+                }
+            )
+
+    success_count = max(0, len(users) - len(failures))
+    status = "failed" if failures and success_count == 0 else "success"
+    summary = (
+        f"美股开盘 AI 自动交易已提交，用户 {len(users)} 个，成功 {success_count} 个，失败 {len(failures)} 个；"
+        "默认受纸账户与交易边界保护"
+    )
+    _write_job_status(job_name, status, summary, last_run_date=now.date(), last_run_at=now)
+    return {
+        "success": not failures,
+        "summary": summary,
+        "settings": settings,
+        "userCount": len(users),
+        "successCount": success_count,
+        "failureCount": len(failures),
+        "failures": failures,
+        "results": results,
+    }
+
+
 class ManagedDailyTaskRunner:
     def __init__(self, task_key: str, default_hour: int, default_minute: int, runner: Callable[[], Dict[str, Any]]) -> None:
         self.JOB_NAME = task_key
@@ -518,6 +638,42 @@ class ManagedDailyTaskRunner:
         return last_run_date != now.date()
 
 
+class ManagedIntervalTaskRunner:
+    def __init__(self, task_key: str, default_interval_seconds: int, runner: Callable[[], Dict[str, Any]]) -> None:
+        self.JOB_NAME = task_key
+        self._default_interval_seconds = default_interval_seconds
+        self._runner = runner
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._loop, name=f"{self.JOB_NAME}-scheduler", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2)
+
+    def run_once(self) -> Dict[str, Any]:
+        return self._runner()
+
+    def _loop(self) -> None:
+        self._stop_event.wait(15)
+        while not self._stop_event.is_set():
+            try:
+                SystemTaskService.ensure_schema()
+                if SystemTaskService.is_enabled(self.JOB_NAME, default=True):
+                    self._runner()
+            except Exception:
+                pass
+            interval = max(60, SystemTaskService.get_interval(self.JOB_NAME, self._default_interval_seconds))
+            self._stop_event.wait(interval)
+
+
 watchlist_pre_open_review_scheduler = ManagedDailyTaskRunner(
     "watchlist_pre_open_review",
     8,
@@ -529,6 +685,11 @@ watchlist_post_close_review_scheduler = ManagedDailyTaskRunner(
     16,
     30,
     lambda: _run_watchlist_review("post_close"),
+)
+watchlist_us_open_ai_trade_scheduler = ManagedIntervalTaskRunner(
+    "watchlist_us_open_ai_trade",
+    900,
+    _run_us_open_ai_trade,
 )
 
 
@@ -569,6 +730,11 @@ class SchedulerRuntime:
                 "title": "自选股盘后复核",
                 "scope": "system",
                 "scheduler": watchlist_post_close_review_scheduler,
+            },
+            "watchlist_us_open_ai_trade": {
+                "title": "美股开盘 AI 自动交易",
+                "scope": "system",
+                "scheduler": watchlist_us_open_ai_trade_scheduler,
             },
             "daily_symbol_trend_ai_scan": {
                 "title": "逐股 AI 趋势扫描",
@@ -1159,6 +1325,7 @@ TASK_RUNNERS: Dict[str, Callable[[int], Dict[str, Any]]] = {
     "daily_market_ai_scan": lambda user_id: _run_market_scan(user_id),
     "watchlist_pre_open_review": lambda user_id: watchlist_pre_open_review_scheduler.run_once(),
     "watchlist_post_close_review": lambda user_id: watchlist_post_close_review_scheduler.run_once(),
+    "watchlist_us_open_ai_trade": lambda user_id: watchlist_us_open_ai_trade_scheduler.run_once(),
     "daily_symbol_trend_ai_scan": lambda user_id: daily_symbol_trend_scan_scheduler.run_once(),
     "market_insight_refresh": _run_market_insight,
     "recommendation_refresh": _run_recommendation_refresh,

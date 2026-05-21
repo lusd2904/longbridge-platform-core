@@ -36,7 +36,7 @@ class RiskConfig:
     
     # 单笔交易限制
     max_single_order_value: float = 100000  # 单笔最大订单金额
-    min_single_order_value: float = 1000    # 单笔最小订单金额
+    min_single_order_value: float = 0       # 单笔最小订单金额；美股允许 1 股小额委托
     
     # 风险敞口
     max_sector_exposure: float = 0.4  # 单个行业最大敞口
@@ -90,7 +90,7 @@ class RiskManager:
         if order_value > self.config.max_single_order_value:
             return False, f"订单金额{order_value:.2f}超过限制{self.config.max_single_order_value}", RiskLevel.HIGH
         
-        if order_value < self.config.min_single_order_value:
+        if self.config.min_single_order_value > 0 and order_value < self.config.min_single_order_value:
             return False, f"订单金额{order_value:.2f}低于最小限制{self.config.min_single_order_value}", RiskLevel.MEDIUM
         
         # 2. 检查单日交易次数

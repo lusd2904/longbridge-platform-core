@@ -4,6 +4,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND_SRC = ROOT / "backend-server" / "src"
@@ -676,6 +678,298 @@ def test_execute_watchlist_opportunities_dedupes_normalized_symbol_variants(monk
     assert result["submittedCount"] == 1
     assert [item["symbol"] for item in executed] == ["AAPL.US"]
     assert any(item["symbol"] == "AAPL.US" and "重复机会标的" in item["reason"] for item in result["skipped"])
+
+
+def test_execute_watchlist_opportunities_allows_one_share_under_1000_with_portfolio_budget(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    monkeypatch.setattr(service, "_load_watchlist_symbols", classmethod(lambda cls, *, user_id: {"AAPL.US", "MSFT.US"}))
+    monkeypatch.setattr(service, "_has_recent_duplicate", classmethod(lambda cls, user_id, symbol, side: False))
+    monkeypatch.setattr(service, "_load_broker_today_orders", classmethod(lambda cls, account_id, user_id: ([], "")))
+    monkeypatch.setattr(service, "_assert_paper_trading_account", classmethod(lambda cls, account_id, user_id: {"isPaper": True}))
+
+    class AccountInfo:
+        cash = 450
+        buying_power = 450
+        market_value = 0
+        total_equity = 1000
+
+    class FakeBroker:
+        is_connected = True
+        account_id = 7
+
+        def connect(self):
+            return True
+
+        def get_account_info(self):
+            return AccountInfo()
+
+        def get_positions(self):
+            return []
+
+    executed = []
+    monkeypatch.setattr(
+        module.PlatformAccessService,
+        "get_user_capabilities",
+        staticmethod(lambda user_id: {"hasBoundAccount": True, "quantApiEnabled": True, "canUseQuantTrading": True}),
+    )
+    monkeypatch.setattr(service, "_get_broker", staticmethod(lambda account_id=None, user_id=1: FakeBroker()))
+    monkeypatch.setattr(
+        service,
+        "_execute_decision",
+        classmethod(lambda cls, account_id, decision, user_id=1: executed.append(decision) or {"status": "executed", "order_id": f"order-{len(executed)}"}),
+    )
+    monkeypatch.setattr(
+        service,
+        "_save_decision",
+        classmethod(lambda cls, **kwargs: {**kwargs["decision"], "status": kwargs["status"], "orderId": kwargs["order_id"]}),
+    )
+
+    result = service.execute_watchlist_opportunities(
+        user_id=1,
+        opportunities=[
+            {"symbol": "AAPL.US", "price": 180, "confidence": 91, "reason": "一股也可买"},
+            {"symbol": "MSFT.US", "price": 260, "confidence": 90, "reason": "继续分配"},
+        ],
+        max_symbols=5,
+        max_amount=0,
+        max_position_ratio=1,
+        min_confidence=72,
+        target_portfolio_ratio=0.70,
+        require_paper=True,
+    )
+
+    assert result["submittedCount"] == 2
+    assert [item["quantity"] for item in executed] == [1, 1]
+    assert executed[0]["budget"]["budget"] < 1000
+    assert result["positionControl"]["targetPortfolioRatio"] == 0.70
+    assert "US min 1 share" in result["positionControl"]["budgetRule"]
+
+
+def test_execute_watchlist_opportunities_sells_existing_position_when_allowed(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    monkeypatch.setattr(service, "_load_watchlist_symbols", classmethod(lambda cls, *, user_id: {"AAPL.US"}))
+    monkeypatch.setattr(service, "_has_recent_duplicate", classmethod(lambda cls, user_id, symbol, side: False))
+    monkeypatch.setattr(service, "_load_broker_today_orders", classmethod(lambda cls, account_id, user_id: ([], "")))
+    monkeypatch.setattr(service, "_assert_paper_trading_account", classmethod(lambda cls, account_id, user_id: {"isPaper": True}))
+
+    class AccountInfo:
+        cash = 5000
+        buying_power = 5000
+        market_value = 900
+        total_equity = 5900
+
+    class Position:
+        symbol = "AAPL.US"
+        quantity = 3
+        market_price = 180
+        average_cost = 200
+        market_value = 540
+
+    class FakeBroker:
+        is_connected = True
+        account_id = 7
+
+        def connect(self):
+            return True
+
+        def get_account_info(self):
+            return AccountInfo()
+
+        def get_positions(self):
+            return [Position()]
+
+    executed = []
+    monkeypatch.setattr(
+        module.PlatformAccessService,
+        "get_user_capabilities",
+        staticmethod(lambda user_id: {"hasBoundAccount": True, "quantApiEnabled": True, "canUseQuantTrading": True}),
+    )
+    monkeypatch.setattr(service, "_get_broker", staticmethod(lambda account_id=None, user_id=1: FakeBroker()))
+    monkeypatch.setattr(
+        service,
+        "_execute_decision",
+        classmethod(lambda cls, account_id, decision, user_id=1: executed.append(decision) or {"status": "executed", "order_id": "sell-1"}),
+    )
+    monkeypatch.setattr(
+        service,
+        "_save_decision",
+        classmethod(lambda cls, **kwargs: {**kwargs["decision"], "status": kwargs["status"], "orderId": kwargs["order_id"]}),
+    )
+
+    result = service.execute_watchlist_opportunities(
+        user_id=1,
+        opportunities=[{"symbol": "AAPL.US", "side": "SELL", "price": 180, "confidence": 38, "reason": "趋势转弱"}],
+        allow_sells=True,
+        require_paper=True,
+    )
+
+    assert result["submittedCount"] == 1
+    assert executed[0]["side"] == "SELL"
+    assert executed[0]["quantity"] == 3
+    assert executed[0]["budget"]["budgetRule"] == "sell full available holding"
+
+
+def test_run_us_open_watchlist_ai_trade_skips_outside_regular_session(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    monkeypatch.setattr(
+        service,
+        "_load_us_open_ai_trade_settings",
+        classmethod(lambda cls, overrides=None: {
+            "autoTradeEnabled": True,
+            "maxSymbols": 5,
+            "targetPortfolioRatio": 0.70,
+            "minConfidence": 72,
+            "strategyProfile": "balanced",
+            "market": "US",
+            "regularSessionOnly": True,
+        }),
+    )
+    monkeypatch.setattr(service, "_is_us_regular_session_now", staticmethod(lambda now=None: False))
+    monkeypatch.setattr(
+        service,
+        "_load_watchlist_scan_targets",
+        classmethod(lambda cls, **kwargs: (_ for _ in ()).throw(AssertionError("outside session must not scan"))),
+    )
+
+    result = service.run_us_open_watchlist_ai_trade(user_id=1, source="scheduler")
+
+    assert result["skippedRun"] is True
+    assert result["reason"] == "outside-us-regular-session"
+
+
+def test_run_us_open_watchlist_ai_trade_builds_buy_and_sell_orders(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    monkeypatch.setattr(service, "_save_watchlist_strategy_run", classmethod(lambda cls, **kwargs: {"saved": True, "runId": 99}))
+    monkeypatch.setattr(service, "_is_us_regular_session_now", staticmethod(lambda now=None: True))
+    monkeypatch.setattr(service, "_assert_paper_trading_account", classmethod(lambda cls, account_id, user_id: {"isPaper": True}))
+    monkeypatch.setattr(service, "_load_watchlist_symbols", classmethod(lambda cls, *, user_id: {"AAPL.US", "MSFT.US"}))
+    monkeypatch.setattr(service, "_has_recent_duplicate", classmethod(lambda cls, user_id, symbol, side: False))
+    monkeypatch.setattr(service, "_load_broker_today_orders", classmethod(lambda cls, account_id, user_id: ([], "")))
+    monkeypatch.setattr(
+        service,
+        "_load_watchlist_scan_targets",
+        classmethod(lambda cls, *, user_id, session_filter="all": [
+            {"symbol": "AAPL.US", "name": "Apple", "market": "US"},
+            {"symbol": "MSFT.US", "name": "Microsoft", "market": "US"},
+        ]),
+    )
+
+    class AccountInfo:
+        cash = 1000
+        buying_power = 1000
+        market_value = 200
+        total_equity = 1200
+
+    class Position:
+        symbol = "AAPL.US"
+        quantity = 2
+        market_price = 100
+        average_cost = 150
+        market_value = 200
+
+    class FakeBroker:
+        is_connected = True
+        account_id = 7
+
+        def connect(self):
+            return True
+
+        def get_account_info(self):
+            return AccountInfo()
+
+        def get_positions(self):
+            return [Position()]
+
+    def fake_evaluate(cls, *, target, symbol, user_id, strategy_profile):
+        if symbol == "AAPL.US":
+            return {
+                "symbol": symbol,
+                "name": "Apple",
+                "market": "US",
+                "side": "HOLD",
+                "status": "observed",
+                "isOpportunity": False,
+                "price": 100,
+                "confidence": 35,
+                "riskLevel": "high",
+                "trendDirection": "down",
+                "reason": "高风险转弱",
+                "scoreBreakdown": {"total": 35, "trendDirection": "down"},
+                "metrics": {"latestClose": 100, "return20": -8, "trendScanDirection": "down"},
+            }
+        return {
+            "symbol": symbol,
+            "name": "Microsoft",
+            "market": "US",
+            "side": "BUY",
+            "status": "candidate",
+            "isOpportunity": True,
+            "price": 300,
+            "confidence": 90,
+            "riskLevel": "low",
+            "trendDirection": "up",
+            "reason": "强势机会",
+            "scoreBreakdown": {"total": 90, "trendDirection": "up"},
+            "metrics": {"latestClose": 300, "return20": 6, "trendScanDirection": "up"},
+        }
+
+    executed = []
+    monkeypatch.setattr(
+        module.PlatformAccessService,
+        "get_user_capabilities",
+        staticmethod(lambda user_id: {"hasBoundAccount": True, "quantApiEnabled": True, "canUseQuantTrading": True}),
+    )
+    monkeypatch.setattr(service, "_get_broker", staticmethod(lambda account_id=None, user_id=1: FakeBroker()))
+    monkeypatch.setattr(service, "_evaluate_watchlist_quant_target", classmethod(fake_evaluate))
+    monkeypatch.setattr(
+        service,
+        "_execute_decision",
+        classmethod(lambda cls, account_id, decision, user_id=1: executed.append(decision) or {"status": "executed", "order_id": f"order-{len(executed)}"}),
+    )
+    monkeypatch.setattr(
+        service,
+        "_save_decision",
+        classmethod(lambda cls, **kwargs: {**kwargs["decision"], "status": kwargs["status"], "orderId": kwargs["order_id"]}),
+    )
+
+    result = service.run_us_open_watchlist_ai_trade(user_id=1, source="scheduler")
+
+    assert result["executed"] is True
+    assert result["autoTrade"]["submittedCount"] == 2
+    assert [item["side"] for item in executed] == ["SELL", "BUY"]
+    assert executed[0]["symbol"] == "AAPL.US"
+    assert executed[0]["quantity"] == 2
+    assert executed[1]["symbol"] == "MSFT.US"
+    assert executed[1]["quantity"] == 1
+
+
+def test_trade_service_account_lookup_does_not_fall_back_when_account_id_is_missing(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    calls = []
+
+    def _request(cls, *, method, path, user_id, **kwargs):
+        calls.append(path)
+        if path == "/api/v1/trade/accounts":
+            return {"success": True, "data": [{"id": 8, "trading_mode": "paper", "account_id": "LBPT100"}]}
+        if path == "/api/v1/trade/accounts/default":
+            raise AssertionError("must not fall back to the default account when an explicit account id is missing")
+        return {}
+
+    monkeypatch.setattr(service, "_request_trade_service", classmethod(_request))
+
+    with pytest.raises(PermissionError, match="指定账户不存在或不可用"):
+        service._load_trade_service_account(account_id=7, user_id=1)
+
+    assert calls == ["/api/v1/trade/accounts"]
 
 
 def test_watchlist_strategy_backtest_replays_historical_scores(monkeypatch) -> None:

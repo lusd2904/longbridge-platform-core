@@ -56,6 +56,12 @@ def _submit_payload() -> OrderSubmitRequest:
     )
 
 
+def _auto_submit_payload(source: str = "watchlist-us-open-ai-trade") -> OrderSubmitRequest:
+    payload = _submit_payload()
+    payload.source = source
+    return payload
+
+
 def _cancel_payload() -> OrderCancelRequest:
     return OrderCancelRequest(order_id="ord-1", account_id=7)
 
@@ -141,6 +147,83 @@ def test_submit_order_returns_502_when_reference_price_is_unavailable(monkeypatc
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.detail["error"] == "无法获取有效参考价格，请稍后再试"
+
+
+def test_submit_order_rejects_auto_source_when_account_is_not_paper(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_side_effects(monkeypatch)
+    broker = BrokerDouble()
+    monkeypatch.setattr(
+        commands,
+        "_build_trade_request_context",
+        lambda *args, **kwargs: commands._TradeRequestContext(
+            account_id=7,
+            account_row={"broker_type": "longbridge", "broker_name": "长桥证券", "account_id": "LB123456"},
+            broker=broker,
+            request_id="req-1",
+            client_ip="127.0.0.1",
+        ),
+    )
+    monkeypatch.setattr(commands, "_create_submit_order_saga", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("auto paper guard must run before saga creation")))
+
+    with pytest.raises(HTTPException) as exc_info:
+        commands._submit_order(_user(), _request(), _auto_submit_payload())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "自动策略订单仅允许提交到纸账户/模拟账户"
+
+
+def test_submit_order_allows_auto_source_for_longbridge_paper_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_side_effects(monkeypatch)
+    broker = BrokerDouble(place_result={"order_id": "ord-paper-1", "status": "submitted"})
+    monkeypatch.setattr(
+        commands,
+        "_build_trade_request_context",
+        lambda *args, **kwargs: commands._TradeRequestContext(
+            account_id=7,
+            account_row={"broker_type": "longbridge", "broker_name": "长桥证券", "account_id": "LBPT10077242"},
+            broker=broker,
+            request_id="req-1",
+            client_ip="127.0.0.1",
+        ),
+    )
+    monkeypatch.setattr(commands, "_create_submit_order_saga", lambda *args, **kwargs: "saga-paper-1")
+    monkeypatch.setattr(commands, "_load_reference_price", lambda *args, **kwargs: (100.0, {"source": "request"}))
+    monkeypatch.setattr(commands, "_run_order_risk_check", lambda *args, **kwargs: (True, "ok", "low"))
+    monkeypatch.setattr(commands, "_upsert_projection", lambda *args, **kwargs: None)
+
+    result = commands._submit_order(_user(), _request(), _auto_submit_payload())
+
+    assert result["success"] is True
+    assert result["order_id"] == "ord-paper-1"
+    assert result["source"] == "watchlist-us-open-ai-trade"
+
+
+def test_submit_order_allows_manual_source_for_non_paper_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_side_effects(monkeypatch)
+    broker = BrokerDouble(place_result={"order_id": "ord-manual-1", "status": "submitted"})
+    monkeypatch.setattr(
+        commands,
+        "_build_trade_request_context",
+        lambda *args, **kwargs: commands._TradeRequestContext(
+            account_id=7,
+            account_row={"broker_type": "longbridge", "broker_name": "长桥证券", "account_id": "LB123456"},
+            broker=broker,
+            request_id="req-1",
+            client_ip="127.0.0.1",
+        ),
+    )
+    monkeypatch.setattr(commands, "_create_submit_order_saga", lambda *args, **kwargs: "saga-manual-1")
+    monkeypatch.setattr(commands, "_load_reference_price", lambda *args, **kwargs: (100.0, {"source": "request"}))
+    monkeypatch.setattr(commands, "_run_order_risk_check", lambda *args, **kwargs: (True, "ok", "low"))
+    monkeypatch.setattr(commands, "_upsert_projection", lambda *args, **kwargs: None)
+
+    payload = _submit_payload()
+    payload.source = "manual"
+    result = commands._submit_order(_user(), _request(), payload)
+
+    assert result["success"] is True
+    assert result["order_id"] == "ord-manual-1"
+    assert result["source"] == "manual"
 
 
 def test_submit_order_returns_422_when_risk_check_rejects(monkeypatch: pytest.MonkeyPatch) -> None:

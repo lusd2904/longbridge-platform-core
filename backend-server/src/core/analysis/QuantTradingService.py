@@ -1,12 +1,13 @@
 import importlib.util
 import json
 import os
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
+from zoneinfo import ZoneInfo
 
 from config.Config import AppConfig
 from core.analysis.DailySymbolTrendScanService import DailySymbolTrendScanService
@@ -15,6 +16,7 @@ from core.analysis.IndicatorSnapshotService import IndicatorSnapshotService
 from core.analysis.StrategyMonitorService import StrategyMonitorService
 from core.broker.BrokerInterface import get_broker_manager
 from core.platform.PlatformAccessService import PlatformAccessService
+from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
 
@@ -367,6 +369,176 @@ class QuantTradingService:
         return result
 
     @classmethod
+    def run_us_open_watchlist_ai_trade(
+        cls,
+        *,
+        user_id: int = 1,
+        account_id: Optional[int] = None,
+        source: str = 'scheduler',
+        force: bool = False,
+        now: Optional[datetime] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        cls.ensure_schema()
+        policy_settings = cls._load_us_open_ai_trade_settings(settings)
+        cycle_id = cls._cycle_id()
+
+        if not policy_settings["autoTradeEnabled"]:
+            return cls._build_us_open_trade_result(
+                cycle_id=cycle_id,
+                source=source,
+                settings=policy_settings,
+                skipped=True,
+                reason="auto-trade-disabled",
+                message="美股开盘 AI 自动交易开关未开启",
+            )
+
+        if policy_settings["regularSessionOnly"] and not force and not cls._is_us_regular_session_now(now):
+            return cls._build_us_open_trade_result(
+                cycle_id=cycle_id,
+                source=source,
+                settings=policy_settings,
+                skipped=True,
+                reason="outside-us-regular-session",
+                message="当前不在美股常规交易时段，已跳过自动交易",
+            )
+
+        targets = cls._load_watchlist_scan_targets(user_id=user_id, session_filter='all')
+        targets = [
+            item for item in targets
+            if cls._target_market(item) == policy_settings["market"]
+        ][:200]
+        evaluations: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        buy_opportunities: List[Dict[str, Any]] = []
+        sell_opportunities: List[Dict[str, Any]] = []
+
+        broker = cls._get_broker(account_id, user_id=user_id)
+        if not broker:
+            raise ValueError('当前用户未绑定可用交易账户，无法执行美股开盘 AI 自动交易')
+        if not broker.is_connected and not broker.connect():
+            raise ConnectionError('券商连接失败')
+
+        bound_account_id = int(getattr(broker, 'account_id', account_id or 0) or account_id or 0) or None
+        cls._assert_paper_trading_account(account_id=bound_account_id, user_id=user_id)
+
+        positions = broker.get_positions() or []
+        holdings = cls._build_holdings_index(positions)
+
+        seen_symbols: set[str] = set()
+        for target in targets:
+            if isinstance(target, dict):
+                raw_symbol = target.get('symbol') or target.get('ticker') or target.get('code')
+            else:
+                raw_symbol = target
+                target = {"symbol": raw_symbol}
+            symbol = cls._normalize_watchlist_symbol(raw_symbol, market=(target or {}).get('market') or policy_settings["market"])
+            if not symbol or symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+
+            evaluation = cls._evaluate_watchlist_quant_target(
+                target=dict(target or {}),
+                symbol=symbol,
+                user_id=user_id,
+                strategy_profile=policy_settings["strategyProfile"],
+            )
+            if evaluation.get('status') == 'skipped':
+                skipped.append(evaluation)
+                continue
+            holding = holdings.get(symbol)
+            trade_side = cls._derive_us_open_trade_side(
+                evaluation=evaluation,
+                is_holding=holding is not None,
+                min_confidence=policy_settings["minConfidence"],
+            )
+            evaluation["side"] = trade_side
+            evaluation["status"] = "sell_candidate" if trade_side == "SELL" else evaluation.get("status")
+            evaluation["isOpportunity"] = trade_side in {"BUY", "SELL"}
+            evaluation["source"] = "watchlist-us-open-ai-trade"
+            evaluations.append(evaluation)
+            if trade_side == "SELL":
+                sell_opportunities.append(evaluation)
+            elif trade_side == "BUY":
+                buy_opportunities.append(evaluation)
+
+        buy_opportunities = sorted(
+            buy_opportunities,
+            key=lambda item: (
+                int(item.get('confidence') or 0),
+                float(item.get('scoreBreakdown', {}).get('total') or 0),
+            ),
+            reverse=True,
+        )[:policy_settings["maxSymbols"]]
+        sell_opportunities = sorted(
+            sell_opportunities,
+            key=lambda item: (
+                1 if str(item.get("riskLevel") or "").lower() == "high" else 0,
+                -int(item.get('confidence') or 0),
+            ),
+            reverse=True,
+        )
+        opportunities = sell_opportunities + buy_opportunities
+
+        if not opportunities:
+            result = cls._build_us_open_trade_result(
+                cycle_id=cycle_id,
+                source=source,
+                settings=policy_settings,
+                skipped=False,
+                reason="no-opportunities",
+                message="自选股池本轮没有达到买入或卖出条件的标的",
+                targets=targets,
+                evaluations=evaluations,
+                opportunities=[],
+                skipped_items=skipped,
+            )
+            result["history"] = cls._save_watchlist_strategy_run(
+                user_id=user_id,
+                result=result,
+                candidates=evaluations,
+                opportunities=[],
+                skipped=skipped,
+            )
+            return result
+
+        execution = cls.execute_watchlist_opportunities(
+            user_id=user_id,
+            opportunities=opportunities,
+            account_id=bound_account_id,
+            source='watchlist-us-open-ai-trade',
+            max_symbols=policy_settings["maxSymbols"],
+            max_amount=0,
+            max_position_ratio=1,
+            min_confidence=policy_settings["minConfidence"],
+            target_portfolio_ratio=policy_settings["targetPortfolioRatio"],
+            allow_sells=True,
+            require_paper=True,
+            broker=broker,
+        )
+        result = cls._build_us_open_trade_result(
+            cycle_id=cycle_id,
+            source=source,
+            settings=policy_settings,
+            skipped=False,
+            reason=execution.get("reason") or "executed",
+            message="美股开盘 AI 自动交易已完成",
+            targets=targets,
+            evaluations=evaluations,
+            opportunities=opportunities,
+            skipped_items=skipped,
+            auto_trade={"enabled": True, **execution},
+        )
+        result["history"] = cls._save_watchlist_strategy_run(
+            user_id=user_id,
+            result=result,
+            candidates=evaluations,
+            opportunities=opportunities,
+            skipped=skipped,
+        )
+        return result
+
+    @classmethod
     def list_watchlist_strategy_history(cls, user_id: int = 1, limit: int = 20) -> Dict[str, Any]:
         cls.ensure_schema()
         safe_limit = max(1, min(int(limit or 20), 100))
@@ -524,51 +696,68 @@ class QuantTradingService:
         max_amount: float = 2000,
         max_position_ratio: float = 0.08,
         min_confidence: int = 72,
+        target_portfolio_ratio: Optional[float] = None,
+        allow_sells: bool = False,
+        require_paper: bool = False,
+        broker: Any = None,
     ) -> Dict[str, Any]:
         cls.ensure_schema()
         access = PlatformAccessService.get_user_capabilities(user_id)
         if not access.get("hasBoundAccount"):
-            raise ValueError('当前用户未绑定可用交易账户，无法执行自选机会股自动买入')
+            raise ValueError('当前用户未绑定可用交易账户，无法执行自选机会股自动交易')
         if not access.get("quantApiEnabled"):
             raise ValueError('当前用户未开通量化交易 API，请先在用户管理中开启后再使用')
         if not access.get("canUseQuantTrading"):
             raise ValueError('当前用户角色暂未授权量化交易能力')
 
         safe_opportunities = opportunities if isinstance(opportunities, list) else []
-        safe_max_symbols = max(1, min(int(max_symbols or 2), 10))
+        max_symbols_cap = 20 if target_portfolio_ratio is not None else 10
+        safe_max_symbols = max(1, min(int(max_symbols or 2), max_symbols_cap))
         safe_max_amount = max(0.0, float(max_amount or 0))
-        safe_position_ratio = max(0.0, min(float(max_position_ratio or 0.08), 1.0))
+        safe_position_ratio = max(0.0, min(cls._safe_float(max_position_ratio, 0.08), 1.0))
         safe_min_confidence = max(0, min(int(min_confidence or 72), 100))
+        safe_target_ratio = (
+            max(0.0, min(cls._safe_float(target_portfolio_ratio, 0.70), 1.0))
+            if target_portfolio_ratio is not None else None
+        )
         allowed_symbols = cls._load_watchlist_symbols(user_id=user_id)
 
-        broker = cls._get_broker(account_id, user_id=user_id)
+        broker = broker or cls._get_broker(account_id, user_id=user_id)
         if not broker:
-            raise ValueError('当前用户未绑定可用交易账户，无法执行自选机会股自动买入')
+            raise ValueError('当前用户未绑定可用交易账户，无法执行自选机会股自动交易')
         if not broker.is_connected and not broker.connect():
             raise ConnectionError('券商连接失败')
 
         bound_account_id = int(getattr(broker, 'account_id', account_id or 0) or account_id or 0) or None
+        if require_paper:
+            cls._assert_paper_trading_account(account_id=bound_account_id, user_id=user_id)
         account_info = broker.get_account_info()
         positions = broker.get_positions() or []
-        holdings: Dict[str, Any] = {}
-        for position in positions:
-            raw_symbol = str(getattr(position, 'symbol', '')).upper()
-            if not raw_symbol:
-                continue
-            holdings[raw_symbol] = position
-            holdings[HistoricalMarketDataService.normalize_symbol(raw_symbol)] = position
-        available_cash = float(getattr(account_info, 'cash', 0) or getattr(account_info, 'buying_power', 0) or 0)
+        holdings = cls._build_holdings_index(positions)
+        available_cash = cls._read_number(account_info, 'cash')
+        if available_cash <= 0:
+            available_cash = cls._read_number(account_info, 'buying_power')
         total_equity = float(
-            getattr(account_info, 'total_equity', 0)
-            or (available_cash + sum(float(getattr(position, 'market_value', 0) or 0) for position in positions))
+            cls._read_number(account_info, 'total_equity')
+            or (available_cash + sum(cls._read_number(position, 'market_value') for position in positions))
             or 0
         )
+        current_market_value = (
+            cls._read_number(account_info, 'market_value')
+            or sum(cls._read_number(position, 'market_value') for position in positions)
+        )
         per_symbol_cap = total_equity * safe_position_ratio if total_equity > 0 and safe_position_ratio > 0 else safe_max_amount
+        portfolio_budget = total_equity * safe_target_ratio if safe_target_ratio is not None and total_equity > 0 else None
+        remaining_portfolio_buy_budget = (
+            min(available_cash, max(0.0, float(portfolio_budget or 0) - current_market_value))
+            if portfolio_budget is not None else None
+        )
 
         cycle_id = cls._cycle_id()
         decisions: List[Dict[str, Any]] = []
         skipped: List[Dict[str, Any]] = []
         seen_symbols: set[str] = set()
+        buy_decision_count = 0
         for item in safe_opportunities:
             raw_symbol = str(item.get('symbol') or '').strip().upper()
             if not raw_symbol:
@@ -582,6 +771,11 @@ class QuantTradingService:
                 skipped.append({"symbol": normalized_symbol or raw_symbol, "reason": "不在当前用户自选股池，禁止自动下单"})
                 continue
             symbol = normalized_symbol
+            requested_side = str(item.get('side') or 'BUY').strip().upper()
+            side = 'SELL' if requested_side == 'SELL' and allow_sells else 'BUY'
+            if side == 'BUY' and buy_decision_count >= safe_max_symbols:
+                skipped.append({"symbol": symbol, "reason": f"已达到本轮最多买入标的数 {safe_max_symbols}"})
+                continue
             confidence = int(float(item.get('confidence') or 0))
             price = float(
                 item.get('price')
@@ -590,7 +784,44 @@ class QuantTradingService:
                 or item.get('closePrice')
                 or 0
             )
-            if symbol in holdings:
+            holding = holdings.get(symbol)
+            if price <= 0 and holding is not None:
+                price = cls._read_number(holding, 'market_price') or cls._read_number(holding, 'average_cost')
+
+            if side == 'SELL':
+                if holding is None:
+                    skipped.append({"symbol": symbol, "reason": "无持仓可卖出"})
+                    continue
+                quantity = cls._position_quantity(holding)
+                if quantity <= 0:
+                    skipped.append({"symbol": symbol, "reason": "无可用持仓数量"})
+                    continue
+                if price <= 0:
+                    skipped.append({"symbol": symbol, "reason": "缺少有效卖出价格"})
+                    continue
+                budget_meta = {
+                    "holdingQuantity": quantity,
+                    "price": round(price, 4),
+                    "quantity": quantity,
+                    "budgetRule": "sell full available holding",
+                }
+                decisions.append({
+                    "symbol": symbol,
+                    "market": item.get('market') or StrategyMonitorService.detect_market(symbol),
+                    "side": "SELL",
+                    "quantity": quantity,
+                    "price": price,
+                    "confidence": confidence,
+                    "reason": str(item.get('reason') or item.get('summary') or '自选池 AI 扫描触发卖出')[:500],
+                    "budget": budget_meta,
+                    "scoreBreakdown": item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {},
+                    "factorInputs": item.get("metrics") if isinstance(item.get("metrics"), dict) else {},
+                    "source": source,
+                    "status": "queued"
+                })
+                continue
+
+            if holding is not None:
                 skipped.append({"symbol": symbol, "reason": "已有持仓"})
                 continue
             if confidence < safe_min_confidence:
@@ -600,7 +831,15 @@ class QuantTradingService:
                 skipped.append({"symbol": symbol, "reason": "缺少有效价格"})
                 continue
 
-            budget = min(safe_max_amount, available_cash, per_symbol_cap)
+            if remaining_portfolio_buy_budget is not None:
+                remaining_slots = max(1, safe_max_symbols - buy_decision_count)
+                slot_budget = remaining_portfolio_buy_budget / remaining_slots if remaining_portfolio_buy_budget > 0 else 0.0
+                one_share_budget = price if remaining_portfolio_buy_budget >= price and available_cash >= price else slot_budget
+                budget = min(available_cash, per_symbol_cap, max(slot_budget, one_share_budget))
+                budget_rule = "min(availableCash, perSymbolCap, remainingPortfolioBudget / remainingSlots; US min 1 share)"
+            else:
+                budget = min(safe_max_amount, available_cash, per_symbol_cap)
+                budget_rule = "min(maxAmount, availableCash, totalEquity * maxPositionRatio)"
             quantity = int(budget / price) if budget > 0 else 0
             if quantity <= 0:
                 skipped.append({"symbol": symbol, "reason": "仓位预算不足"})
@@ -610,10 +849,12 @@ class QuantTradingService:
                 "maxAmount": round(safe_max_amount, 4),
                 "availableCashBefore": round(available_cash, 4),
                 "perSymbolCap": round(per_symbol_cap, 4),
+                "portfolioBudget": round(portfolio_budget, 4) if portfolio_budget is not None else None,
+                "remainingPortfolioBuyBudgetBefore": round(remaining_portfolio_buy_budget, 4) if remaining_portfolio_buy_budget is not None else None,
                 "budget": round(budget, 4),
                 "price": round(price, 4),
                 "quantity": quantity,
-                "budgetRule": "min(maxAmount, availableCash, totalEquity * maxPositionRatio)",
+                "budgetRule": budget_rule,
             }
             decisions.append({
                 "symbol": symbol,
@@ -626,11 +867,16 @@ class QuantTradingService:
                 "budget": budget_meta,
                 "scoreBreakdown": item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {},
                 "factorInputs": item.get("metrics") if isinstance(item.get("metrics"), dict) else {},
+                "source": source,
                 "status": "queued"
             })
-            available_cash -= quantity * price
-            if len(decisions) >= safe_max_symbols:
-                break
+            spent = quantity * price
+            available_cash -= spent
+            if remaining_portfolio_buy_budget is not None:
+                remaining_portfolio_buy_budget = max(0.0, remaining_portfolio_buy_budget - spent)
+            buy_decision_count += 1
+            if buy_decision_count >= safe_max_symbols:
+                continue
 
         persisted = []
         today_orders, today_orders_error = cls._load_broker_today_orders(
@@ -682,7 +928,14 @@ class QuantTradingService:
                 "maxPositionRatio": safe_position_ratio,
                 "minConfidence": safe_min_confidence,
                 "perSymbolCap": per_symbol_cap,
-                "budgetRule": "min(maxAmount, availableCash, totalEquity * maxPositionRatio)",
+                "targetPortfolioRatio": safe_target_ratio,
+                "portfolioBudget": portfolio_budget,
+                "currentMarketValue": current_market_value,
+                "budgetRule": (
+                    "min(availableCash, perSymbolCap, remainingPortfolioBudget / remainingSlots; US min 1 share)"
+                    if safe_target_ratio is not None else
+                    "min(maxAmount, availableCash, totalEquity * maxPositionRatio)"
+                ),
             }
         }
 
@@ -758,7 +1011,228 @@ class QuantTradingService:
             "scoreBreakdown": score,
             "metrics": metrics,
             "source": "watchlist-quant-strategy",
+            }
+
+    @classmethod
+    def _load_us_open_ai_trade_settings(cls, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        policy = SystemTaskService.get_policy("watchlist_us_open_ai_trade") or {}
+        policy_settings = policy.get("settings") if isinstance(policy.get("settings"), dict) else {}
+        raw_settings = {**policy_settings, **(overrides or {})}
+        profile = str(raw_settings.get("strategyProfile") or "balanced").strip().lower()
+        if profile not in {"balanced", "momentum", "breakout", "reversion"}:
+            profile = "balanced"
+        return {
+            "autoTradeEnabled": cls._coerce_bool(raw_settings.get("autoTradeEnabled"), True),
+            "maxSymbols": max(1, min(int(cls._safe_float(raw_settings.get("maxSymbols"), 5)), 20)),
+            "targetPortfolioRatio": max(0.0, min(cls._safe_float(raw_settings.get("targetPortfolioRatio"), 0.70), 1.0)),
+            "minConfidence": max(0, min(int(cls._safe_float(raw_settings.get("minConfidence"), 72)), 100)),
+            "strategyProfile": profile,
+            "market": str(raw_settings.get("market") or "US").strip().upper() or "US",
+            "regularSessionOnly": cls._coerce_bool(raw_settings.get("regularSessionOnly"), True),
         }
+
+    @classmethod
+    def _build_us_open_trade_result(
+        cls,
+        *,
+        cycle_id: str,
+        source: str,
+        settings: Dict[str, Any],
+        skipped: bool,
+        reason: str,
+        message: str,
+        targets: Optional[List[Dict[str, Any]]] = None,
+        evaluations: Optional[List[Dict[str, Any]]] = None,
+        opportunities: Optional[List[Dict[str, Any]]] = None,
+        skipped_items: Optional[List[Dict[str, Any]]] = None,
+        auto_trade: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        candidates = evaluations or []
+        trade_payload = auto_trade or {
+            "enabled": bool(settings.get("autoTradeEnabled")),
+            "executed": False,
+            "reason": reason,
+            "signals": [],
+        }
+        return {
+            "cycleId": cycle_id,
+            "source": source,
+            "strategyProfile": settings.get("strategyProfile") or "balanced",
+            "enabled": bool(settings.get("autoTradeEnabled")),
+            "autoExecute": bool(settings.get("autoTradeEnabled")),
+            "executed": bool(trade_payload.get("executed") and trade_payload.get("submittedCount", 0) > 0),
+            "skipped": skipped_items or [],
+            "skippedRun": bool(skipped),
+            "reason": reason,
+            "message": message,
+            "targetCount": len(targets or []),
+            "evaluatedCount": len(candidates),
+            "opportunityCount": len(opportunities or []),
+            "candidates": candidates,
+            "opportunities": opportunities or [],
+            "autoTrade": trade_payload,
+            "positionControl": {
+                "maxSymbols": int(settings.get("maxSymbols") or 5),
+                "targetPortfolioRatio": float(settings.get("targetPortfolioRatio") or 0),
+                "minConfidence": int(settings.get("minConfidence") or 72),
+                "market": settings.get("market") or "US",
+                "regularSessionOnly": bool(settings.get("regularSessionOnly")),
+                "budgetRule": "target portfolio exposure with even remaining-slot allocation; US minimum 1 share",
+            },
+            "executionBoundary": {
+                "owner": "trade-service",
+                "mode": "paper-account-only-order-intent",
+                "description": "美股开盘自动交易只生成受控订单意图，必须经 trade-service 纸账户边界后提交。",
+            },
+        }
+
+    @staticmethod
+    def _target_market(target: Any) -> str:
+        if isinstance(target, dict):
+            raw_symbol = target.get("symbol") or target.get("ticker") or target.get("code")
+            market = target.get("market") or target.get("region")
+        else:
+            raw_symbol = target
+            market = None
+        if market:
+            return str(market).strip().upper()
+        return HistoricalMarketDataService.detect_market(str(raw_symbol or ""))
+
+    @staticmethod
+    def _is_us_regular_session_now(now: Optional[datetime] = None) -> bool:
+        ny_tz = ZoneInfo("America/New_York")
+        current = now or datetime.now(tz=ny_tz)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=ny_tz)
+        current = current.astimezone(ny_tz)
+        if current.weekday() >= 5:
+            return False
+        return time(9, 30) <= current.time() <= time(16, 0)
+
+    @classmethod
+    def _derive_us_open_trade_side(
+        cls,
+        *,
+        evaluation: Dict[str, Any],
+        is_holding: bool,
+        min_confidence: int,
+    ) -> str:
+        confidence = int(evaluation.get("confidence") or 0)
+        risk_level = str(evaluation.get("riskLevel") or "").lower()
+        trend_direction = str(evaluation.get("trendDirection") or "").lower()
+        score = evaluation.get("scoreBreakdown") if isinstance(evaluation.get("scoreBreakdown"), dict) else {}
+        score_direction = str(score.get("trendDirection") or "").lower()
+        metrics = evaluation.get("metrics") if isinstance(evaluation.get("metrics"), dict) else {}
+        trend_scan_direction = str(metrics.get("trendScanDirection") or "").lower()
+        return20 = cls._safe_float(metrics.get("return20"))
+
+        if is_holding:
+            if risk_level == "high":
+                return "SELL"
+            if trend_direction == "down" or score_direction == "down" or trend_scan_direction == "down":
+                return "SELL"
+            if confidence < max(45, min_confidence - 20) and return20 <= -5:
+                return "SELL"
+            return "HOLD"
+        if bool(evaluation.get("isOpportunity")) and confidence >= min_confidence and risk_level != "high":
+            return "BUY"
+        return "HOLD"
+
+    @classmethod
+    def _build_holdings_index(cls, positions: List[Any]) -> Dict[str, Any]:
+        holdings: Dict[str, Any] = {}
+        for position in positions or []:
+            raw_symbol = str(cls._read_order_attr(position, 'symbol', '') or '').upper()
+            if not raw_symbol:
+                continue
+            holdings[raw_symbol] = position
+            holdings[HistoricalMarketDataService.normalize_symbol(raw_symbol)] = position
+        return holdings
+
+    @classmethod
+    def _assert_paper_trading_account(cls, account_id: Optional[int], user_id: int) -> Dict[str, Any]:
+        account = cls._load_trade_service_account(account_id=account_id, user_id=user_id)
+        if cls._is_paper_account(account):
+            return account
+        raise PermissionError("自动交易仅允许纸账户/模拟账户执行，当前账户未通过 paper 校验")
+
+    @classmethod
+    def _load_trade_service_account(cls, account_id: Optional[int], user_id: int) -> Dict[str, Any]:
+        try:
+            if account_id:
+                response = cls._request_trade_service(
+                    method="GET",
+                    path="/api/v1/trade/accounts",
+                    user_id=user_id,
+                    timeout=30,
+                )
+                accounts = response.get("data") if isinstance(response.get("data"), list) else []
+                for account in accounts:
+                    if int(cls._read_order_attr(account, "id", 0) or 0) == int(account_id):
+                        return dict(account)
+                raise PermissionError("指定账户不存在或不可用")
+            response = cls._request_trade_service(
+                method="GET",
+                path="/api/v1/trade/accounts/default",
+                user_id=user_id,
+                timeout=30,
+            )
+            data = response.get("data") if isinstance(response.get("data"), dict) else response
+            return dict(data or {})
+        except Exception as exc:
+            raise PermissionError(f"纸账户校验失败: {exc}") from exc
+
+    @classmethod
+    def _is_paper_account(cls, account: Dict[str, Any]) -> bool:
+        if not account:
+            return False
+        trading_mode = str(account.get("trading_mode") or account.get("tradingMode") or "").strip().lower()
+        if trading_mode == "paper":
+            return True
+        if bool(account.get("isPaper") or account.get("is_paper")):
+            return True
+        descriptor = " ".join(
+            str(account.get(key) or "")
+            for key in ("account_id", "accountId", "display_name", "displayName", "broker_name", "brokerName", "name")
+        ).upper()
+        return any(keyword in descriptor for keyword in ("PAPER", "PAPERTRADING", "LBPT", "SIM", "SIMULAT", "DEMO", "SANDBOX", "模拟"))
+
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool = False) -> bool:
+        if value is None or value == "":
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value > 0
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled"}:
+            return False
+        return default
+
+    @staticmethod
+    def _read_number(item: Any, name: str, default: float = 0.0) -> float:
+        if isinstance(item, dict):
+            value = item.get(name)
+        else:
+            value = getattr(item, name, None)
+        try:
+            return float(value or default)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _position_quantity(cls, position: Any) -> int:
+        for name in ("available_quantity", "availableQuantity", "quantity", "qty"):
+            try:
+                quantity = int(float(cls._read_order_attr(position, name, 0) or 0))
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity > 0:
+                return quantity
+        return 0
 
     @classmethod
     def _build_watchlist_quant_metrics(
@@ -1273,7 +1747,7 @@ class QuantTradingService:
             "price": float(decision.get("price") or 0),
             "order_type": "LIMIT",
             "time_in_force": "DAY",
-            "source": "watchlist-quant-strategy",
+            "source": decision.get("source") or "watchlist-quant-strategy",
             "strategy_context": {
                 "confidence": int(decision.get("confidence") or 0),
                 "reason": decision.get("reason") or "",
@@ -1487,7 +1961,7 @@ class QuantTradingService:
             "boundary": "candidate-only; order intent must go through trade-service",
             "fields": {
                 "symbol": "标准化市场标的，例如 AAPL.US",
-                "side": "BUY 或 HOLD",
+                "side": "BUY、SELL 或 HOLD",
                 "confidence": "0-100 多因子评分",
                 "riskLevel": "low / medium / high",
                 "scoreBreakdown": "trend / breakout / reversion / aiTrend / riskPenalty",

@@ -8,6 +8,40 @@ from . import trade_commands as command_support
 from .models import AuthUser, OrderSubmitRequest
 
 
+AUTO_ORDER_SOURCE_PREFIXES = (
+    "strategy-monitor:",
+    "watchlist-us-open-ai-trade",
+    "watchlist-quant-strategy",
+)
+PAPER_ACCOUNT_KEYWORDS = ("PAPER", "PAPERTRADING", "LBPT", "SIM", "SIMULAT", "DEMO", "SANDBOX", "模拟")
+
+
+def _is_auto_order_source(source: Optional[str]) -> bool:
+    text = str(source or "").strip().lower()
+    return bool(text) and any(text.startswith(prefix) for prefix in AUTO_ORDER_SOURCE_PREFIXES)
+
+
+def _is_paper_account(account_row: Dict[str, Any]) -> bool:
+    mode = str(account_row.get("trading_mode") or account_row.get("tradingMode") or "").strip().lower()
+    if mode == "paper":
+        return True
+    if bool(account_row.get("isPaper") or account_row.get("is_paper")):
+        return True
+    descriptor = " ".join(
+        str(account_row.get(key) or "")
+        for key in ("account_id", "accountId", "broker_name", "brokerName", "display_name", "displayName", "name")
+    ).upper()
+    return any(keyword in descriptor for keyword in PAPER_ACCOUNT_KEYWORDS)
+
+
+def _assert_auto_order_uses_paper_account(ctx: command_support._TradeRequestContext, payload: OrderSubmitRequest) -> None:
+    if not _is_auto_order_source(payload.source):
+        return
+    if _is_paper_account(ctx.account_row):
+        return
+    raise HTTPException(status_code=403, detail="自动策略订单仅允许提交到纸账户/模拟账户")
+
+
 def _create_submit_order_saga(
     user: AuthUser,
     ctx: command_support._TradeRequestContext,
@@ -512,6 +546,7 @@ def _build_submit_success_response(
 def _submit_order(user: AuthUser, request: Request, payload: OrderSubmitRequest) -> Dict[str, Any]:
     symbol, action, order_type = command_support._validate_submit_payload(payload)
     ctx = command_support._build_trade_request_context(user, request, int(payload.account_id))
+    _assert_auto_order_uses_paper_account(ctx, payload)
     saga_id = _create_submit_order_saga(
         user,
         ctx,

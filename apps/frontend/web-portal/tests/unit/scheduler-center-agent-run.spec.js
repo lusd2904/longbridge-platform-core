@@ -337,4 +337,67 @@ describe('SchedulerCenter agent run routing', () => {
     expect(wrapper.text()).not.toContain('机会股自动买入')
     expect(wrapper.vm.tasks[0].settings).toEqual({ autoBuyEnabled: true })
   })
+
+  it('renders and saves us-open ai trade settings with paper guardrails', async () => {
+    routeState.query = {}
+    getPlatformTasksMock.mockResolvedValueOnce({
+      data: [
+        {
+          taskKey: 'watchlist_us_open_ai_trade',
+          taskName: '美股开盘 AI 自动交易',
+          category: 'trade',
+          scheduleType: 'interval',
+          enabled: true,
+          intervalSeconds: 900,
+          settings: {
+            autoTradeEnabled: true,
+            maxSymbols: 5,
+            targetPortfolioRatio: 0.7,
+            minConfidence: 72,
+            strategyProfile: 'balanced',
+            market: 'US',
+            regularSessionOnly: true
+          },
+          status: { state: 'success', lastRunAt: '2026-05-20 09:45:00' }
+        }
+      ]
+    })
+
+    const { default: SchedulerCenter } = await import('../../src/views/system/SchedulerCenter.vue')
+    const wrapper = shallowMount(SchedulerCenter, mountOptions)
+
+    await flushPromises()
+
+    const task = wrapper.vm.tasks[0]
+    expect(wrapper.text()).toContain('AI 自动交易')
+    expect(wrapper.text()).toContain('纸账户与交易边界保护')
+    expect(task.settings).toMatchObject({
+      autoTradeEnabled: true,
+      maxSymbols: 5,
+      targetPortfolioRatio: 0.7,
+      minConfidence: 72,
+      strategyProfile: 'balanced',
+      market: 'US',
+      regularSessionOnly: true
+    })
+
+    task.settings.maxSymbols = 8
+    task.settings.targetPortfolioRatio = 0.65
+    task.settings.minConfidence = 78
+    task.settings.strategyProfile = 'momentum'
+
+    await wrapper.vm.saveTask(task)
+
+    expect(updatePlatformTaskMock).toHaveBeenCalledWith('watchlist_us_open_ai_trade', expect.objectContaining({
+      settings: expect.objectContaining({
+        autoTradeEnabled: true,
+        maxSymbols: 8,
+        targetPortfolioRatio: 0.65,
+        minConfidence: 78,
+        strategyProfile: 'momentum',
+        market: 'US',
+        regularSessionOnly: true
+      })
+    }))
+  })
 })

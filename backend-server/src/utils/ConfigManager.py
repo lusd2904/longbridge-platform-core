@@ -94,7 +94,7 @@ class ConfigManager:
             ('trading.max_daily_loss_percentage', '0.03', '单日最大亏损比例', 'trading', True),
             ('trading.max_daily_trades', '20', '单日最大交易次数', 'trading', True),
             ('trading.max_single_order_value', '100000', '单笔最大订单金额', 'trading', True),
-            ('trading.min_single_order_value', '1000', '单笔最小订单金额', 'trading', True),
+            ('trading.min_single_order_value', '0', '单笔最小订单金额（0 表示不限制，美股允许 1 股委托）', 'trading', True),
             
             # 扫描配置
             ('scan.batch_size', '25', '扫描批处理大小', 'scan', True),

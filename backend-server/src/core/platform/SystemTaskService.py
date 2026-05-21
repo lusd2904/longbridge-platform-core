@@ -161,6 +161,30 @@ class SystemTaskService:
             },
             "description": "每天盘后生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。"
         },
+        "watchlist_us_open_ai_trade": {
+            "taskName": "美股开盘 AI 自动交易",
+            "category": "trade",
+            "scheduleType": "interval",
+            "enabled": True,
+            "intervalSeconds": 900,
+            "runHour": None,
+            "runMinute": None,
+            "maxRequestsPerMinute": 4,
+            "batchSize": 1,
+            "allowAdminToggle": True,
+            "userScope": "system",
+            "singleRun": False,
+            "settings": {
+                "autoTradeEnabled": True,
+                "maxSymbols": 5,
+                "targetPortfolioRatio": 0.70,
+                "minConfidence": 72,
+                "strategyProfile": "balanced",
+                "market": "US",
+                "regularSessionOnly": True
+            },
+            "description": "美股常规开盘期间每 15 分钟扫描自选股池并触发 AI 自动交易，默认买入最多 5 只、总持仓占总资金 70%，且受纸账户与交易边界保护。"
+        },
         "daily_symbol_trend_ai_scan": {
             "taskName": "逐股 AI 趋势扫描",
             "category": "analysis",

@@ -1,9 +1,13 @@
 import hashlib
 import json
 import math
+import os
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from core.analysis.MarketInsightService import MarketInsightService
@@ -26,6 +30,31 @@ class StrategyMonitorService:
         SCHEDULE_PERIOD_DAY: 86400,
         SCHEDULE_PERIOD_WEEK: 604800,
     }
+    STANDARD_ORDER_STATUS = {
+        "NEW": "submitted",
+        "NOT_REPORTED": "submitted",
+        "SUBMITTED": "submitted",
+        "SUBMITTING": "submitted",
+        "WAIT_TO_NEW": "submitted",
+        "WAIT_TO_DEAL": "accepted",
+        "ACCEPTED": "accepted",
+        "PENDING": "accepted",
+        "PENDING_NEW": "accepted",
+        "PARTIAL_FILLED": "partially_filled",
+        "PARTIALLY_FILLED": "partially_filled",
+        "PARTIALFILLED": "partially_filled",
+        "FILLED": "filled",
+        "EXECUTED": "filled",
+        "CANCELED": "cancelled",
+        "CANCELLED": "cancelled",
+        "WITHDRAWN": "cancelled",
+        "REJECTED": "rejected",
+        "DENIED": "rejected",
+        "EXPIRED": "expired",
+        "FAILED": "failed",
+        "DELETED": "cancelled",
+    }
+    TERMINAL_STANDARD_ORDER_STATUSES = {"filled", "cancelled", "rejected", "expired", "failed"}
     STRATEGY_TEMPLATES = [
         {
             "templateCode": "fixed_stop_loss",
@@ -783,6 +812,9 @@ class StrategyMonitorService:
         }
 
         alerts = []
+        should_auto_execute = source == 'scheduler'
+        realtime_orders_cache: Optional[List[Any]] = None
+        realtime_orders_error = ""
         for position in positions:
             symbol = getattr(position, 'symbol', '')
             current_price = float(getattr(position, 'market_price', 0) or 0)
@@ -855,6 +887,30 @@ class StrategyMonitorService:
                     """,
                     (strategy['id'], user_id)
                 )
+                execution = cls._build_execution_result(status="alert_only")
+                if should_auto_execute and strategy.get("executionMode") == cls.EXECUTION_MODE_AUTO:
+                    if realtime_orders_cache is None:
+                        realtime_orders_cache, realtime_orders_error = cls._load_trade_service_orders(
+                            account_id=bound_account_id,
+                            user_id=user_id,
+                        )
+                    execution = cls._execute_strategy_alert(
+                        strategy=strategy,
+                        alert=alert,
+                        context=context,
+                        position=position,
+                        account_id=bound_account_id,
+                        user_id=user_id,
+                        source=source,
+                        realtime_orders=realtime_orders_cache,
+                        realtime_orders_error=realtime_orders_error,
+                    )
+                    if execution.get("standardStatus") not in cls.TERMINAL_STANDARD_ORDER_STATUSES:
+                        submitted_order = execution.get("order")
+                        if submitted_order:
+                            realtime_orders_cache = list(realtime_orders_cache or [])
+                            realtime_orders_cache.append(submitted_order)
+
                 alerts.append({
                     "strategyId": strategy['id'],
                     "strategyName": strategy['name'],
@@ -865,7 +921,8 @@ class StrategyMonitorService:
                     "message": alert['message'],
                     "pnlPercent": round(pnl_percent, 2),
                     "weight": round(weight, 2),
-                    "currentPrice": round(current_price, 2)
+                    "currentPrice": round(current_price, 2),
+                    "execution": execution,
                 })
 
         cls._mark_strategies_executed(user_id=user_id, strategy_ids=evaluated_strategy_ids)
@@ -919,6 +976,370 @@ class StrategyMonitorService:
             }
 
         return None
+
+    @classmethod
+    def _execute_strategy_alert(
+        cls,
+        *,
+        strategy: Dict[str, Any],
+        alert: Dict[str, Any],
+        context: Dict[str, Any],
+        position: Any,
+        account_id: Optional[int],
+        user_id: int,
+        source: str,
+        realtime_orders: Optional[List[Any]],
+        realtime_orders_error: str = "",
+    ) -> Dict[str, Any]:
+        action = str((strategy.get("params") or {}).get("action") or "ALERT").strip().upper()
+        if action == "ALERT":
+            return cls._build_execution_result(status="alert_only")
+
+        order_intent = cls._build_order_intent(
+            strategy=strategy,
+            alert=alert,
+            context=context,
+            position=position,
+            account_id=account_id,
+            source=source,
+        )
+        if not order_intent:
+            return cls._build_execution_result(
+                status="skipped",
+                reason="当前持仓不足以生成自动委托",
+                action=action,
+            )
+
+        if realtime_orders_error:
+            return cls._build_execution_result(
+                status="failed",
+                reason=f"读取 trade-service 实时订单失败: {realtime_orders_error}",
+                action=action,
+            )
+
+        active_order = cls._find_active_trade_service_order(
+            realtime_orders or [],
+            symbol=order_intent.get("symbol"),
+            side=order_intent.get("action"),
+        )
+        if active_order:
+            return cls._build_execution_result(
+                status="skipped",
+                reason="存在同标的同方向未完成委托，跳过自动执行",
+                action=action,
+                duplicateOrderId=active_order.get("orderId"),
+                duplicateStatus=active_order.get("status"),
+            )
+
+        try:
+            cls._assert_paper_trading_account(account_id=account_id, user_id=user_id)
+            response = cls._submit_order_intent_via_trade_service(
+                account_id=int(account_id or 0),
+                user_id=user_id,
+                order_intent=order_intent,
+            )
+        except Exception as exc:
+            return cls._build_execution_result(
+                status="failed",
+                reason=str(exc),
+                action=action,
+                quantity=order_intent.get("quantity"),
+            )
+
+        return cls._build_execution_result(
+            status=response.get("status") or "submitted",
+            action=action,
+            orderAction=order_intent.get("action"),
+            quantity=order_intent.get("quantity"),
+            orderId=response.get("order_id"),
+            standardStatus=response.get("standardStatus"),
+            boundary=response.get("boundary"),
+            payload=order_intent,
+            order={
+                "symbol": order_intent.get("symbol"),
+                "side": order_intent.get("action"),
+                "status": response.get("standardStatus") or response.get("status"),
+                "order_id": response.get("order_id"),
+            },
+        )
+
+    @classmethod
+    def _build_order_intent(
+        cls,
+        *,
+        strategy: Dict[str, Any],
+        alert: Dict[str, Any],
+        context: Dict[str, Any],
+        position: Any,
+        account_id: Optional[int],
+        source: str,
+    ) -> Optional[Dict[str, Any]]:
+        params = strategy.get("params") or {}
+        action = str(params.get("action") or "ALERT").strip().upper()
+        symbol = HistoricalMarketDataService.normalize_symbol(context.get("symbol"))
+        price = float(context.get("current_price") or 0)
+        if not symbol or price <= 0:
+            return None
+
+        quantity = cls._resolve_strategy_order_quantity(action=action, position=position)
+        if quantity <= 0:
+            return None
+        order_action = "SELL" if action == "REDUCE" else action
+
+        return {
+            "account_id": int(account_id or 0),
+            "symbol": symbol,
+            "action": order_action,
+            "quantity": quantity,
+            "price": price,
+            "order_type": "LIMIT",
+            "time_in_force": "DAY",
+            "source": f"strategy-monitor:{source}",
+            "strategy_context": {
+                "strategyId": strategy.get("id"),
+                "strategyName": strategy.get("name"),
+                "strategyType": strategy.get("type"),
+                "market": context.get("market"),
+                "pnlPercent": float(context.get("pnl_percent") or 0),
+                "weight": float(context.get("weight") or 0),
+                "message": alert.get("message") or "",
+                "executionMode": strategy.get("executionMode"),
+                "requestedAction": action,
+            },
+        }
+
+    @classmethod
+    def _resolve_strategy_order_quantity(cls, *, action: str, position: Any) -> int:
+        position_qty = cls._position_quantity(position)
+        if action == "SELL":
+            return position_qty
+        if action == "REDUCE":
+            return max(1, int(math.ceil(position_qty / 2.0))) if position_qty > 0 else 0
+        if action == "BUY":
+            return 1
+        return 0
+
+    @staticmethod
+    def _position_quantity(position: Any) -> int:
+        candidates = (
+            getattr(position, "available_quantity", None),
+            getattr(position, "availableQuantity", None),
+            getattr(position, "quantity", None),
+            getattr(position, "qty", None),
+        )
+        for value in candidates:
+            try:
+                quantity = int(math.floor(float(value or 0)))
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity > 0:
+                return quantity
+        return 0
+
+    @classmethod
+    def _load_trade_service_orders(cls, account_id: Optional[int], user_id: int) -> tuple[List[Any], str]:
+        try:
+            response = cls._request_trade_service(
+                method="GET",
+                path="/api/v1/trade/orders",
+                user_id=user_id,
+                params={
+                    "account_id": int(account_id) if account_id else "",
+                    "limit": 200,
+                    "realtime": "true",
+                },
+                timeout=30,
+            )
+            data = response.get("data") if isinstance(response.get("data"), dict) else response
+            orders = data.get("orders") or data.get("list") or response.get("orders") or []
+            return list(orders or []), ""
+        except Exception as exc:
+            return [], str(exc)
+
+    @classmethod
+    def _submit_order_intent_via_trade_service(
+        cls,
+        *,
+        account_id: int,
+        user_id: int,
+        order_intent: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if account_id <= 0:
+            raise ValueError("未找到可用账户，无法自动执行策略")
+        response = cls._request_trade_service(
+            method="POST",
+            path="/api/v1/trade/orders/submit",
+            user_id=user_id,
+            payload=order_intent,
+        )
+        data = response.get("data") if isinstance(response.get("data"), dict) else response
+        if response and response.get("success") is False:
+            raise RuntimeError(response.get("error") or response.get("message") or "trade-service 拒绝下单")
+        order_id = data.get("orderId") or data.get("order_id") or response.get("order_id")
+        standard_status = cls._standard_order_status(data.get("status") or response.get("status") or "submitted")
+        return {
+            "status": "executed" if standard_status in {"submitted", "accepted", "partially_filled", "filled"} else standard_status,
+            "order_id": order_id,
+            "standardStatus": standard_status,
+            "boundary": "trade-service",
+        }
+
+    @classmethod
+    def _assert_paper_trading_account(cls, account_id: Optional[int], user_id: int) -> Dict[str, Any]:
+        account = cls._load_trade_service_account(account_id=account_id, user_id=user_id)
+        if cls._is_paper_account(account):
+            return account
+        raise PermissionError("策略自动交易仅允许纸账户/模拟账户执行，当前账户未通过 paper 校验")
+
+    @classmethod
+    def _load_trade_service_account(cls, account_id: Optional[int], user_id: int) -> Dict[str, Any]:
+        try:
+            if account_id:
+                response = cls._request_trade_service(
+                    method="GET",
+                    path="/api/v1/trade/accounts",
+                    user_id=user_id,
+                    timeout=30,
+                )
+                accounts = response.get("data") if isinstance(response.get("data"), list) else []
+                for account in accounts:
+                    if int(cls._read_order_attr(account, "id", 0) or 0) == int(account_id):
+                        return dict(account)
+                raise PermissionError("指定账户不存在或不可用")
+            response = cls._request_trade_service(
+                method="GET",
+                path="/api/v1/trade/accounts/default",
+                user_id=user_id,
+                timeout=30,
+            )
+            data = response.get("data") if isinstance(response.get("data"), dict) else response
+            return dict(data or {})
+        except Exception as exc:
+            raise PermissionError(f"纸账户校验失败: {exc}") from exc
+
+    @classmethod
+    def _is_paper_account(cls, account: Dict[str, Any]) -> bool:
+        if not account:
+            return False
+        trading_mode = str(account.get("trading_mode") or account.get("tradingMode") or "").strip().lower()
+        if trading_mode == "paper":
+            return True
+        if bool(account.get("isPaper") or account.get("is_paper")):
+            return True
+        descriptor = " ".join(
+            str(account.get(key) or "")
+            for key in ("account_id", "accountId", "display_name", "displayName", "broker_name", "brokerName", "name")
+        ).upper()
+        return any(keyword in descriptor for keyword in ("PAPER", "PAPERTRADING", "LBPT", "SIM", "SIMULAT", "DEMO", "SANDBOX", "模拟"))
+
+    @classmethod
+    def _find_active_trade_service_order(cls, orders: List[Any], symbol: str, side: str) -> Optional[Dict[str, Any]]:
+        normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
+        normalized_side = cls._normalize_order_side(side)
+        for order in orders or []:
+            order_symbol = HistoricalMarketDataService.normalize_symbol(cls._read_order_attr(order, "symbol", ""))
+            order_side = cls._normalize_order_side(
+                cls._read_order_attr(order, "side", cls._read_order_attr(order, "action", ""))
+            )
+            if order_symbol != normalized_symbol or order_side != normalized_side:
+                continue
+            status = cls._read_order_attr(order, "status", "")
+            standard_status = cls._standard_order_status(status)
+            if standard_status in cls.TERMINAL_STANDARD_ORDER_STATUSES:
+                continue
+            return {
+                "orderId": cls._read_order_attr(order, "order_id", cls._read_order_attr(order, "orderId")),
+                "status": standard_status or cls._normalize_order_status(status).lower(),
+            }
+        return None
+
+    @staticmethod
+    def _read_order_attr(order: Any, name: str, default: Any = None) -> Any:
+        if isinstance(order, dict):
+            return order.get(name, default)
+        return getattr(order, name, default)
+
+    @staticmethod
+    def _normalize_order_side(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if "." in text:
+            text = text.split(".")[-1]
+        if text in {"buy", "b", "long"} or "买" in text:
+            return "BUY"
+        if text in {"sell", "s", "short"} or "卖" in text:
+            return "SELL"
+        return text.upper()
+
+    @staticmethod
+    def _normalize_order_status(value: Any) -> str:
+        text = str(value or "").strip()
+        if "." in text:
+            text = text.split(".")[-1]
+        return text.replace("-", "_").replace(" ", "_").upper()
+
+    @classmethod
+    def _standard_order_status(cls, value: Any) -> str:
+        normalized = cls._normalize_order_status(value)
+        return cls.STANDARD_ORDER_STATUS.get(normalized, normalized.lower() if normalized else "unknown")
+
+    @staticmethod
+    def _trade_service_base_url() -> str:
+        return str(
+            os.getenv("REF_TRADE_SERVICE_URL")
+            or os.getenv("TRADE_SERVICE_URL")
+            or f"http://127.0.0.1:{os.getenv('REF_TRADE_SERVICE_PORT', '8105')}"
+        ).strip().rstrip("/")
+
+    @classmethod
+    def _trade_service_headers(cls, user_id: int) -> Dict[str, str]:
+        try:
+            from apps.runtime_shared.auth import generate_token
+
+            token = generate_token(int(user_id), "strategy-monitor-service", "user")
+            return {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+        except Exception:
+            return {"Content-Type": "application/json"}
+
+    @classmethod
+    def _request_trade_service(
+        cls,
+        *,
+        method: str,
+        path: str,
+        user_id: int,
+        payload: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: int = 30,
+    ) -> Dict[str, Any]:
+        base_url = cls._trade_service_base_url()
+        if not base_url:
+            raise RuntimeError("REF_TRADE_SERVICE_URL 未配置")
+        query = f"?{urlparse.urlencode(params or {})}" if params else ""
+        body = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
+        request = urlrequest.Request(
+            f"{base_url}{path}{query}",
+            data=body,
+            headers=cls._trade_service_headers(user_id),
+            method=method.upper(),
+        )
+        try:
+            with urlrequest.urlopen(request, timeout=max(3, int(timeout or 30))) as response:
+                response_body = response.read().decode("utf-8")
+                return json.loads(response_body) if response_body else {}
+        except urlerror.HTTPError as exc:
+            response_body = exc.read().decode("utf-8", errors="ignore")
+            try:
+                parsed = json.loads(response_body) if response_body else {}
+            except ValueError:
+                parsed = {}
+            message = parsed.get("error") or parsed.get("message") or parsed.get("detail") or response_body or exc.reason
+            raise RuntimeError(str(message)[:300]) from exc
+        except Exception as exc:
+            raise RuntimeError(f"trade-service 调用失败: {exc}") from exc
+
+    @staticmethod
+    def _build_execution_result(status: str, **kwargs: Any) -> Dict[str, Any]:
+        return {"status": status, **kwargs}
 
     @classmethod
     def _normalize_strategy(cls, row: Dict[str, Any]) -> Dict[str, Any]:
