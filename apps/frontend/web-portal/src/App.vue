@@ -65,6 +65,27 @@ const normalizeHomePath = (value) => {
   return candidate
 }
 
+const refreshPlatformBootstrap = async () => {
+  if (!getToken()) {
+    return
+  }
+
+  try {
+    const res = await getPlatformBootstrap()
+    if (!res?.data) {
+      return
+    }
+    setSession(res.data)
+    const readyPath = router.currentRoute.value.path
+    const homePath = normalizeHomePath(res.data?.navigation?.homePath)
+    if (readyPath === '/' || readyPath === '/workspace' || readyPath === '/dashboard') {
+      router.replace(homePath).catch(() => {})
+    }
+  } catch {
+    // Keep the current cached session when the bootstrap refresh is temporarily unavailable.
+  }
+}
+
 onMounted(() => {
   applyTheme()
 
@@ -77,20 +98,7 @@ onMounted(() => {
       router.replace(homePath).catch(() => {})
     }
 
-    if (getToken() && !getSession()) {
-      getPlatformBootstrap()
-        .then((res) => {
-          if (res?.data) {
-            setSession(res.data)
-            const readyPath = router.currentRoute.value.path
-            const homePath = normalizeHomePath(res.data?.navigation?.homePath)
-            if (readyPath === '/' || readyPath === '/workspace' || readyPath === '/dashboard') {
-              router.replace(homePath).catch(() => {})
-            }
-          }
-        })
-        .catch(() => {})
-    }
+    refreshPlatformBootstrap()
   })
 
   window.addEventListener('pwa-update-ready', handlePwaUpdate)
