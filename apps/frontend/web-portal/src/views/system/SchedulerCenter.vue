@@ -136,7 +136,7 @@
               <el-switch v-model="task.settings.autoTradeEnabled" @change="saveTask(task)" />
             </div>
             <p>
-              仅在美股常规开盘时段按设定策略执行，并始终受纸账户与交易边界保护，不会绕过真实资金账户限制。
+              仅在美股常规开盘时段按设定策略执行，下单前刷新券商实时价，并始终受纸账户与交易边界保护，同时叠加日内预算护栏。
             </p>
             <div class="auto-buy-grid">
               <label>
@@ -179,10 +179,42 @@
                   <el-option label="回归" value="reversion" />
                 </el-select>
               </label>
+              <label>
+                <span>当日最多订单</span>
+                <el-input-number
+                  v-model="task.settings.maxDailySubmittedOrders"
+                  :min="0"
+                  :max="200"
+                  :step="1"
+                  @change="saveTask(task)"
+                />
+              </label>
+              <label>
+                <span>当日名义金额</span>
+                <el-input-number
+                  v-model="task.settings.maxDailyNotionalRatio"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  :precision="2"
+                  @change="saveTask(task)"
+                />
+              </label>
+            </div>
+            <div class="auto-trade-switch-row">
+              <label>
+                <span>下单前刷新实时价</span>
+                <el-switch v-model="task.settings.refreshRealtimePrice" @change="saveTask(task)" />
+              </label>
+              <label>
+                <span>缺实时价时不下单</span>
+                <el-switch v-model="task.settings.requireRealtimePrice" @change="saveTask(task)" />
+              </label>
             </div>
             <div class="agent-review-meta">
               <span>市场 {{ task.settings?.market || 'US' }}</span>
               <span>{{ task.settings?.regularSessionOnly ? '仅常规时段' : '允许非常规时段' }}</span>
+              <span>{{ task.settings?.requireRealtimePrice ? '实时价强制' : '允许历史价兜底' }}</span>
             </div>
           </div>
         </div>
@@ -474,7 +506,11 @@ const AUTO_TRADE_DEFAULT_SETTINGS = {
   minConfidence: 72,
   strategyProfile: 'balanced',
   market: 'US',
-  regularSessionOnly: true
+  regularSessionOnly: true,
+  refreshRealtimePrice: true,
+  requireRealtimePrice: true,
+  maxDailySubmittedOrders: 10,
+  maxDailyNotionalRatio: 0.70
 }
 const AUTO_TRADE_STRATEGY_PROFILES = new Set(['balanced', 'momentum', 'breakout', 'reversion'])
 const normalizeAutoBuyBool = (value, fallback = false) => {
@@ -516,7 +552,11 @@ const normalizeAutoTradeSettings = (settings = {}) => {
       ? strategyProfile
       : AUTO_TRADE_DEFAULT_SETTINGS.strategyProfile,
     market: String(settings.market || AUTO_TRADE_DEFAULT_SETTINGS.market).trim().toUpperCase() || AUTO_TRADE_DEFAULT_SETTINGS.market,
-    regularSessionOnly: normalizeAutoBuyBool(settings.regularSessionOnly, AUTO_TRADE_DEFAULT_SETTINGS.regularSessionOnly)
+    regularSessionOnly: normalizeAutoBuyBool(settings.regularSessionOnly, AUTO_TRADE_DEFAULT_SETTINGS.regularSessionOnly),
+    refreshRealtimePrice: normalizeAutoBuyBool(settings.refreshRealtimePrice, AUTO_TRADE_DEFAULT_SETTINGS.refreshRealtimePrice),
+    requireRealtimePrice: normalizeAutoBuyBool(settings.requireRealtimePrice, AUTO_TRADE_DEFAULT_SETTINGS.requireRealtimePrice),
+    maxDailySubmittedOrders: Math.round(normalizeAutoBuyNumber(settings.maxDailySubmittedOrders, AUTO_TRADE_DEFAULT_SETTINGS.maxDailySubmittedOrders, 0, 200)),
+    maxDailyNotionalRatio: normalizeAutoBuyNumber(settings.maxDailyNotionalRatio, AUTO_TRADE_DEFAULT_SETTINGS.maxDailyNotionalRatio, 0, 1)
   }
 }
 const normalizeTaskPolicy = (task = {}) => ({
@@ -1354,6 +1394,30 @@ watch(
   }
 }
 
+.auto-trade-switch-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--surface-soft) 86%, transparent);
+  }
+
+  span {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+}
+
 .agent-run-drawer :deep(.el-drawer) {
   background: var(--surface-strong);
 }
@@ -1580,7 +1644,8 @@ watch(
 }
 
 @media (max-width: 640px) {
-  .auto-buy-grid {
+  .auto-buy-grid,
+  .auto-trade-switch-row {
     grid-template-columns: 1fr;
   }
 }

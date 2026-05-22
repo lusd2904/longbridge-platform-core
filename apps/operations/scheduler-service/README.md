@@ -12,7 +12,7 @@ Scheduler Service 是调度和系统任务服务，默认端口 `8107`。
 - Watchlist review 只选择有目标的用户，不再 fallback 到 bootstrap user。
 - Market AI scan 不再硬编码 `user_id=1`。
 - 自选股盘前/盘后复核支持任务策略里的机会股自动买入开关，默认关闭，并携带最多标的数、单标预算、单票仓位上限、最低置信度给 analysis-service。
-- `watchlist_us_open_ai_trade` 美股开盘 AI 自动交易任务每次启动都会落专用扫描记录，前端 `/watchlist-ai-trade-runs` 可查看运行、跳过、完成、失败和下单提交快照。
+- `watchlist_us_open_ai_trade` 美股开盘 AI 自动交易任务每次启动都会落专用扫描记录，前端 `/watchlist-ai-trade-runs` 可查看运行、跳过、完成、失败、实时价刷新、日内护栏和下单提交快照。
 - `quant_trading` 用户任务现在调用自选池量化策略扫描，不再从全市场推荐结果里挑自动买入标的。
 
 ## 主要接口
@@ -60,7 +60,7 @@ curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' 
 - 任务 key：`quant_trading`。
 - 手动触发：`POST /api/v1/scheduler/tasks/quant_trading/run`。
 - 数据范围：仅当前用户自选股池。
-- 执行边界：默认扫描不下单；自动执行仍依赖用户量化配置、账户权限、仓位预算、重复决策保护和长桥 CLI 模拟账户保护。
+- 执行边界：默认扫描不下单；自动执行仍依赖用户量化配置、账户权限、券商实时价、仓位预算、日内订单/金额护栏、重复决策保护和长桥 CLI 模拟账户保护。
 - 记录查看：美股开盘 AI 自动交易记录由 strategy-service 暴露 `GET /api/v1/strategy/quant/watchlist/us-open-ai-trade/runs`，Web Portal 页面为 `/watchlist-ai-trade-runs`。
 
 ## 依赖

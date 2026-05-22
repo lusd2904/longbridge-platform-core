@@ -114,6 +114,22 @@
                     <span>账户边界</span>
                     <strong>{{ paperBoundaryLabel(row) }}</strong>
                   </div>
+                  <div>
+                    <span>实时价刷新</span>
+                    <strong>{{ priceRefreshLabel(row) }}</strong>
+                  </div>
+                  <div>
+                    <span>当日订单</span>
+                    <strong>{{ dailyOrderLabel(row.positionControl) }}</strong>
+                  </div>
+                  <div>
+                    <span>当日金额</span>
+                    <strong>{{ dailyNotionalLabel(row.positionControl) }}</strong>
+                  </div>
+                  <div>
+                    <span>金额上限</span>
+                    <strong>{{ dailyNotionalLimitLabel(row.positionControl) }}</strong>
+                  </div>
                 </div>
                 <div v-if="row.skipped.length" class="skip-list">
                   <span v-for="item in row.skipped.slice(0, 8)" :key="`${row.cycleId}-${item.symbol || item.reason}`">
@@ -257,6 +273,37 @@ const sideLabel = (value) => String(value || '').toUpperCase() === 'SELL' ? '卖
 const paperBoundaryLabel = (row) => {
   const boundary = row.autoTrade?.executionBoundary || row.executionBoundary || ''
   return String(boundary).toLowerCase().includes('paper') || row.autoTrade?.accountId ? '纸账户' : '受控'
+}
+
+const priceRefreshLabel = (row) => {
+  const refresh = normalizeObject(row.autoTrade?.priceRefresh)
+  if (!refresh.enabled && !row.positionControl?.refreshRealtimePrice && !row.settings?.refreshRealtimePrice) return '未开启'
+  const refreshed = Number(refresh.refreshedCount || 0)
+  const requested = Number(refresh.requestedCount || row.opportunityCount || 0)
+  if (refresh.required && Number(refresh.skippedCount || 0) > 0) return `缺价跳过 ${refresh.skippedCount}`
+  return requested ? `${refreshed}/${requested}` : '已开启'
+}
+
+const dailyOrderLabel = (positionControl = {}) => {
+  const used = Number(positionControl.dailySubmittedCount ?? 0)
+  const limit = Number(positionControl.maxDailySubmittedOrders ?? 0)
+  return limit > 0 ? `${used}/${limit}` : `${used}/不限`
+}
+
+const formatCurrency = (value) => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '--'
+  return number.toLocaleString('zh-CN', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0
+  })
+}
+
+const dailyNotionalLabel = (positionControl = {}) => formatCurrency(positionControl.dailySubmittedNotional)
+const dailyNotionalLimitLabel = (positionControl = {}) => {
+  const limit = Number(positionControl.maxDailyNotional || 0)
+  return limit > 0 ? formatCurrency(limit) : '不限'
 }
 
 const statusTagType = (value) => {

@@ -181,9 +181,13 @@ class SystemTaskService:
                 "minConfidence": 72,
                 "strategyProfile": "balanced",
                 "market": "US",
-                "regularSessionOnly": True
+                "regularSessionOnly": True,
+                "refreshRealtimePrice": True,
+                "requireRealtimePrice": True,
+                "maxDailySubmittedOrders": 10,
+                "maxDailyNotionalRatio": 0.70
             },
-            "description": "美股常规开盘期间每 15 分钟扫描自选股池并触发 AI 自动交易，默认买入最多 5 只、总持仓占总资金 70%，且受纸账户与交易边界保护。"
+            "description": "美股常规开盘期间每 15 分钟扫描自选股池并触发 AI 自动交易，默认买入最多 5 只、总持仓占总资金 70%，下单前刷新券商实时价，并受纸账户、日内预算与交易边界保护。"
         },
         "daily_symbol_trend_ai_scan": {
             "taskName": "逐股 AI 趋势扫描",

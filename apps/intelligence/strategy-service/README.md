@@ -10,7 +10,8 @@ Strategy Service 是策略与回测服务，默认端口 `8104`。
 - 策略监控 summary、alerts、手动 run。
 - 量化状态和手动试跑。
 - 自选股池量化策略扫描：只读取当前用户 `user_watchlist_stocks`，基于趋势、突破、均值回归、AI 趋势扫描和波动风险做多因子评分。
-- 受控自动下单：当请求显式 `execute=true` 且 `AI_QUANT_TRADING_ENABLED=true` 时，候选机会股会交给 `QuantTradingService.execute_watchlist_opportunities()`，继续执行账户权限、持仓、现金、重复决策、单票预算和仓位上限校验。
+- 受控自动下单：当请求显式 `execute=true` 且 `AI_QUANT_TRADING_ENABLED=true` 时，候选机会股会交给 `QuantTradingService.execute_watchlist_opportunities()`，继续执行账户权限、持仓、现金、重复决策、日内护栏、单票预算和仓位上限校验。
+- 美股开盘 AI 自动交易会在提交订单前刷新券商实时行情，默认缺少实时价时跳过，不使用历史收盘价直接定价。
 - 美股开盘 AI 自动交易扫描记录：`watchlist_us_open_ai_trade_runs` 专门记录每次任务启动、跳过、完成、失败、候选、机会、下单提交和仓位控制快照。
 - GitHub 策略参考：借鉴 QuantConnect Lean 的事件分层、Microsoft Qlib 的多因子评分、vn.py 的交易/风控分层、PyPortfolioOpt 的轻量仓位预算思想；backtrader/Freqtrade 只借鉴 dry-run、白名单、回测思想，不复制 GPL 代码、不 vendoring 外部仓库。
 
@@ -87,6 +88,9 @@ curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' 
 
 | 借鉴来源 | 这里的落点 | 不做的事情 |
 | --- | --- | --- |
+| Longbridge OpenAPI | 作为券商网关、实时行情、账户、持仓和订单边界 | 不让策略服务直接写 broker 状态 |
+| Longbridge Terminal | 借鉴 CLI/运维入口设计 | 不嵌入为策略引擎 |
+| FinRL-Trading | 借鉴选股、组合分配、择时和风险覆盖合同 | 不整套替换现有执行链路 |
 | Lean | 把扫描、打分、候选和执行分成清晰阶段 | 不实现完整事件驱动引擎 |
 | Qlib | 把多因子评分和历史复盘做成结构化输出 | 不引入重量级研究框架 |
 | vn.py | 保持策略、风控、执行的边界分离 | 不让策略页直接写 broker 状态 |
@@ -104,6 +108,8 @@ curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' 
 - 候选标的仍属于当前用户自选股池。
 - 标的无已有持仓，且 60 分钟内没有同向本地决策。
 - 券商当日委托查询成功，且没有同标的同方向未完成委托；该实时查询是当前防重权威源，前端和策略页缓存不参与当日订单防重。
+- 美股开盘 AI 自动交易默认要求下单前取得券商实时价；缺少实时价的机会会写入跳过原因。
+- 美股开盘 AI 自动交易还会校验当日最多提交订单数和当日自动交易名义金额比例。
 - 现金、单票预算、单票仓位上限和最低评分阈值全部通过。
 
 ## 返回字段

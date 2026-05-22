@@ -747,6 +747,69 @@ def test_execute_watchlist_opportunities_allows_one_share_under_1000_with_portfo
     assert "US min 1 share" in result["positionControl"]["budgetRule"]
 
 
+def test_execute_watchlist_opportunities_blocks_daily_guardrail(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    monkeypatch.setattr(service, "_load_watchlist_symbols", classmethod(lambda cls, *, user_id: {"AAPL.US"}))
+    monkeypatch.setattr(service, "_has_recent_duplicate", classmethod(lambda cls, user_id, symbol, side: False))
+    monkeypatch.setattr(service, "_load_broker_today_orders", classmethod(lambda cls, account_id, user_id: ([], "")))
+    monkeypatch.setattr(
+        module.DbUtil,
+        "fetch_one_primary",
+        staticmethod(lambda sql, params=None: {"submitted_count": 1, "submitted_notional": 250}),
+    )
+
+    class AccountInfo:
+        cash = 5000
+        buying_power = 5000
+        market_value = 0
+        total_equity = 10_000
+
+    class FakeBroker:
+        is_connected = True
+        account_id = 7
+
+        def connect(self):
+            return True
+
+        def get_account_info(self):
+            return AccountInfo()
+
+        def get_positions(self):
+            return []
+
+    executed = []
+    monkeypatch.setattr(
+        module.PlatformAccessService,
+        "get_user_capabilities",
+        staticmethod(lambda user_id: {"hasBoundAccount": True, "quantApiEnabled": True, "canUseQuantTrading": True}),
+    )
+    monkeypatch.setattr(service, "_get_broker", staticmethod(lambda account_id=None, user_id=1: FakeBroker()))
+    monkeypatch.setattr(
+        service,
+        "_execute_decision",
+        classmethod(lambda cls, account_id, decision, user_id=1: executed.append(decision) or {"status": "executed", "order_id": "order-1"}),
+    )
+
+    result = service.execute_watchlist_opportunities(
+        user_id=1,
+        opportunities=[{"symbol": "AAPL.US", "price": 100, "confidence": 90, "reason": "超过日内护栏"}],
+        max_symbols=1,
+        max_amount=1000,
+        min_confidence=72,
+        max_daily_submitted_orders=1,
+        max_daily_notional_ratio=0.20,
+    )
+
+    assert result["submittedCount"] == 0
+    assert executed == []
+    assert "今日自动交易最多提交" in result["skipped"][0]["reason"]
+    assert result["positionControl"]["dailySubmittedCount"] == 1
+    assert result["positionControl"]["maxDailySubmittedOrders"] == 1
+    assert result["positionControl"]["maxDailyNotional"] == 2000
+
+
 def test_execute_watchlist_opportunities_sells_existing_position_when_allowed(monkeypatch) -> None:
     module = _load_module()
     service = module.QuantTradingService
@@ -841,6 +904,10 @@ def test_run_us_open_watchlist_ai_trade_skips_outside_regular_session(monkeypatc
             "strategyProfile": "balanced",
             "market": "US",
             "regularSessionOnly": True,
+            "refreshRealtimePrice": True,
+            "requireRealtimePrice": True,
+            "maxDailySubmittedOrders": 10,
+            "maxDailyNotionalRatio": 0.70,
         }),
     )
     monkeypatch.setattr(service, "_is_us_regular_session_now", staticmethod(lambda now=None: False))
@@ -878,6 +945,11 @@ def test_run_us_open_watchlist_ai_trade_builds_buy_and_sell_orders(monkeypatch) 
     monkeypatch.setattr(service, "_has_recent_duplicate", classmethod(lambda cls, user_id, symbol, side: False))
     monkeypatch.setattr(service, "_load_broker_today_orders", classmethod(lambda cls, account_id, user_id: ([], "")))
     monkeypatch.setattr(
+        module.DbUtil,
+        "fetch_one_primary",
+        staticmethod(lambda sql, params=None: {"submitted_count": 0, "submitted_notional": 0}),
+    )
+    monkeypatch.setattr(
         service,
         "_load_watchlist_scan_targets",
         classmethod(lambda cls, *, user_id, session_filter="all": [
@@ -905,6 +977,12 @@ def test_run_us_open_watchlist_ai_trade_builds_buy_and_sell_orders(monkeypatch) 
 
         def connect(self):
             return True
+
+        def get_quote(self, symbols):
+            return {
+                "AAPL.US": {"last_price": 101, "timestamp": "2026-05-22 09:31:00"},
+                "MSFT.US": {"last_price": 310, "timestamp": "2026-05-22 09:31:01"},
+            }
 
         def get_account_info(self):
             return AccountInfo()
@@ -971,11 +1049,16 @@ def test_run_us_open_watchlist_ai_trade_builds_buy_and_sell_orders(monkeypatch) 
     assert [item["side"] for item in executed] == ["SELL", "BUY"]
     assert executed[0]["symbol"] == "AAPL.US"
     assert executed[0]["quantity"] == 2
+    assert executed[0]["price"] == 101
+    assert executed[0]["priceSource"] == "broker-realtime"
     assert executed[1]["symbol"] == "MSFT.US"
     assert executed[1]["quantity"] == 1
+    assert executed[1]["price"] == 310
     assert finished[0]["status"] == "completed"
     assert finished[0]["result"]["opportunityCount"] == 2
     assert finished[0]["result"]["autoTrade"]["submittedCount"] == 2
+    assert finished[0]["result"]["autoTrade"]["priceRefresh"]["refreshedCount"] == 2
+    assert finished[0]["result"]["positionControl"]["maxDailySubmittedOrders"] == 10
 
 
 def test_trade_service_account_lookup_does_not_fall_back_when_account_id_is_missing(monkeypatch) -> None:

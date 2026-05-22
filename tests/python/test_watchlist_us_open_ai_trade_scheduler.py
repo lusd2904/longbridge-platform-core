@@ -34,6 +34,10 @@ def test_system_task_service_exposes_watchlist_us_open_ai_trade_defaults() -> No
         "strategyProfile": "balanced",
         "market": "US",
         "regularSessionOnly": True,
+        "refreshRealtimePrice": True,
+        "requireRealtimePrice": True,
+        "maxDailySubmittedOrders": 10,
+        "maxDailyNotionalRatio": 0.70,
     }
     assert "纸账户" in policy["description"]
     assert "交易边界保护" in policy["description"]
@@ -68,6 +72,10 @@ def test_scheduler_runtime_and_manual_runner_register_watchlist_us_open_ai_trade
     assert settings["strategyProfile"] == "balanced"
     assert settings["market"] == "US"
     assert settings["regularSessionOnly"] is True
+    assert settings["refreshRealtimePrice"] is True
+    assert settings["requireRealtimePrice"] is True
+    assert settings["maxDailySubmittedOrders"] == 10
+    assert settings["maxDailyNotionalRatio"] == 0.70
 
     assert "watchlist_us_open_ai_trade" in scheduler_main.TASK_RUNNERS
 

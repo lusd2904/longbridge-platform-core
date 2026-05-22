@@ -520,19 +520,48 @@ class QuantTradingService:
                 reverse=True,
             )
             opportunities = sell_opportunities + buy_opportunities
+            price_refresh = {
+                "enabled": bool(policy_settings["refreshRealtimePrice"]),
+                "required": bool(policy_settings["requireRealtimePrice"]),
+                "requestedCount": len(opportunities),
+                "refreshedCount": 0,
+                "skippedCount": 0,
+                "quoteCount": 0,
+            }
+            if opportunities and policy_settings["refreshRealtimePrice"]:
+                price_refresh = cls._refresh_opportunity_realtime_prices(
+                    broker=broker,
+                    opportunities=opportunities,
+                    require_realtime=policy_settings["requireRealtimePrice"],
+                )
+                opportunities = price_refresh["opportunities"]
+                skipped.extend(price_refresh["skipped"])
 
             if not opportunities:
+                reason = "realtime-price-missing" if price_refresh.get("skippedCount") else "no-opportunities"
+                message = (
+                    "本轮机会标的缺少券商实时行情，已按配置阻止自动下单"
+                    if reason == "realtime-price-missing" else
+                    "自选股池本轮没有达到买入或卖出条件的标的"
+                )
                 result = cls._build_us_open_trade_result(
                     cycle_id=cycle_id,
                     source=source,
                     settings=policy_settings,
                     skipped=False,
-                    reason="no-opportunities",
-                    message="自选股池本轮没有达到买入或卖出条件的标的",
+                    reason=reason,
+                    message=message,
                     targets=targets,
                     evaluations=evaluations,
                     opportunities=[],
                     skipped_items=skipped,
+                    auto_trade={
+                        "enabled": True,
+                        "executed": False,
+                        "reason": reason,
+                        "signals": [],
+                        "priceRefresh": price_refresh,
+                    },
                 )
                 result["history"] = cls._save_watchlist_strategy_run(
                     user_id=user_id,
@@ -557,6 +586,8 @@ class QuantTradingService:
                 allow_sells=True,
                 require_paper=True,
                 broker=broker,
+                max_daily_submitted_orders=policy_settings["maxDailySubmittedOrders"],
+                max_daily_notional_ratio=policy_settings["maxDailyNotionalRatio"],
             )
             result = cls._build_us_open_trade_result(
                 cycle_id=cycle_id,
@@ -569,7 +600,7 @@ class QuantTradingService:
                 evaluations=evaluations,
                 opportunities=opportunities,
                 skipped_items=skipped,
-                auto_trade={"enabled": True, **execution},
+                auto_trade={"enabled": True, "priceRefresh": price_refresh, **execution},
             )
             result["history"] = cls._save_watchlist_strategy_run(
                 user_id=user_id,
@@ -776,6 +807,8 @@ class QuantTradingService:
         allow_sells: bool = False,
         require_paper: bool = False,
         broker: Any = None,
+        max_daily_submitted_orders: Optional[int] = None,
+        max_daily_notional_ratio: Optional[float] = None,
     ) -> Dict[str, Any]:
         cls.ensure_schema()
         access = PlatformAccessService.get_user_capabilities(user_id)
@@ -795,6 +828,14 @@ class QuantTradingService:
         safe_target_ratio = (
             max(0.0, min(cls._safe_float(target_portfolio_ratio, 0.70), 1.0))
             if target_portfolio_ratio is not None else None
+        )
+        safe_daily_order_limit = (
+            max(0, int(cls._safe_float(max_daily_submitted_orders, 0)))
+            if max_daily_submitted_orders is not None else 0
+        )
+        safe_daily_notional_ratio = (
+            max(0.0, min(cls._safe_float(max_daily_notional_ratio, 0.0), 1.0))
+            if max_daily_notional_ratio is not None else 0.0
         )
         allowed_symbols = cls._load_watchlist_symbols(user_id=user_id)
 
@@ -827,6 +868,14 @@ class QuantTradingService:
         remaining_portfolio_buy_budget = (
             min(available_cash, max(0.0, float(portfolio_budget or 0) - current_market_value))
             if portfolio_budget is not None else None
+        )
+        daily_guardrail = cls._load_auto_trade_daily_guardrail(
+            user_id=user_id,
+            account_id=bound_account_id,
+            source=source,
+            total_equity=total_equity,
+            max_submitted_orders=safe_daily_order_limit,
+            max_notional_ratio=safe_daily_notional_ratio,
         )
 
         cycle_id = cls._cycle_id()
@@ -892,6 +941,8 @@ class QuantTradingService:
                     "budget": budget_meta,
                     "scoreBreakdown": item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {},
                     "factorInputs": item.get("metrics") if isinstance(item.get("metrics"), dict) else {},
+                    "priceSource": item.get("priceSource"),
+                    "quoteUpdatedAt": item.get("quoteUpdatedAt"),
                     "source": source,
                     "status": "queued"
                 })
@@ -943,6 +994,8 @@ class QuantTradingService:
                 "budget": budget_meta,
                 "scoreBreakdown": item.get("scoreBreakdown") if isinstance(item.get("scoreBreakdown"), dict) else {},
                 "factorInputs": item.get("metrics") if isinstance(item.get("metrics"), dict) else {},
+                "priceSource": item.get("priceSource"),
+                "quoteUpdatedAt": item.get("quoteUpdatedAt"),
                 "source": source,
                 "status": "queued"
             })
@@ -960,6 +1013,11 @@ class QuantTradingService:
             user_id=user_id,
         )
         for decision in decisions:
+            decision_notional = float(decision.get("quantity") or 0) * float(decision.get("price") or 0)
+            guardrail_reason = cls._daily_guardrail_skip_reason(daily_guardrail, decision_notional, decision.get("side"))
+            if guardrail_reason:
+                skipped.append({"symbol": decision['symbol'], "reason": guardrail_reason})
+                continue
             if cls._has_recent_duplicate(user_id, decision['symbol'], decision['side']):
                 skipped.append({"symbol": decision['symbol'], "reason": "60 分钟内已有同向决策"})
                 continue
@@ -988,6 +1046,11 @@ class QuantTradingService:
                 source=source,
                 order_id=execution.get('order_id')
             ))
+            standard_status = cls._standard_order_status(execution.get('standardStatus') or execution.get('status', 'failed'))
+            if standard_status in {"submitted", "accepted", "partially_filled", "filled"}:
+                daily_guardrail["submittedCount"] = int(daily_guardrail.get("submittedCount") or 0) + 1
+                if str(decision.get("side") or "").strip().upper() == "BUY":
+                    daily_guardrail["submittedNotional"] = float(daily_guardrail.get("submittedNotional") or 0.0) + decision_notional
 
         return {
             "cycleId": cycle_id,
@@ -1007,6 +1070,11 @@ class QuantTradingService:
                 "targetPortfolioRatio": safe_target_ratio,
                 "portfolioBudget": portfolio_budget,
                 "currentMarketValue": current_market_value,
+                "dailySubmittedCount": daily_guardrail.get("submittedCount"),
+                "dailySubmittedNotional": daily_guardrail.get("submittedNotional"),
+                "maxDailySubmittedOrders": daily_guardrail.get("maxSubmittedOrders"),
+                "maxDailyNotional": daily_guardrail.get("maxNotional"),
+                "maxDailyNotionalRatio": daily_guardrail.get("maxNotionalRatio"),
                 "budgetRule": (
                     "min(availableCash, perSymbolCap, remainingPortfolioBudget / remainingSlots; US min 1 share)"
                     if safe_target_ratio is not None else
@@ -1077,6 +1145,7 @@ class QuantTradingService:
             "status": "candidate" if is_opportunity else "observed",
             "isOpportunity": is_opportunity,
             "price": metrics["latestClose"],
+            "priceSource": "historical-close",
             "latestClose": metrics["latestClose"],
             "confidence": confidence,
             "reason": "，".join(reason_parts),
@@ -1105,6 +1174,10 @@ class QuantTradingService:
             "strategyProfile": profile,
             "market": str(raw_settings.get("market") or "US").strip().upper() or "US",
             "regularSessionOnly": cls._coerce_bool(raw_settings.get("regularSessionOnly"), True),
+            "refreshRealtimePrice": cls._coerce_bool(raw_settings.get("refreshRealtimePrice"), True),
+            "requireRealtimePrice": cls._coerce_bool(raw_settings.get("requireRealtimePrice"), True),
+            "maxDailySubmittedOrders": max(0, min(int(cls._safe_float(raw_settings.get("maxDailySubmittedOrders"), 10)), 200)),
+            "maxDailyNotionalRatio": max(0.0, min(cls._safe_float(raw_settings.get("maxDailyNotionalRatio"), 0.70), 1.0)),
         }
 
     @classmethod
@@ -1153,6 +1226,10 @@ class QuantTradingService:
                 "minConfidence": int(settings.get("minConfidence") or 72),
                 "market": settings.get("market") or "US",
                 "regularSessionOnly": bool(settings.get("regularSessionOnly")),
+                "refreshRealtimePrice": bool(settings.get("refreshRealtimePrice")),
+                "requireRealtimePrice": bool(settings.get("requireRealtimePrice")),
+                "maxDailySubmittedOrders": int(settings.get("maxDailySubmittedOrders") or 0),
+                "maxDailyNotionalRatio": float(settings.get("maxDailyNotionalRatio") or 0),
                 "budgetRule": "target portfolio exposure with even remaining-slot allocation; US minimum 1 share",
             },
             "executionBoundary": {
@@ -1161,6 +1238,158 @@ class QuantTradingService:
                 "description": "美股开盘自动交易只生成受控订单意图，必须经 trade-service 纸账户边界后提交。",
             },
         }
+
+    @classmethod
+    def _refresh_opportunity_realtime_prices(
+        cls,
+        *,
+        broker: Any,
+        opportunities: List[Dict[str, Any]],
+        require_realtime: bool = True,
+    ) -> Dict[str, Any]:
+        symbols = list(dict.fromkeys([
+            str(item.get("symbol") or "").strip().upper()
+            for item in opportunities or []
+            if str(item.get("symbol") or "").strip()
+        ]))
+        skipped: List[Dict[str, Any]] = []
+        if not symbols or not hasattr(broker, "get_quote"):
+            if require_realtime:
+                skipped = [
+                    {"symbol": str(item.get("symbol") or ""), "reason": "券商实时行情接口不可用，已阻止自动下单"}
+                    for item in opportunities or []
+                ]
+                return {
+                    "enabled": True,
+                    "required": True,
+                    "requestedCount": len(opportunities or []),
+                    "refreshedCount": 0,
+                    "skippedCount": len(skipped),
+                    "quoteCount": 0,
+                    "opportunities": [],
+                    "skipped": skipped,
+                    "error": "broker-quote-unavailable",
+                }
+            return {
+                "enabled": True,
+                "required": False,
+                "requestedCount": len(opportunities or []),
+                "refreshedCount": 0,
+                "skippedCount": 0,
+                "quoteCount": 0,
+                "opportunities": opportunities or [],
+                "skipped": [],
+            }
+
+        quotes: Dict[str, Any] = {}
+        quote_error = ""
+        try:
+            raw_quotes = broker.get_quote(symbols) or {}
+            if isinstance(raw_quotes, dict):
+                quotes = {
+                    HistoricalMarketDataService.normalize_symbol(key): value
+                    for key, value in raw_quotes.items()
+                    if key
+                }
+        except Exception as exc:
+            quote_error = str(exc)[:160]
+
+        refreshed: List[Dict[str, Any]] = []
+        refreshed_count = 0
+        for item in opportunities or []:
+            symbol = HistoricalMarketDataService.normalize_symbol(str(item.get("symbol") or ""))
+            quote = quotes.get(symbol)
+            price = cls._quote_price(quote)
+            if price <= 0 and require_realtime:
+                skipped.append({"symbol": symbol, "reason": "缺少券商实时行情，已阻止自动下单"})
+                continue
+
+            next_item = dict(item)
+            if price > 0:
+                next_item["price"] = price
+                next_item["lastPrice"] = price
+                next_item["priceSource"] = "broker-realtime"
+                next_item["quoteUpdatedAt"] = cls._format_datetime(cls._quote_timestamp(quote))
+                refreshed_count += 1
+            else:
+                next_item["priceSource"] = next_item.get("priceSource") or "history-fallback"
+            refreshed.append(next_item)
+
+        return {
+            "enabled": True,
+            "required": bool(require_realtime),
+            "requestedCount": len(opportunities or []),
+            "refreshedCount": refreshed_count,
+            "skippedCount": len(skipped),
+            "quoteCount": len(quotes),
+            "opportunities": refreshed,
+            "skipped": skipped,
+            "error": quote_error,
+        }
+
+    @classmethod
+    def _quote_price(cls, quote: Any) -> float:
+        for name in ("last_price", "lastPrice", "last", "last_done", "lastDone", "price", "current_price", "currentPrice", "latest_price", "latestPrice"):
+            value = cls._read_order_attr(quote, name, None)
+            number = cls._safe_float(value, 0.0)
+            if number > 0:
+                return number
+        return 0.0
+
+    @classmethod
+    def _quote_timestamp(cls, quote: Any) -> Any:
+        for name in ("timestamp", "time", "updated_at", "updatedAt"):
+            value = cls._read_order_attr(quote, name, None)
+            if value:
+                return value
+        return None
+
+    @classmethod
+    def _load_auto_trade_daily_guardrail(
+        cls,
+        *,
+        user_id: int,
+        account_id: Optional[int],
+        source: str,
+        total_equity: float,
+        max_submitted_orders: int,
+        max_notional_ratio: float,
+    ) -> Dict[str, Any]:
+        row = DbUtil.fetch_one_primary(
+            """
+            SELECT
+                COUNT(1) AS submitted_count,
+                COALESCE(SUM(CASE WHEN side = 'BUY' THEN quantity * price ELSE 0 END), 0) AS submitted_notional
+            FROM quant_trade_decisions
+            WHERE user_id = %s
+              AND (%s IS NULL OR account_id = %s)
+              AND source = %s
+              AND created_at >= CURDATE()
+              AND side IN ('BUY', 'SELL')
+              AND status NOT IN ('failed', 'rejected', 'cancelled', 'canceled', 'expired')
+            """,
+            (user_id, account_id, account_id, source),
+        ) or {}
+        max_notional = float(total_equity or 0) * max_notional_ratio if max_notional_ratio > 0 and total_equity > 0 else 0.0
+        return {
+            "submittedCount": int(cls._safe_float(row.get("submitted_count"), 0)),
+            "submittedNotional": cls._safe_float(row.get("submitted_notional"), 0.0),
+            "maxSubmittedOrders": max(0, int(max_submitted_orders or 0)),
+            "maxNotional": max_notional,
+            "maxNotionalRatio": max_notional_ratio,
+        }
+
+    @staticmethod
+    def _daily_guardrail_skip_reason(guardrail: Dict[str, Any], decision_notional: float, side: Any = None) -> str:
+        max_orders = int(guardrail.get("maxSubmittedOrders") or 0)
+        if max_orders > 0 and int(guardrail.get("submittedCount") or 0) >= max_orders:
+            return f"已达到今日自动交易最多提交 {max_orders} 单"
+        max_notional = float(guardrail.get("maxNotional") or 0.0)
+        if max_notional > 0 and str(side or "").strip().upper() == "BUY":
+            submitted = float(guardrail.get("submittedNotional") or 0.0)
+            if submitted + max(0.0, decision_notional) > max_notional:
+                return f"超过今日自动交易名义金额上限 {round(max_notional, 2)} USD"
+        return ""
 
     @staticmethod
     def _target_market(target: Any) -> str:
@@ -1830,6 +2059,8 @@ class QuantTradingService:
                 "budget": decision.get("budget") or {},
                 "scoreBreakdown": decision.get("scoreBreakdown") or {},
                 "factorInputs": decision.get("factorInputs") or {},
+                "priceSource": decision.get("priceSource") or "unknown",
+                "quoteUpdatedAt": decision.get("quoteUpdatedAt"),
             },
         }
         response = cls._request_trade_service(

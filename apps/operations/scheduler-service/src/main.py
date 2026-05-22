@@ -275,6 +275,10 @@ def _us_open_ai_trade_settings() -> Dict[str, Any]:
         "strategyProfile": strategy_profile,
         "market": str(settings.get("market") or "US").strip().upper() or "US",
         "regularSessionOnly": _coerce_bool(settings.get("regularSessionOnly"), True),
+        "refreshRealtimePrice": _coerce_bool(settings.get("refreshRealtimePrice"), True),
+        "requireRealtimePrice": _coerce_bool(settings.get("requireRealtimePrice"), True),
+        "maxDailySubmittedOrders": _safe_int(settings.get("maxDailySubmittedOrders"), 10, 0, 200),
+        "maxDailyNotionalRatio": _safe_float(settings.get("maxDailyNotionalRatio"), 0.70, 0.0, 1.0),
     }
 
 
