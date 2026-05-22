@@ -125,6 +125,36 @@ class QuantTradingService:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
         )
+        DbUtil.execute_sql(
+            """
+            CREATE TABLE IF NOT EXISTS watchlist_us_open_ai_trade_runs (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                cycle_id VARCHAR(64) NOT NULL,
+                user_id INT NOT NULL DEFAULT 1,
+                source VARCHAR(64) DEFAULT 'scheduler',
+                status VARCHAR(32) DEFAULT 'running',
+                reason VARCHAR(128) DEFAULT NULL,
+                message TEXT,
+                settings_json LONGTEXT,
+                target_count INT DEFAULT 0,
+                evaluated_count INT DEFAULT 0,
+                opportunity_count INT DEFAULT 0,
+                submitted_count INT DEFAULT 0,
+                skipped_count INT DEFAULT 0,
+                executed TINYINT(1) DEFAULT 0,
+                auto_trade_json LONGTEXT,
+                position_control_json LONGTEXT,
+                candidates_json LONGTEXT,
+                opportunities_json LONGTEXT,
+                skipped_json LONGTEXT,
+                error TEXT,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP NULL DEFAULT NULL,
+                UNIQUE KEY uniq_us_open_ai_trade_cycle (user_id, cycle_id),
+                INDEX idx_us_open_ai_trade_user_started (user_id, started_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
 
     @classmethod
     def get_status(cls, user_id: int = 1) -> Dict[str, Any]:
@@ -382,161 +412,183 @@ class QuantTradingService:
         cls.ensure_schema()
         policy_settings = cls._load_us_open_ai_trade_settings(settings)
         cycle_id = cls._cycle_id()
-
-        if not policy_settings["autoTradeEnabled"]:
-            return cls._build_us_open_trade_result(
-                cycle_id=cycle_id,
-                source=source,
-                settings=policy_settings,
-                skipped=True,
-                reason="auto-trade-disabled",
-                message="美股开盘 AI 自动交易开关未开启",
-            )
-
-        if policy_settings["regularSessionOnly"] and not force and not cls._is_us_regular_session_now(now):
-            return cls._build_us_open_trade_result(
-                cycle_id=cycle_id,
-                source=source,
-                settings=policy_settings,
-                skipped=True,
-                reason="outside-us-regular-session",
-                message="当前不在美股常规交易时段，已跳过自动交易",
-            )
-
-        targets = cls._load_watchlist_scan_targets(user_id=user_id, session_filter='all')
-        targets = [
-            item for item in targets
-            if cls._target_market(item) == policy_settings["market"]
-        ][:200]
-        evaluations: List[Dict[str, Any]] = []
-        skipped: List[Dict[str, Any]] = []
-        buy_opportunities: List[Dict[str, Any]] = []
-        sell_opportunities: List[Dict[str, Any]] = []
-
-        broker = cls._get_broker(account_id, user_id=user_id)
-        if not broker:
-            raise ValueError('当前用户未绑定可用交易账户，无法执行美股开盘 AI 自动交易')
-        if not broker.is_connected and not broker.connect():
-            raise ConnectionError('券商连接失败')
-
-        bound_account_id = int(getattr(broker, 'account_id', account_id or 0) or account_id or 0) or None
-        cls._assert_paper_trading_account(account_id=bound_account_id, user_id=user_id)
-
-        positions = broker.get_positions() or []
-        holdings = cls._build_holdings_index(positions)
-
-        seen_symbols: set[str] = set()
-        for target in targets:
-            if isinstance(target, dict):
-                raw_symbol = target.get('symbol') or target.get('ticker') or target.get('code')
-            else:
-                raw_symbol = target
-                target = {"symbol": raw_symbol}
-            symbol = cls._normalize_watchlist_symbol(raw_symbol, market=(target or {}).get('market') or policy_settings["market"])
-            if not symbol or symbol in seen_symbols:
-                continue
-            seen_symbols.add(symbol)
-
-            evaluation = cls._evaluate_watchlist_quant_target(
-                target=dict(target or {}),
-                symbol=symbol,
-                user_id=user_id,
-                strategy_profile=policy_settings["strategyProfile"],
-            )
-            if evaluation.get('status') == 'skipped':
-                skipped.append(evaluation)
-                continue
-            holding = holdings.get(symbol)
-            trade_side = cls._derive_us_open_trade_side(
-                evaluation=evaluation,
-                is_holding=holding is not None,
-                min_confidence=policy_settings["minConfidence"],
-            )
-            evaluation["side"] = trade_side
-            evaluation["status"] = "sell_candidate" if trade_side == "SELL" else evaluation.get("status")
-            evaluation["isOpportunity"] = trade_side in {"BUY", "SELL"}
-            evaluation["source"] = "watchlist-us-open-ai-trade"
-            evaluations.append(evaluation)
-            if trade_side == "SELL":
-                sell_opportunities.append(evaluation)
-            elif trade_side == "BUY":
-                buy_opportunities.append(evaluation)
-
-        buy_opportunities = sorted(
-            buy_opportunities,
-            key=lambda item: (
-                int(item.get('confidence') or 0),
-                float(item.get('scoreBreakdown', {}).get('total') or 0),
-            ),
-            reverse=True,
-        )[:policy_settings["maxSymbols"]]
-        sell_opportunities = sorted(
-            sell_opportunities,
-            key=lambda item: (
-                1 if str(item.get("riskLevel") or "").lower() == "high" else 0,
-                -int(item.get('confidence') or 0),
-            ),
-            reverse=True,
+        cls._start_us_open_ai_trade_run(
+            user_id=user_id,
+            cycle_id=cycle_id,
+            source=source,
+            settings=policy_settings,
         )
-        opportunities = sell_opportunities + buy_opportunities
 
-        if not opportunities:
+        try:
+            if not policy_settings["autoTradeEnabled"]:
+                result = cls._build_us_open_trade_result(
+                    cycle_id=cycle_id,
+                    source=source,
+                    settings=policy_settings,
+                    skipped=True,
+                    reason="auto-trade-disabled",
+                    message="美股开盘 AI 自动交易开关未开启",
+                )
+                cls._finish_us_open_ai_trade_run(user_id=user_id, result=result, status="skipped")
+                return result
+
+            if policy_settings["regularSessionOnly"] and not force and not cls._is_us_regular_session_now(now):
+                result = cls._build_us_open_trade_result(
+                    cycle_id=cycle_id,
+                    source=source,
+                    settings=policy_settings,
+                    skipped=True,
+                    reason="outside-us-regular-session",
+                    message="当前不在美股常规交易时段，已跳过自动交易",
+                )
+                cls._finish_us_open_ai_trade_run(user_id=user_id, result=result, status="skipped")
+                return result
+
+            targets = cls._load_watchlist_scan_targets(user_id=user_id, session_filter='all')
+            targets = [
+                item for item in targets
+                if cls._target_market(item) == policy_settings["market"]
+            ][:200]
+            evaluations: List[Dict[str, Any]] = []
+            skipped: List[Dict[str, Any]] = []
+            buy_opportunities: List[Dict[str, Any]] = []
+            sell_opportunities: List[Dict[str, Any]] = []
+
+            broker = cls._get_broker(account_id, user_id=user_id)
+            if not broker:
+                raise ValueError('当前用户未绑定可用交易账户，无法执行美股开盘 AI 自动交易')
+            if not broker.is_connected and not broker.connect():
+                raise ConnectionError('券商连接失败')
+
+            bound_account_id = int(getattr(broker, 'account_id', account_id or 0) or account_id or 0) or None
+            cls._assert_paper_trading_account(account_id=bound_account_id, user_id=user_id)
+
+            positions = broker.get_positions() or []
+            holdings = cls._build_holdings_index(positions)
+
+            seen_symbols: set[str] = set()
+            for target in targets:
+                if isinstance(target, dict):
+                    raw_symbol = target.get('symbol') or target.get('ticker') or target.get('code')
+                else:
+                    raw_symbol = target
+                    target = {"symbol": raw_symbol}
+                symbol = cls._normalize_watchlist_symbol(raw_symbol, market=(target or {}).get('market') or policy_settings["market"])
+                if not symbol or symbol in seen_symbols:
+                    continue
+                seen_symbols.add(symbol)
+
+                evaluation = cls._evaluate_watchlist_quant_target(
+                    target=dict(target or {}),
+                    symbol=symbol,
+                    user_id=user_id,
+                    strategy_profile=policy_settings["strategyProfile"],
+                )
+                if evaluation.get('status') == 'skipped':
+                    skipped.append(evaluation)
+                    continue
+                holding = holdings.get(symbol)
+                trade_side = cls._derive_us_open_trade_side(
+                    evaluation=evaluation,
+                    is_holding=holding is not None,
+                    min_confidence=policy_settings["minConfidence"],
+                )
+                evaluation["side"] = trade_side
+                evaluation["status"] = "sell_candidate" if trade_side == "SELL" else evaluation.get("status")
+                evaluation["isOpportunity"] = trade_side in {"BUY", "SELL"}
+                evaluation["source"] = "watchlist-us-open-ai-trade"
+                evaluations.append(evaluation)
+                if trade_side == "SELL":
+                    sell_opportunities.append(evaluation)
+                elif trade_side == "BUY":
+                    buy_opportunities.append(evaluation)
+
+            buy_opportunities = sorted(
+                buy_opportunities,
+                key=lambda item: (
+                    int(item.get('confidence') or 0),
+                    float(item.get('scoreBreakdown', {}).get('total') or 0),
+                ),
+                reverse=True,
+            )[:policy_settings["maxSymbols"]]
+            sell_opportunities = sorted(
+                sell_opportunities,
+                key=lambda item: (
+                    1 if str(item.get("riskLevel") or "").lower() == "high" else 0,
+                    -int(item.get('confidence') or 0),
+                ),
+                reverse=True,
+            )
+            opportunities = sell_opportunities + buy_opportunities
+
+            if not opportunities:
+                result = cls._build_us_open_trade_result(
+                    cycle_id=cycle_id,
+                    source=source,
+                    settings=policy_settings,
+                    skipped=False,
+                    reason="no-opportunities",
+                    message="自选股池本轮没有达到买入或卖出条件的标的",
+                    targets=targets,
+                    evaluations=evaluations,
+                    opportunities=[],
+                    skipped_items=skipped,
+                )
+                result["history"] = cls._save_watchlist_strategy_run(
+                    user_id=user_id,
+                    result=result,
+                    candidates=evaluations,
+                    opportunities=[],
+                    skipped=skipped,
+                )
+                cls._finish_us_open_ai_trade_run(user_id=user_id, result=result, status="completed")
+                return result
+
+            execution = cls.execute_watchlist_opportunities(
+                user_id=user_id,
+                opportunities=opportunities,
+                account_id=bound_account_id,
+                source='watchlist-us-open-ai-trade',
+                max_symbols=policy_settings["maxSymbols"],
+                max_amount=0,
+                max_position_ratio=1,
+                min_confidence=policy_settings["minConfidence"],
+                target_portfolio_ratio=policy_settings["targetPortfolioRatio"],
+                allow_sells=True,
+                require_paper=True,
+                broker=broker,
+            )
             result = cls._build_us_open_trade_result(
                 cycle_id=cycle_id,
                 source=source,
                 settings=policy_settings,
                 skipped=False,
-                reason="no-opportunities",
-                message="自选股池本轮没有达到买入或卖出条件的标的",
+                reason=execution.get("reason") or "executed",
+                message="美股开盘 AI 自动交易已完成",
                 targets=targets,
                 evaluations=evaluations,
-                opportunities=[],
+                opportunities=opportunities,
                 skipped_items=skipped,
+                auto_trade={"enabled": True, **execution},
             )
             result["history"] = cls._save_watchlist_strategy_run(
                 user_id=user_id,
                 result=result,
                 candidates=evaluations,
-                opportunities=[],
+                opportunities=opportunities,
                 skipped=skipped,
             )
+            cls._finish_us_open_ai_trade_run(user_id=user_id, result=result, status="completed")
             return result
-
-        execution = cls.execute_watchlist_opportunities(
-            user_id=user_id,
-            opportunities=opportunities,
-            account_id=bound_account_id,
-            source='watchlist-us-open-ai-trade',
-            max_symbols=policy_settings["maxSymbols"],
-            max_amount=0,
-            max_position_ratio=1,
-            min_confidence=policy_settings["minConfidence"],
-            target_portfolio_ratio=policy_settings["targetPortfolioRatio"],
-            allow_sells=True,
-            require_paper=True,
-            broker=broker,
-        )
-        result = cls._build_us_open_trade_result(
-            cycle_id=cycle_id,
-            source=source,
-            settings=policy_settings,
-            skipped=False,
-            reason=execution.get("reason") or "executed",
-            message="美股开盘 AI 自动交易已完成",
-            targets=targets,
-            evaluations=evaluations,
-            opportunities=opportunities,
-            skipped_items=skipped,
-            auto_trade={"enabled": True, **execution},
-        )
-        result["history"] = cls._save_watchlist_strategy_run(
-            user_id=user_id,
-            result=result,
-            candidates=evaluations,
-            opportunities=opportunities,
-            skipped=skipped,
-        )
-        return result
+        except Exception as exc:
+            cls._fail_us_open_ai_trade_run(
+                user_id=user_id,
+                cycle_id=cycle_id,
+                source=source,
+                settings=policy_settings,
+                error=str(exc),
+            )
+            raise
 
     @classmethod
     def list_watchlist_strategy_history(cls, user_id: int = 1, limit: int = 20) -> Dict[str, Any]:
@@ -590,6 +642,30 @@ class QuantTradingService:
         return {
             "items": runs,
             "total": len(runs),
+        }
+
+    @classmethod
+    def list_us_open_ai_trade_runs(cls, user_id: int = 1, limit: int = 50) -> Dict[str, Any]:
+        cls.ensure_schema()
+        safe_limit = max(1, min(int(limit or 50), 200))
+        rows = DbUtil.fetch_all(
+            """
+            SELECT id, cycle_id, source, status, reason, message, settings_json,
+                   target_count, evaluated_count, opportunity_count, submitted_count,
+                   skipped_count, executed, auto_trade_json, position_control_json,
+                   candidates_json, opportunities_json, skipped_json, error,
+                   started_at, finished_at
+            FROM watchlist_us_open_ai_trade_runs
+            WHERE user_id = %s
+            ORDER BY started_at DESC, id DESC
+            LIMIT %s
+            """,
+            (user_id, safe_limit)
+        ) or []
+        items = [cls._format_us_open_ai_trade_run(row) for row in rows]
+        return {
+            "items": items,
+            "total": len(items),
         }
 
     @classmethod
@@ -1905,6 +1981,126 @@ class QuantTradingService:
             return {"saved": False, "error": str(exc)}
 
     @classmethod
+    def _start_us_open_ai_trade_run(
+        cls,
+        *,
+        user_id: int,
+        cycle_id: str,
+        source: str,
+        settings: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        try:
+            run_id = DbUtil.execute_insert(
+                """
+                INSERT INTO watchlist_us_open_ai_trade_runs (
+                    cycle_id, user_id, source, status, settings_json, started_at
+                )
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                ON DUPLICATE KEY UPDATE
+                    source = VALUES(source),
+                    status = VALUES(status),
+                    settings_json = VALUES(settings_json),
+                    reason = NULL,
+                    message = NULL,
+                    error = NULL,
+                    finished_at = NULL
+                """,
+                (
+                    cycle_id,
+                    user_id,
+                    source,
+                    "running",
+                    cls._to_json(settings),
+                )
+            )
+            return {"saved": True, "runId": run_id}
+        except Exception as exc:
+            return {"saved": False, "error": str(exc)}
+
+    @classmethod
+    def _finish_us_open_ai_trade_run(
+        cls,
+        *,
+        user_id: int,
+        result: Dict[str, Any],
+        status: str = "completed",
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        try:
+            auto_trade = result.get("autoTrade") if isinstance(result.get("autoTrade"), dict) else {}
+            skipped_items = result.get("skipped") if isinstance(result.get("skipped"), list) else []
+            submitted_count = int(auto_trade.get("submittedCount") or len(auto_trade.get("signals") or []) or 0)
+            DbUtil.execute_sql(
+                """
+                UPDATE watchlist_us_open_ai_trade_runs
+                SET status = %s,
+                    reason = %s,
+                    message = %s,
+                    target_count = %s,
+                    evaluated_count = %s,
+                    opportunity_count = %s,
+                    submitted_count = %s,
+                    skipped_count = %s,
+                    executed = %s,
+                    auto_trade_json = %s,
+                    position_control_json = %s,
+                    candidates_json = %s,
+                    opportunities_json = %s,
+                    skipped_json = %s,
+                    error = %s,
+                    finished_at = NOW()
+                WHERE user_id = %s AND cycle_id = %s
+                """,
+                (
+                    status,
+                    result.get("reason"),
+                    result.get("message"),
+                    int(result.get("targetCount") or 0),
+                    int(result.get("evaluatedCount") or 0),
+                    int(result.get("opportunityCount") or 0),
+                    submitted_count,
+                    len(skipped_items),
+                    1 if result.get("executed") else 0,
+                    cls._to_json(auto_trade),
+                    cls._to_json(result.get("positionControl") or {}),
+                    cls._to_json(result.get("candidates") or []),
+                    cls._to_json(result.get("opportunities") or []),
+                    cls._to_json(skipped_items),
+                    error,
+                    user_id,
+                    result.get("cycleId"),
+                )
+            )
+            return {"saved": True}
+        except Exception as exc:
+            return {"saved": False, "error": str(exc)}
+
+    @classmethod
+    def _fail_us_open_ai_trade_run(
+        cls,
+        *,
+        user_id: int,
+        cycle_id: str,
+        source: str,
+        settings: Dict[str, Any],
+        error: str,
+    ) -> Dict[str, Any]:
+        result = cls._build_us_open_trade_result(
+            cycle_id=cycle_id,
+            source=source,
+            settings=settings,
+            skipped=True,
+            reason="failed",
+            message="美股开盘 AI 自动交易扫描失败",
+        )
+        return cls._finish_us_open_ai_trade_run(
+            user_id=user_id,
+            result=result,
+            status="failed",
+            error=error,
+        )
+
+    @classmethod
     def _format_history_item(cls, row: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "symbol": row.get('symbol'),
@@ -1921,6 +2117,38 @@ class QuantTradingService:
             "metrics": cls._parse_json(row.get('metrics_json'), {}),
             "scoreBreakdown": cls._parse_json(row.get('score_json'), {}),
             "createdAt": cls._format_datetime(row.get('created_at')),
+        }
+
+    @classmethod
+    def _format_us_open_ai_trade_run(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+        auto_trade = cls._parse_json(row.get('auto_trade_json'), {})
+        position_control = cls._parse_json(row.get('position_control_json'), {})
+        settings = cls._parse_json(row.get('settings_json'), {})
+        candidates = cls._parse_json(row.get('candidates_json'), [])
+        opportunities = cls._parse_json(row.get('opportunities_json'), [])
+        skipped = cls._parse_json(row.get('skipped_json'), [])
+        return {
+            "id": row.get('id'),
+            "cycleId": row.get('cycle_id'),
+            "source": row.get('source') or 'scheduler',
+            "status": row.get('status') or 'running',
+            "reason": row.get('reason') or '',
+            "message": row.get('message') or '',
+            "settings": settings if isinstance(settings, dict) else {},
+            "targetCount": int(row.get('target_count') or 0),
+            "evaluatedCount": int(row.get('evaluated_count') or 0),
+            "opportunityCount": int(row.get('opportunity_count') or 0),
+            "submittedCount": int(row.get('submitted_count') or 0),
+            "skippedCount": int(row.get('skipped_count') or 0),
+            "executed": bool(row.get('executed')),
+            "autoTrade": auto_trade if isinstance(auto_trade, dict) else {},
+            "positionControl": position_control if isinstance(position_control, dict) else {},
+            "candidates": candidates if isinstance(candidates, list) else [],
+            "opportunities": opportunities if isinstance(opportunities, list) else [],
+            "skipped": skipped if isinstance(skipped, list) else [],
+            "error": row.get('error') or '',
+            "startedAt": cls._format_datetime(row.get('started_at')),
+            "finishedAt": cls._format_datetime(row.get('finished_at')),
         }
 
     @staticmethod

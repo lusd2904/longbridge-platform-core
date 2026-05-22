@@ -11,6 +11,7 @@ Strategy Service 是策略与回测服务，默认端口 `8104`。
 - 量化状态和手动试跑。
 - 自选股池量化策略扫描：只读取当前用户 `user_watchlist_stocks`，基于趋势、突破、均值回归、AI 趋势扫描和波动风险做多因子评分。
 - 受控自动下单：当请求显式 `execute=true` 且 `AI_QUANT_TRADING_ENABLED=true` 时，候选机会股会交给 `QuantTradingService.execute_watchlist_opportunities()`，继续执行账户权限、持仓、现金、重复决策、单票预算和仓位上限校验。
+- 美股开盘 AI 自动交易扫描记录：`watchlist_us_open_ai_trade_runs` 专门记录每次任务启动、跳过、完成、失败、候选、机会、下单提交和仓位控制快照。
 - GitHub 策略参考：借鉴 QuantConnect Lean 的事件分层、Microsoft Qlib 的多因子评分、vn.py 的交易/风控分层、PyPortfolioOpt 的轻量仓位预算思想；backtrader/Freqtrade 只借鉴 dry-run、白名单、回测思想，不复制 GPL 代码、不 vendoring 外部仓库。
 
 ## 主要接口
@@ -31,6 +32,7 @@ Strategy Service 是策略与回测服务，默认端口 `8104`。
 - `GET /api/v1/strategy/quant/status`
 - `POST /api/v1/strategy/quant/run`
 - `GET /api/v1/strategy/quant/watchlist/history`
+- `GET /api/v1/strategy/quant/watchlist/us-open-ai-trade/runs`
 - `POST /api/v1/strategy/quant/watchlist/run`
 - `POST /api/v1/strategy/quant/watchlist/backtest`
 
@@ -60,6 +62,13 @@ curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' 
 ```bash
 curl -fsS -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:3100/svc/strategy/api/v1/strategy/quant/watchlist/history?limit=12"
+```
+
+查询美股开盘 AI 自动交易扫描记录：
+
+```bash
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3100/svc/strategy/api/v1/strategy/quant/watchlist/us-open-ai-trade/runs?limit=50"
 ```
 
 单标的策略复盘：
@@ -131,6 +140,8 @@ curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' 
 ```
 
 `watchlist/backtest` 返回 `summary` 和 `points`。`summary.signalCount` 是历史窗口内达到阈值的买入信号次数，`points[].forward5dReturn` 是该日信号后 5 个交易日的收益回放，用于复盘策略稳定性，不代表未来收益。
+
+`watchlist/us-open-ai-trade/runs` 返回 `items[]`，核心字段包括 `cycleId`、`status`、`reason`、`targetCount`、`evaluatedCount`、`opportunityCount`、`submittedCount`、`settings`、`autoTrade`、`positionControl`、`candidates`、`opportunities`、`skipped`、`startedAt`、`finishedAt`。
 
 ## 依赖
 

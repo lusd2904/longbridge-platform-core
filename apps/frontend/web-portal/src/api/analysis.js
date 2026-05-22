@@ -17,6 +17,7 @@ export {
   getStrategyAlerts,
   getStrategyMonitorSummary,
   getWatchlistQuantHistory,
+  getWatchlistUsOpenAiTradeRuns,
   refreshRecommendations,
   runQuantCycle,
   runWatchlistQuantBacktest,

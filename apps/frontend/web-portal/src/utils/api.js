@@ -1900,6 +1900,7 @@ export const getQuantStatus = () => serviceGet('strategy', '/api/v1/strategy/qua
 export const runQuantCycle = (data = {}) => servicePost('strategy', '/api/v1/strategy/quant/run', data)
 export const runWatchlistQuantStrategy = (data = {}) => servicePost('strategy', '/api/v1/strategy/quant/watchlist/run', data)
 export const getWatchlistQuantHistory = (params = {}) => serviceGet('strategy', '/api/v1/strategy/quant/watchlist/history', params)
+export const getWatchlistUsOpenAiTradeRuns = (params = {}) => serviceGet('strategy', '/api/v1/strategy/quant/watchlist/us-open-ai-trade/runs', params)
 export const runWatchlistQuantBacktest = (data = {}) => servicePost('strategy', '/api/v1/strategy/quant/watchlist/backtest', data)
 export const getMarketHistory = async (params = {}) => {
   const res = await serviceGet('market', '/api/v1/market/history', params)

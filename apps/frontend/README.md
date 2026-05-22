@@ -12,7 +12,7 @@
 ## 已完成能力
 
 - 登录、平台 bootstrap、动态菜单和角色能力读取。
-- 市场、股票池、自选池、标的详情、历史 K 线。
+- 市场、股票池、自选池、AI 交易扫描记录、标的详情、历史 K 线。
 - 智能推荐、市场舆情、财经快讯、AI 研判。
 - 交易台、持仓、订单、券商连接。
 - 策略、回测、风控、通知、任务中心、系统设置、用户管理。
@@ -41,6 +41,7 @@ npm run dev
 npm --prefix apps/frontend/web-portal run test:unit -- \
   tests/unit/app-bootstrap.spec.js \
   tests/unit/market-sentiment.spec.js \
+  tests/unit/watchlist-ai-trade-runs.spec.js \
   tests/unit/finance-news-notifications.spec.js
 
 npm --prefix apps/frontend/web-portal run build

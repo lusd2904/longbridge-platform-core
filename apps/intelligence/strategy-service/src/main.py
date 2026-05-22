@@ -249,6 +249,18 @@ async def watchlist_quant_history(
     return {"success": True, "data": result}
 
 
+@app.get("/api/v1/strategy/quant/watchlist/us-open-ai-trade/runs")
+async def watchlist_us_open_ai_trade_runs(
+    limit: int = Query(default=50, ge=1, le=200),
+    session: dict = Depends(get_current_session),
+):
+    result = QuantTradingService.list_us_open_ai_trade_runs(
+        user_id=int(session["user_id"]),
+        limit=limit,
+    )
+    return {"success": True, "data": result}
+
+
 @app.post("/api/v1/strategy/quant/run")
 async def run_quant_cycle(
     payload: dict = Body(default={}),

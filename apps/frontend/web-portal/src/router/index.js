@@ -22,6 +22,7 @@ const Orders = () => import('../views/Orders.vue')
 const StockPool = () => import('../views/StockPool.vue')
 const WatchlistPool = () => import('../views/WatchlistPool.vue')
 const WatchlistScanResult = () => import('../views/WatchlistScanResult.vue')
+const WatchlistAiTradeRuns = () => import('../views/WatchlistAiTradeRuns.vue')
 const AIAnalysis = () => import('../views/AIAnalysis.vue')
 const Strategy = () => import('../views/Strategy.vue')
 const Backtest = () => import('../views/Backtest.vue')
@@ -94,6 +95,12 @@ const routes = [
         name: 'WatchlistPool',
         component: WatchlistPool,
         meta: { title: '自选股票池', icon: 'Star', group: 'stocks', subsystem: 'market', capability: 'stock.pool.view' }
+      },
+      {
+        path: 'watchlist-ai-trade-runs',
+        name: 'WatchlistAiTradeRuns',
+        component: WatchlistAiTradeRuns,
+        meta: { title: 'AI交易扫描记录', icon: 'DataLine', group: 'stocks', subsystem: 'market', capability: 'stock.pool.view' }
       },
       {
         path: 'watchlist-pool/:symbol/scan-result',

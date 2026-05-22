@@ -44,7 +44,7 @@ REF_AGNO_SIDECAR_PORT=3200 python3 apps/intelligence/agno-sidecar/src/main.py
 - Agent run 列表、详情和人工 override。
 - Watchlist pre-open/post-close review，支持 idempotency 和 stranded run cleanup。
 - Agno sidecar 复用 `LONGBRIDGE_AI_*` / `sub2api` / `gpt-5.5`，不执行交易。
-- Strategy service 提供自选池量化策略扫描，默认只预览候选；显式执行时仍通过量化交易服务和长桥 CLI 安全边界。
+- Strategy service 提供自选池量化策略扫描，默认只预览候选；显式执行时仍通过量化交易服务和长桥 CLI 安全边界。美股开盘 AI 自动交易任务会把每次启动扫描写入专用记录表，供前端 `/watchlist-ai-trade-runs` 追溯。
 
 ## 验证
 

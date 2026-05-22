@@ -816,7 +816,20 @@ def test_execute_watchlist_opportunities_sells_existing_position_when_allowed(mo
 def test_run_us_open_watchlist_ai_trade_skips_outside_regular_session(monkeypatch) -> None:
     module = _load_module()
     service = module.QuantTradingService
+    started = []
+    finished = []
     monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    monkeypatch.setattr(service, "_cycle_id", staticmethod(lambda: "qt-test-skip"))
+    monkeypatch.setattr(
+        service,
+        "_start_us_open_ai_trade_run",
+        classmethod(lambda cls, **kwargs: started.append(kwargs) or {"saved": True, "runId": 1}),
+    )
+    monkeypatch.setattr(
+        service,
+        "_finish_us_open_ai_trade_run",
+        classmethod(lambda cls, **kwargs: finished.append(kwargs) or {"saved": True}),
+    )
     monkeypatch.setattr(
         service,
         "_load_us_open_ai_trade_settings",
@@ -841,12 +854,23 @@ def test_run_us_open_watchlist_ai_trade_skips_outside_regular_session(monkeypatc
 
     assert result["skippedRun"] is True
     assert result["reason"] == "outside-us-regular-session"
+    assert started[0]["cycle_id"] == "qt-test-skip"
+    assert finished[0]["status"] == "skipped"
+    assert finished[0]["result"]["cycleId"] == "qt-test-skip"
+    assert finished[0]["result"]["targetCount"] == 0
 
 
 def test_run_us_open_watchlist_ai_trade_builds_buy_and_sell_orders(monkeypatch) -> None:
     module = _load_module()
     service = module.QuantTradingService
+    finished = []
     monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    monkeypatch.setattr(service, "_start_us_open_ai_trade_run", classmethod(lambda cls, **kwargs: {"saved": True, "runId": 1}))
+    monkeypatch.setattr(
+        service,
+        "_finish_us_open_ai_trade_run",
+        classmethod(lambda cls, **kwargs: finished.append(kwargs) or {"saved": True}),
+    )
     monkeypatch.setattr(service, "_save_watchlist_strategy_run", classmethod(lambda cls, **kwargs: {"saved": True, "runId": 99}))
     monkeypatch.setattr(service, "_is_us_regular_session_now", staticmethod(lambda now=None: True))
     monkeypatch.setattr(service, "_assert_paper_trading_account", classmethod(lambda cls, account_id, user_id: {"isPaper": True}))
@@ -949,6 +973,9 @@ def test_run_us_open_watchlist_ai_trade_builds_buy_and_sell_orders(monkeypatch) 
     assert executed[0]["quantity"] == 2
     assert executed[1]["symbol"] == "MSFT.US"
     assert executed[1]["quantity"] == 1
+    assert finished[0]["status"] == "completed"
+    assert finished[0]["result"]["opportunityCount"] == 2
+    assert finished[0]["result"]["autoTrade"]["submittedCount"] == 2
 
 
 def test_trade_service_account_lookup_does_not_fall_back_when_account_id_is_missing(monkeypatch) -> None:
@@ -970,6 +997,53 @@ def test_trade_service_account_lookup_does_not_fall_back_when_account_id_is_miss
         service._load_trade_service_account(account_id=7, user_id=1)
 
     assert calls == ["/api/v1/trade/accounts"]
+
+
+def test_list_us_open_ai_trade_runs_parses_dedicated_run_table(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+
+    def fake_fetch_all(sql, params=None):
+        assert "watchlist_us_open_ai_trade_runs" in sql
+        assert params == (1, 50)
+        return [
+            {
+                "id": 12,
+                "cycle_id": "qt-202605220930000000",
+                "source": "scheduler",
+                "status": "completed",
+                "reason": "executed",
+                "message": "美股开盘 AI 自动交易已完成",
+                "settings_json": '{"autoTradeEnabled": true, "maxSymbols": 5}',
+                "target_count": 8,
+                "evaluated_count": 8,
+                "opportunity_count": 2,
+                "submitted_count": 1,
+                "skipped_count": 1,
+                "executed": 1,
+                "auto_trade_json": '{"enabled": true, "submittedCount": 1}',
+                "position_control_json": '{"targetPortfolioRatio": 0.7}',
+                "candidates_json": '[{"symbol": "MSFT.US", "confidence": 90}]',
+                "opportunities_json": '[{"symbol": "MSFT.US", "side": "BUY"}]',
+                "skipped_json": '[{"symbol": "AAPL.US", "reason": "已有持仓"}]',
+                "error": "",
+                "started_at": "2026-05-22 21:30:00",
+                "finished_at": "2026-05-22 21:30:08",
+            }
+        ]
+
+    monkeypatch.setattr(module.DbUtil, "fetch_all", staticmethod(fake_fetch_all))
+
+    result = service.list_us_open_ai_trade_runs(user_id=1, limit=50)
+
+    assert result["total"] == 1
+    assert result["items"][0]["cycleId"] == "qt-202605220930000000"
+    assert result["items"][0]["status"] == "completed"
+    assert result["items"][0]["settings"]["maxSymbols"] == 5
+    assert result["items"][0]["autoTrade"]["submittedCount"] == 1
+    assert result["items"][0]["positionControl"]["targetPortfolioRatio"] == 0.7
+    assert result["items"][0]["opportunities"][0]["symbol"] == "MSFT.US"
 
 
 def test_watchlist_strategy_backtest_replays_historical_scores(monkeypatch) -> None:
@@ -1010,5 +1084,6 @@ def test_strategy_service_quant_run_uses_watchlist_strategy_entrypoint() -> None
 
     assert "QuantTradingService.run_watchlist_strategy_cycle(" in source
     assert "QuantTradingService.list_watchlist_strategy_history(" in source
+    assert "QuantTradingService.list_us_open_ai_trade_runs(" in source
     assert "QuantTradingService.run_watchlist_strategy_backtest(" in source
     assert "QuantTradingService.run_cycle(" not in source
