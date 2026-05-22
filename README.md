@@ -1,239 +1,156 @@
 # Refactor V2
 
-Refactor V2 是一个本地优先的量化交易与研究平台。它把旧单体能力拆成前端工作台、平台账号、市场数据、AI 研究、策略、交易、风控、调度和舆情服务；Web Portal 通过 nginx/Vite 的 `/svc/*` 代理直连各服务，API Gateway 则提供服务目录、依赖探测和观测入口。
+Refactor V2 是一个面向股票研究、量化策略、AI 研判和交易管理的本地化投资工作台。平台围绕“看行情、管自选、做研判、跑策略、控风险、看执行”组织功能，适合用于个人或小团队的美股、港股、A 股研究与自动化交易实验。
 
-当前主线已经不是“占位工程”：核心微服务、交易/市场/AI/风控/调度页面、舆情中心、Agno 只读复核链路、通知复核生命周期都已接入并可在本机运行。
+## 项目能做什么
 
-## 已完成内容
+- 统一查看市场行情、股票池、自选股池、标的详情和历史 K 线。
+- 管理自选股票池，并为每个标的保留扫描结果和 AI 研判记录。
+- 使用 AI 对持仓、标的、趋势和财经资讯进行辅助研判。
+- 运行自选股池量化扫描，生成候选标的、机会标的和风险原因。
+- 在任务中心配置自选股盘前、盘后和美股开盘扫描任务。
+- 在开启自动交易后，对符合条件的自选股机会进行受控下单。
+- 追踪每次 AI 交易扫描的启动、跳过、完成、失败、候选、机会和下单结果。
+- 管理交易账户、持仓、订单、风控通知和人工复核状态。
+- 查看市场舆情、财经快讯、智能推荐和 AI 复核结果。
 
-- 统一前端工作台：登录、仪表盘、交易台、持仓、订单、股票池、自选池、实时行情、历史 K 线、智能推荐、市场舆情、财经快讯、AI 研判、策略、回测、风控、通知、任务中心、用户和系统设置。
-- 微服务拆分：`user-center`、`market-service`、`analysis-service`、`strategy-service`、`trade-service`、`sentiment-service`、`scheduler-service`、`risk-service`、`api-gateway`、`agno-sidecar`。
-- 自选股票池：`/watchlist-pool` 已改成台账列表，支持按标的进入 `/watchlist-pool/:symbol/scan-result` 查看最近趋势扫描和 AI 研判；`/watchlist-ai-trade-runs` 展示美股开盘 AI 自动交易每次启动扫描的专用审计记录。
-- 实时行情边界：`/market`、`/stock-pool`、`/watchlist-pool`、标的详情和交易台的当前价、盘前、盘中、盘后、夜盘价统一走 Longbridge quote/push；`quote-snapshots` 只保留给历史趋势、历史扫描和显式快照回看。
-- 舆情中心：`/sentiment-center` 页面，`sentiment-service` 提供市场/标的情绪、GitHub 选型、AI 配置复用、量化只读边界。
-- Agno sidecar：通过现有 `LONGBRIDGE_AI_*` / `sub2api` / OpenAI-compatible gateway 做 watchlist review，默认只生成观察、风险和人工复核建议；只有在任务中心显式开启机会股自动买入时，才会经量化交易服务按仓位控制尝试下单。
-- 自选池量化策略：`/strategy` 增加自选池多因子扫描，吸收 Lean/Qlib/vn.py/PyPortfolioOpt 的事件分层、因子评分、风控分层和轻量仓位预算思想，不引入重依赖、不 vendoring 外部仓库；自动执行只接受当前用户自选股池标的，并继续走长桥 CLI/交易边界。
-- 风控通知生命周期：Agent 风险通知支持待复核、已确认、已忽略、需复核、超期等状态。
-- 用户隔离修补：目标读路径移除 bootstrap 用户 fallback；历史覆盖、股票池、自选池等按登录用户读取。
-- 历史 K 线策略：禁用 Longbridge SDK 历史 K 线直拉路径，优先使用本地存储和 skshare/回填链路。
-- Docker compose 运行态：本地服务容器化，`web-portal` 暴露 `3100`，后端服务暴露 `5101/8101-8108/3200`。
+## 核心功能
 
-## 目录地图
+### 1. 市场行情
 
-| 路径 | 说明 |
+平台提供实时行情、股票池、自选股池、标的详情和历史 K 线页面。当前价、盘前、盘中、盘后和夜盘价格统一使用实时行情链路展示，历史趋势和历史扫描保留快照回看能力。
+
+### 2. 自选股票池
+
+自选股池以台账列表方式管理标的。每个标的可以配置盘前、盘后扫描开关，也可以进入独立的扫描结果页查看最近趋势扫描、风险等级、技术评分、指标摘要和最新 AI 研判。
+
+### 3. AI 研判
+
+AI 研判模块支持对持仓和标的进行综合分析，结合趋势、风险、价格、资讯和策略信号形成辅助决策。平台也支持财经快讯、市场摘要和推荐结果的 AI 生成。
+
+### 4. 量化策略
+
+策略模块支持自选股池量化扫描、策略管理和回测。自选池扫描会基于趋势、突破、均值回归、AI 趋势扫描和波动风险进行多因子评分，输出候选标的、机会标的、评分、风险等级和命中原因。
+
+### 5. 自动交易
+
+自动交易只面向当前用户自选股池内的标的。任务开启后，平台会在美股开盘时间按配置周期扫描自选池，并根据机会标的、最低置信度、最多买入标的数和总仓位比例进行仓位控制。已有持仓若触发卖出信号，会进入受控卖出流程。
+
+### 6. 扫描记录
+
+美股开盘 AI 自动交易任务每次启动都会生成独立扫描记录。记录内容包括运行状态、触发来源、扫描标的数、已评估数量、机会数量、已提交订单数量、候选快照、机会标的、跳过原因和仓位控制参数。
+
+### 7. 交易管理
+
+交易工作台提供账户、持仓、订单和交易状态查看。所有自动下单都会进入交易服务边界，继续校验账户、权限、现金、持仓、重复委托和纸账户保护。
+
+### 8. 风控与通知
+
+风控模块展示风险通知、AI 复核结果和人工处理状态。通知支持待复核、已确认、已忽略、需复核、超期等生命周期。
+
+### 9. 市场舆情
+
+舆情中心展示市场情绪、标的热度、风险词、资讯摘要和量化可读字段。舆情结果作为研究和策略复核证据，不直接触发交易。
+
+### 10. 任务中心
+
+任务中心用于管理平台自动化任务，包括自选股盘前复核、盘后复核、美股开盘 AI 交易扫描、历史数据回补和其他后台调度任务。
+
+## 页面能力
+
+| 页面 | 功能 |
 | --- | --- |
-| `apps/frontend/web-portal` | Vue 3 + Element Plus 前端工作台，含 Web、移动端 Capacitor、Electron 桌面壳脚本 |
-| `apps/platform/user-center` | 登录、用户、角色、菜单、平台配置、用户 bootstrap |
-| `apps/platform/api-gateway` | 服务目录、依赖探测和观测入口；Web Portal 可通过 `/svc/gateway/...` 访问 |
-| `apps/market/market-service` | 行情、历史、股票池、自选池、Longbridge quote/push、市场扫描 |
-| `apps/market/sentiment-service` | 舆情中心 read model、GitHub 参考项目选型、量化只读信号 |
-| `apps/intelligence/analysis-service` | AI 研判、趋势扫描、推荐、财经快讯、Agent run 治理 |
-| `apps/intelligence/strategy-service` | 策略 CRUD、回测、策略监控、自选池量化扫描和受控量化试跑 |
-| `apps/intelligence/agno-sidecar` | Agno-compatible 只读复核 sidecar，调用现有 AI 网关 |
-| `apps/trading/trade-service` | 券商账户、资产、持仓、订单、outbox/saga 管理 |
-| `apps/governance/risk-service` | 风控总览、限额、保护单、通知中心 |
-| `apps/operations/scheduler-service` | 系统任务、调度运行态、手动触发、watchlist review 调度 |
-| `backend-server/src` | 重构期共享 legacy 核心服务与数据访问边界 |
-| `scripts` | 本机启动、停止、验证、CLI adapter、数据库 bootstrap 脚本 |
-| `docs` | 架构、Agno、舆情选型、迁移和决策文档 |
+| 仪表盘 | 查看平台概览、服务状态和关键工作入口 |
+| 实时行情 | 查看市场行情、交易时段和实时价格 |
+| 股票池 | 管理基础股票池和行情字段 |
+| 自选股票池 | 管理用户自选标的、扫描开关和扫描入口 |
+| 扫描结果 | 查看单个自选标的的趋势扫描和 AI 研判 |
+| AI交易扫描记录 | 查看每次美股开盘 AI 自动交易扫描和下单结果 |
+| AI研判 | 对持仓或标的进行 AI 辅助分析 |
+| 智能推荐 | 查看平台生成的机会推荐 |
+| 市场舆情 | 查看市场情绪、热点标的和风险词 |
+| 财经快讯 | 查看财经资讯和摘要 |
+| 策略管理 | 管理策略、自选池量化扫描和受控下单 |
+| 策略回测 | 回放历史数据并评估策略表现 |
+| 交易台 | 查看交易入口和交易上下文 |
+| 持仓管理 | 查看持仓、盈亏和仓位 |
+| 订单管理 | 查看订单状态和执行结果 |
+| 风控管理 | 查看风险状态、限制和保护信息 |
+| 通知中心 | 处理 AI 风险通知和人工复核 |
+| 任务中心 | 管理自动化扫描、复核和调度任务 |
+| 用户与设置 | 管理账户、角色、菜单和系统配置 |
 
-每个模块都有自己的 README：
+## 版本记录
 
-- [Apps 总览](./apps/README.md)
-- [Frontend](./apps/frontend/README.md)
-- [Web Portal](./apps/frontend/web-portal/README.md)
-- [Platform](./apps/platform/README.md)
-- [User Center](./apps/platform/user-center/README.md)
-- [API Gateway](./apps/platform/api-gateway/README.md)
-- [Market](./apps/market/README.md)
-- [Market Service](./apps/market/market-service/README.md)
-- [Sentiment Service](./apps/market/sentiment-service/README.md)
-- [Intelligence](./apps/intelligence/README.md)
-- [Analysis Service](./apps/intelligence/analysis-service/README.md)
-- [Strategy Service](./apps/intelligence/strategy-service/README.md)
-- [Agno Sidecar](./apps/intelligence/agno-sidecar/README.md)
-- [Trading](./apps/trading/README.md)
-- [Trade Service](./apps/trading/trade-service/README.md)
-- [Governance](./apps/governance/README.md)
-- [Risk Service](./apps/governance/risk-service/README.md)
-- [Operations](./apps/operations/README.md)
-- [Scheduler Service](./apps/operations/scheduler-service/README.md)
+### V1.0 基础平台能力
 
-架构与联动说明：
+- 建立本地优先的交易研究工作台。
+- 完成登录、仪表盘、行情、交易、持仓、订单、股票池和基础系统设置。
+- 接入核心服务状态展示，为后续模块化扩展提供基础。
 
-- [整体架构与微服务联动图](./docs/system-architecture-and-linkage.md)
-- [量化策略 GitHub 借鉴落地 ADR](./docs/adr-quant-github-patterns-20260522.md)
-- [架构联动评估记录](./docs/architecture-linkage-review-20260521.md)
-- [架构概览](./docs/architecture-overview.md)
-- [Phase 1 Stack](./docs/phase1-stack.md)
+### V1.1 市场页面与实时行情优化
 
-## 阅读顺序
+- 优化市场、交易、K 线和股票池页面的读取速度。
+- 降低行情页面在实时数据更新时的卡顿。
+- 修复市场扫描状态、K 线刷新和页面控件交互问题。
+- 增加核心 ETF 自选种子数据，提升初始化后的可用性。
 
-首次接手建议按这条路径阅读：
+### V1.2 自选股 AI 复核
 
-1. 先读本 README，确认当前能力、启动方式和安全边界。
-2. 再读 [整体架构与微服务联动图](./docs/system-architecture-and-linkage.md)，理解 Web Portal、各服务、AI/交易边界如何串联。
-3. 按负责模块进入对应 README，例如 [Strategy Service](./apps/intelligence/strategy-service/README.md)、[Market Service](./apps/market/market-service/README.md)、[Trade Service](./apps/trading/trade-service/README.md)。
-4. 需要追溯量化策略借鉴决策或外部评估和采纳项时，阅读 [量化策略 GitHub 借鉴落地 ADR](./docs/adr-quant-github-patterns-20260522.md)、[README 评估记录](./docs/readme-review-20260521.md) 和 [架构联动评估记录](./docs/architecture-linkage-review-20260521.md)。
+- 增加自选股 AI 复核能力。
+- 优化自选股复核任务，避免长时间阻塞。
+- 增加 AI 风险通知，并支持从通知跳转到复核详情。
+- 补齐空自选池、空复核结果和异常复核场景的提示。
 
-## 运行方式
+### V1.3 调度与用户隔离修复
 
-### Docker compose 推荐路径
+- 移除调度任务对默认用户的依赖。
+- 修复 AI 扫描、自选股复核、历史覆盖等场景中的用户隔离问题。
+- 增加历史覆盖修复入口和慢任务进度反馈。
+- 让历史数据回补和页面状态更容易被用户感知。
 
-```bash
-cd <PROJECT_ROOT>
-docker network create deploy_sub2api-network 2>/dev/null || true
-docker compose up -d
-docker compose ps
-```
+### V1.4 性能与稳定性增强
 
-访问：
+- 减少交易页面和市场页面的实时行情请求放大。
+- 优化标的详情读取路径，降低同步 AI 批量分析延迟。
+- 增加关键页面和接口稳定性检查。
+- 增加菜单缓存刷新能力，避免新页面被旧登录态隐藏。
 
-- Web Portal: `http://127.0.0.1:3100`
-- API Gateway: `http://127.0.0.1:5101`
-- Agno sidecar: `http://127.0.0.1:3200/health`
-- User Center: `http://127.0.0.1:8101/health`
-- Market Service: `http://127.0.0.1:8102/health`
-- Analysis Service: `http://127.0.0.1:8103/health`
-- Strategy Service: `http://127.0.0.1:8104/health`
-- Trade Service: `http://127.0.0.1:8105/health`
-- Sentiment Service: `http://127.0.0.1:8106/health`
-- Scheduler Service: `http://127.0.0.1:8107/health`
-- Risk Service: `http://127.0.0.1:8108/health`
+### V1.5 舆情中心
 
-注意：如果 Docker Hub metadata 请求返回 EOF，可以先复用本地镜像运行：
+- 新增市场舆情中心。
+- 支持市场情绪、标的热度、风险词和资讯摘要展示。
+- 将舆情信号连接到市场研究流程。
+- 明确舆情只作为量化和 AI 研判证据，不直接触发交易。
 
-```bash
-docker compose up -d --no-build
-```
+### V1.6 自选池量化策略
 
-### 本机脚本路径
+- 新增自选池多因子量化扫描。
+- 支持趋势、突破、均值回归、AI 趋势和风险扣分等评分维度。
+- 增加策略扫描历史和单标的策略复盘能力。
+- 自动执行时只允许当前用户自选股池内标的进入交易流程。
 
-```bash
-cp .env.example .env
-REF_SENTIMENT_ENABLED=true ./scripts/start_phase1_stack.sh
-./scripts/check_platform_health.py
-```
+### V1.7 自动交易安全边界
 
-如果只想启动默认 Phase 1 服务、不启用舆情服务，可以直接运行：
+- 增加交易边界审计能力。
+- 强化纸账户校验，防止自动交易误触真实资金账户。
+- 通过交易服务统一执行订单提交、账户校验、重复委托检查和仓位控制。
+- 删除单次买卖必须大于 1000 USD 的限制，支持美股 1 股级别测试。
 
-```bash
-./scripts/start_phase1_stack.sh
-./scripts/check_platform_health.py
-```
+### V1.8 美股开盘 AI 自动交易
 
-Docker compose 默认包含 `sentiment-service`，因此 `/sentiment-center` 可直接访问。本机脚本路径为了轻量默认不启动舆情服务；如果使用脚本并需要舆情页，请按上面的命令带 `REF_SENTIMENT_ENABLED=true` 启动，或单独启动 `apps/market/sentiment-service`。未启用时不是前端缺页，其他页面仍可运行，但舆情页会显示服务不可用或空态。
+- 增加美股开盘时间的自选股 AI 扫描任务。
+- 支持按固定间隔扫描自选股池，并根据配置选择机会标的。
+- 支持总仓位比例、最多标的数量、最低置信度和纸账户保护。
+- 对已有持仓的卖出信号进入受控卖出流程。
 
-按模块启动：
+### V1.9 AI 交易扫描记录
 
-```bash
-cd apps/frontend && ./run.sh
-cd apps/platform && ./run.sh
-cd apps/market && ./run.sh
-cd apps/intelligence && ./run.sh
-cd apps/trading && ./run.sh
-cd apps/governance && ./run.sh
-cd apps/operations && ./run.sh
-```
+- 新增 AI 交易扫描记录页面。
+- 每次美股开盘 AI 自动交易扫描启动都会生成独立记录。
+- 支持查看运行、跳过、完成、失败、候选、机会、跳过原因、下单提交和仓位控制快照。
+- 解决自动扫描结果只能在后台发生、前端无法追溯的问题。
 
-停止：
+## 当前状态
 
-```bash
-./scripts/stop_phase1_stack.sh
-```
-
-## 登录与页面
-
-默认本地 smoke 账号：
-
-- 用户名：`admin`
-- 密码：`admin123`
-
-关键页面：
-
-- `/dashboard`：平台总览；服务状态墙读取 Gateway observability + catalog，展示各服务端口、basePath 和告警数
-- `/market`：实时行情
-- `/stock-pool`、`/watchlist-pool`：股票池和自选池；自选池为台账列表，点击“扫描结果”进入 `/watchlist-pool/:symbol/scan-result`
-- `/watchlist-ai-trade-runs`：美股开盘 AI 自动交易扫描记录；展示每次任务启动、跳过、完成、失败、候选、机会、下单提交和仓位控制快照
-- `/sentiment-center`：市场舆情中心；Docker compose 默认可用，本机脚本路径需启用 `REF_SENTIMENT_ENABLED=true`
-- `/ai-analysis`：AI 研判
-- `/recommendations`：智能推荐
-- `/strategy`、`/backtest`：策略、回测、自选池量化策略扫描和受控下单入口
-- `/trading`、`/positions`、`/orders`：交易工作台
-- `/risk`、`/notifications`：风控和通知
-- `/scheduler-center`：系统任务与 Agent review
-
-## 核心配置
-
-主要配置来自 `.env` 和 Docker compose 环境变量：
-
-- 端口：`REF_WEB_PORTAL_PORT`、`REF_GATEWAY_PORT`、`REF_*_SERVICE_PORT`、`REF_AGNO_SIDECAR_PORT`
-- 数据库：`REF_DB_HOST`、`REF_DB_NAME`、`REF_DB_USER`、`REF_DB_PASSWORD`
-- Redis：`REF_REDIS_HOST`、`REF_REDIS_PORT`
-- AI 网关：`LONGBRIDGE_AI_BASE_URL`、`LONGBRIDGE_AI_URL`、`LONGBRIDGE_AI_MODEL*`
-- Agno sidecar：`REF_AGNO_SIDECAR_URL`
-- skshare：`REF_SKSHARE_BASE_URL` / `DOCKER_SKSHARE_BASE_URL`
-- 长桥 CLI：`LONGBRIDGE_CLI_BIN`、`LONGBRIDGE_REGION`
-
-舆情、分析、Agno sidecar 都复用 `LONGBRIDGE_AI_*`，不新增单独 AI 密钥体系。自选股盘前/盘后复核的自动买入默认关闭，可在任务中心开启，并受最多标的数、单标预算、单票仓位上限和最低置信度控制。美股开盘 AI 自动交易任务每次启动都会写入 `watchlist_us_open_ai_trade_runs`，即使因为开关关闭、非交易时段或异常而跳过，也能在 `/watchlist-ai-trade-runs` 追溯。策略页的自选池量化扫描默认只预览候选，只有用户显式点击受控下单且 `AI_QUANT_TRADING_ENABLED` 开启时，才会把候选作为订单意图交给 `trade-service`，再由 `trade-service` 通过 Longbridge/Tiger 适配层执行。
-
-## 验证命令
-
-```bash
-python3 -m py_compile \
-  apps/intelligence/analysis-service/src/main.py \
-  apps/intelligence/agno-sidecar/src/main.py \
-  apps/intelligence/strategy-service/src/main.py \
-  apps/market/market-service/src/main.py \
-  apps/market/sentiment-service/src/main.py \
-  backend-server/src/core/analysis/QuantTradingService.py \
-  apps/governance/risk-service/src/main.py
-
-.venv/bin/python -m pytest -q \
-  tests/python/test_service_edges_contract.py \
-  tests/python/test_agent_watchlist_scope.py \
-  tests/python/test_watchlist_quant_strategy.py \
-  tests/python/test_notifications_read_model_fallback.py \
-  tests/python/test_sentiment_service_contract.py \
-  tests/python/test_skshare_history_and_sub2api.py \
-  tests/python/test_market_live_cache.py
-
-npm --prefix apps/frontend/web-portal run test:unit -- \
-  tests/unit/api-health.spec.js \
-  tests/unit/dashboard-shell.spec.js \
-  tests/unit/app-bootstrap.spec.js \
-  tests/unit/market-sentiment.spec.js \
-  tests/unit/watchlist-ai-trade-runs.spec.js \
-  tests/unit/finance-news-notifications.spec.js
-
-npm --prefix apps/frontend/web-portal run build
-SMOKE_PAGE_FILTER=sentiment-center,notifications npm --prefix apps/frontend/web-portal run smoke:web
-python3 scripts/check_platform_health.py
-```
-
-## 外部评估工作流
-
-本项目保留两个本机评估入口：
-
-- Antigravity CLI adapter：`python3 scripts/antigravity_cli_adapter.py probe`
-- NotebookLM CLI：`nlm --help`、`nlm notebook ...`、`nlm source ...`、`nlm query ...`
-
-`scripts/antigravity_cli_adapter.py run` 会优先调用 Antigravity CLI；如果输出显示 OAuth、登录、授权或凭据阻塞，并且本机 `gemini` 可用，会自动降级到 Gemini CLI 的 `--prompt` 非交互模式继续评估。可用 `REF_AGENT_CLI_DISABLE_GEMINI_FALLBACK=true` 临时关闭该兜底。
-
-建议评估流程：
-
-1. 生成或更新 README。
-2. 把根 README 和模块 README 打包给 Antigravity CLI 做工程审阅；如果 Antigravity 需要重新授权，adapter 会自动改用 Gemini CLI。
-3. 把同一批 README 加入 NotebookLM notebook，让 NotebookLM 从文档一致性、上手路径和缺口角度审阅。
-4. 汇总意见，分成“接受”“待定”“拒绝”。
-5. 对接受项建立待办清单，再拆给智能体按模块逐步处理。
-
-本轮评估结果和采纳项见 [docs/readme-review-20260521.md](./docs/readme-review-20260521.md)。
-
-## 安全边界
-
-- 舆情始终是量化复核的只读证据；Agno watchlist review 默认只生成建议，不触发交易。只有任务中心显式开启机会股自动买入时，才会经 analysis/quant/trade 链路按仓位控制尝试下单。
-- 自选池量化策略只扫描 `user_watchlist_stocks`，自动买入入口会再次校验标的仍属于当前用户自选池；非自选标的即使来自 AI 结果也会被跳过。
-- 交易动作只允许通过 `trade-service` 的显式接口发生。
-- Agent override 仅支持人工复核语义：`acknowledged`、`needs_review`、`dismissed`。
-- 不直接 vendor GPL 舆情项目；GitHub 项目仅作为架构、采集或评估参考。
+当前版本已经具备行情查看、自选管理、AI 研判、舆情查看、量化扫描、任务调度、受控自动交易、风控通知和扫描记录追踪能力。平台仍以本地化研究和受控交易为核心，所有自动交易行为都保留账户、权限、仓位和订单防重边界。
