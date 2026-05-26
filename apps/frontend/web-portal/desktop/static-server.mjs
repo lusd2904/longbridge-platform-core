@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import http from 'node:http'
+import https from 'node:https'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -103,8 +104,8 @@ function pipeProxyRequest(request, response, target) {
 
 function pipeProxyWebSocket(request, socket, head, target) {
   const targetUrl = new URL(target.targetUrl)
-  targetUrl.protocol = targetUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-  const proxyRequest = http.request(targetUrl, {
+  const requestClient = targetUrl.protocol === 'https:' ? https : http
+  const proxyRequest = requestClient.request(targetUrl, {
     method: 'GET',
     headers: {
       ...request.headers,
@@ -113,11 +114,14 @@ function pipeProxyWebSocket(request, socket, head, target) {
   })
 
   proxyRequest.on('upgrade', (proxyResponse, proxySocket, proxyHead) => {
+    const forwardedHeaders = Object.entries(proxyResponse.headers)
+      .filter(([key]) => !['connection', 'upgrade'].includes(key.toLowerCase()))
+      .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
     socket.write([
-      'HTTP/1.1 101 Switching Protocols',
+      `HTTP/1.1 ${proxyResponse.statusCode || 101} ${proxyResponse.statusMessage || 'Switching Protocols'}`,
       'Upgrade: websocket',
       'Connection: Upgrade',
-      ...Object.entries(proxyResponse.headers).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`),
+      ...forwardedHeaders,
       '',
       ''
     ].join('\r\n'))
@@ -152,7 +156,13 @@ function writeWebSocketCloseFrame(socket) {
 }
 
 function installDesktopMetaSocket(server) {
+  const upgradedSockets = new Set()
+  server.__refv2DesktopUpgradedSockets = upgradedSockets
   server.on('upgrade', (request, socket, head) => {
+    upgradedSockets.add(socket)
+    socket.on('close', () => {
+      upgradedSockets.delete(socket)
+    })
     if (request.url === '/__desktop_meta_ws__') {
       const socketKey = request.headers['sec-websocket-key']
       if (!socketKey) {
@@ -257,6 +267,9 @@ export async function startDesktopServer(port = 4168, options = {}) {
     port: boundPort,
     serviceTargets: options.serviceTargets || buildServiceTargets(),
     close: () => new Promise((resolve, reject) => {
+      for (const socket of server.__refv2DesktopUpgradedSockets || []) {
+        socket.destroy()
+      }
       server.close((error) => {
         if (error) {
           reject(error)

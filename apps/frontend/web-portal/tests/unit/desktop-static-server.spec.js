@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
@@ -12,6 +13,7 @@ const projectRoot = path.resolve(import.meta.dirname, '../..')
 const distDir = path.resolve(projectRoot, 'dist')
 let desktopServer
 let apiServer
+let upstreamWsPath = ''
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -37,6 +39,26 @@ describe('desktop static server', () => {
       }
       response.writeHead(404)
       response.end()
+    })
+    apiServer.on('upgrade', (request, socket) => {
+      upstreamWsPath = request.url || ''
+      const socketKey = request.headers['sec-websocket-key']
+      const acceptKey = socketKey
+        ? awaitWebSocketAcceptKey(socketKey)
+        : ''
+      socket.write([
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${acceptKey}`,
+        '',
+        ''
+      ].join('\r\n'))
+      writeWebSocketTextFrame(socket, JSON.stringify({
+        type: 'market-stream-ready',
+        path: upstreamWsPath
+      }))
+      socket.write(Buffer.from([0x88, 0x00]), () => socket.destroy())
     })
     const apiPort = await listen(apiServer)
     desktopServer = await startDesktopServer(0, {
@@ -97,6 +119,22 @@ describe('desktop static server', () => {
     })
   })
 
+  it('proxies /svc WebSocket upgrades without changing the target protocol', async () => {
+    const payload = await new Promise((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${desktopServer.port}/svc/market/api/v1/market/stream?symbols=AAPL.US`)
+      socket.on('message', (message) => {
+        resolve(JSON.parse(String(message)))
+      })
+      socket.on('error', reject)
+    })
+
+    expect(payload).toEqual({
+      type: 'market-stream-ready',
+      path: '/api/v1/market/stream?symbols=AAPL.US'
+    })
+    expect(upstreamWsPath).toBe('/api/v1/market/stream?symbols=AAPL.US')
+  })
+
   it('resolves service targets using Web portal service path semantics', () => {
     const target = desktopServerInternals.resolveServiceTarget('/svc/trade/api/v1/trade/orders?limit=5', {
       serviceTargets: {
@@ -108,3 +146,18 @@ describe('desktop static server', () => {
     expect(target.targetUrl.toString()).toBe('http://127.0.0.1:8105/api/v1/trade/orders?limit=5')
   })
 })
+
+function awaitWebSocketAcceptKey(socketKey) {
+  return crypto
+    .createHash('sha1')
+    .update(`${socketKey}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest('base64')
+}
+
+function writeWebSocketTextFrame(socket, payload) {
+  const body = Buffer.from(String(payload))
+  socket.write(Buffer.concat([
+    Buffer.from([0x81, body.length]),
+    body
+  ]))
+}
