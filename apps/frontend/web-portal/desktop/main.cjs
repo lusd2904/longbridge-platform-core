@@ -1,12 +1,17 @@
 const path = require('node:path')
 const fs = require('node:fs')
 const { app, BrowserWindow, Menu, nativeTheme, shell } = require('electron')
+const {
+  buildMenuTemplate,
+  buildServiceTargets,
+  buildWindowOptions,
+  normalizeBaseUrl,
+  readConfiguredDesktopApiBase,
+  readDesktopPort
+} = require('./config.cjs')
 
-const APP_PORT = Number(process.env.REFV2_DESKTOP_PORT || 4168)
-const API_BASE_URL = process.env.REFV2_DESKTOP_API_BASE
-  || process.env.VITE_DESKTOP_API_BASE_URL
-  || process.env.VITE_NATIVE_API_BASE_URL
-  || 'http://127.0.0.1:3100'
+const APP_PORT = readDesktopPort()
+const API_BASE_URL = readConfiguredDesktopApiBase() || normalizeBaseUrl(`http://127.0.0.1:${APP_PORT}`)
 const IS_SMOKE = process.env.REFV2_ELECTRON_SMOKE === '1'
 
 let mainWindow = null
@@ -19,7 +24,10 @@ async function ensureDesktopServer() {
   }
 
   const { startDesktopServer } = await import('./static-server.mjs')
-  desktopServer = await startDesktopServer(APP_PORT)
+  desktopServer = await startDesktopServer(APP_PORT, {
+    apiBaseUrl: API_BASE_URL,
+    serviceTargets: buildServiceTargets()
+  })
   return desktopServer
 }
 
@@ -33,51 +41,9 @@ async function createMainWindow() {
     app.dock.setIcon(icon)
   }
 
-  mainWindow = new BrowserWindow({
-    width: 1560,
-    height: 980,
-    minWidth: 1280,
-    minHeight: 820,
-    title: 'Refactor V2',
-    backgroundColor: '#08101d',
-    icon,
-    titleBarStyle: 'hiddenInset',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      additionalArguments: [`--refv2-api-base=${API_BASE_URL}`]
-    }
-  })
+  mainWindow = new BrowserWindow(buildWindowOptions({ dirname: __dirname, apiBaseUrl: API_BASE_URL, icon }))
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    {
-      label: '应用',
-      submenu: [
-        { role: 'about' },
-        { type: 'separator' },
-        { role: 'services' },
-        { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
-        { type: 'separator' },
-        { role: 'quit' }
-      ]
-    },
-    {
-      label: '窗口',
-      submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'togglefullscreen' },
-        { type: 'separator' },
-        { role: 'minimize' },
-        { role: 'zoom' }
-      ]
-    }
-  ]))
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate()))
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -87,9 +53,20 @@ async function createMainWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     console.log(`desktop_loaded:${mainWindow.webContents.getURL()}`)
     if (IS_SMOKE) {
-      setTimeout(() => {
+      mainWindow.webContents.executeJavaScript(
+        `JSON.stringify({
+          desktop: Boolean(window.__REFV2_DESKTOP__),
+          apiBaseUrl: window.__REFV2_DESKTOP_API_BASE__,
+          platform: window.refactorDesktop && window.refactorDesktop.platform,
+          os: window.refactorDesktop && window.refactorDesktop.os
+        })`
+      ).then((payload) => {
+        console.log(`desktop_context:${payload}`)
+      }).catch((error) => {
+        console.error(`desktop_context_error:${error?.message || error}`)
+      }).finally(() => setTimeout(() => {
         app.quit()
-      }, 2500)
+      }, 800))
     }
   })
 

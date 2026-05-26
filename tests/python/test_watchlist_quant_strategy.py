@@ -1129,6 +1129,104 @@ def test_list_us_open_ai_trade_runs_parses_dedicated_run_table(monkeypatch) -> N
     assert result["items"][0]["opportunities"][0]["symbol"] == "MSFT.US"
 
 
+def test_list_watchlist_strategy_history_loads_run_items_in_one_query(monkeypatch) -> None:
+    module = _load_module()
+    service = module.QuantTradingService
+    monkeypatch.setattr(service, "ensure_schema", classmethod(lambda cls: None))
+    calls = []
+
+    def fake_fetch_all(sql, params=None):
+        normalized_sql = " ".join(str(sql).split())
+        calls.append((normalized_sql, params))
+        if "FROM watchlist_quant_strategy_runs" in normalized_sql:
+            return [
+                {
+                    "id": 12,
+                    "cycle_id": "cycle-b",
+                    "source": "manual",
+                    "strategy_profile": "balanced",
+                    "enabled": 1,
+                    "auto_execute": 0,
+                    "executed": 0,
+                    "target_count": 4,
+                    "evaluated_count": 4,
+                    "opportunity_count": 1,
+                    "auto_trade_json": '{"enabled": false}',
+                    "position_control_json": '{"maxSymbols": 2}',
+                    "skipped_json": "[]",
+                    "created_at": "2026-05-22 21:30:00",
+                },
+                {
+                    "id": 11,
+                    "cycle_id": "cycle-a",
+                    "source": "manual",
+                    "strategy_profile": "momentum",
+                    "enabled": 1,
+                    "auto_execute": 1,
+                    "executed": 1,
+                    "target_count": 3,
+                    "evaluated_count": 3,
+                    "opportunity_count": 2,
+                    "auto_trade_json": '{"enabled": true}',
+                    "position_control_json": '{"maxSymbols": 1}',
+                    "skipped_json": '[{"symbol": "TSLA.US"}]',
+                    "created_at": "2026-05-22 21:20:00",
+                },
+            ]
+        if "FROM watchlist_quant_strategy_run_items" in normalized_sql:
+            assert "cycle_id IN (%s, %s)" in normalized_sql
+            assert params == (1, "cycle-b", "cycle-a")
+            return [
+                {
+                    "cycle_id": "cycle-a",
+                    "symbol": "MSFT.US",
+                    "name": "Microsoft",
+                    "market": "US",
+                    "side": "BUY",
+                    "status": "candidate",
+                    "is_opportunity": 1,
+                    "price": 420,
+                    "confidence": 91,
+                    "risk_level": "low",
+                    "reason": "strong",
+                    "tags_json": '["站上20日线"]',
+                    "metrics_json": "{}",
+                    "score_json": '{"total": 91}',
+                    "created_at": "2026-05-22 21:21:00",
+                },
+                {
+                    "cycle_id": "cycle-b",
+                    "symbol": "AAPL.US",
+                    "name": "Apple",
+                    "market": "US",
+                    "side": "HOLD",
+                    "status": "observed",
+                    "is_opportunity": 0,
+                    "price": 190,
+                    "confidence": 61,
+                    "risk_level": "medium",
+                    "reason": "watch",
+                    "tags_json": "[]",
+                    "metrics_json": "{}",
+                    "score_json": '{"total": 61}',
+                    "created_at": "2026-05-22 21:31:00",
+                },
+            ]
+        raise AssertionError(normalized_sql)
+
+    monkeypatch.setattr(module.DbUtil, "fetch_all", staticmethod(fake_fetch_all))
+
+    result = service.list_watchlist_strategy_history(user_id=1, limit=20)
+
+    item_queries = [sql for sql, _params in calls if "FROM watchlist_quant_strategy_run_items" in sql]
+    assert len(item_queries) == 1
+    assert result["total"] == 2
+    assert result["items"][0]["cycleId"] == "cycle-b"
+    assert result["items"][0]["items"][0]["symbol"] == "AAPL.US"
+    assert result["items"][1]["cycleId"] == "cycle-a"
+    assert result["items"][1]["items"][0]["symbol"] == "MSFT.US"
+
+
 def test_watchlist_strategy_backtest_replays_historical_scores(monkeypatch) -> None:
     module = _load_module()
     service = module.QuantTradingService

@@ -954,12 +954,13 @@ def _build_history_coverage_cache_key(
     expected_start: Optional[str],
     expected_end: Optional[str],
 ) -> Tuple[Any, ...]:
+    normalized_search, _explicit_market_suffix = _normalize_exact_history_coverage_symbol(search)
     return (
         "history-coverage",
         int(user_id),
         start_date.isoformat(),
-        str(search or "").strip(),
-        str(status or "").strip(),
+        normalized_search or str(search or "").strip(),
+        str(status or "").strip().lower(),
         int(page),
         int(page_size),
         str(expected_start or "").strip(),

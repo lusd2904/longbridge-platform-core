@@ -46,6 +46,7 @@ dist/
 **/dist/
 build/
 **/build/
+apps/frontend/web-portal/desktop-dist/
 coverage/
 **/coverage/
 output/

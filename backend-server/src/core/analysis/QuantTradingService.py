@@ -638,20 +638,34 @@ class QuantTradingService:
             (user_id, safe_limit)
         ) or []
 
-        runs = []
-        for row in rows:
-            items = DbUtil.fetch_all(
-                """
-                SELECT symbol, name, market, side, status, is_opportunity, price,
+        cycle_ids = [
+            str(row.get('cycle_id') or '').strip()
+            for row in rows
+            if str(row.get('cycle_id') or '').strip()
+        ]
+        items_by_cycle_id: Dict[str, List[Dict[str, Any]]] = {cycle_id: [] for cycle_id in cycle_ids}
+        if cycle_ids:
+            placeholders = ", ".join(["%s"] * len(cycle_ids))
+            item_rows = DbUtil.fetch_all(
+                f"""
+                SELECT cycle_id, symbol, name, market, side, status, is_opportunity, price,
                        confidence, risk_level, reason, tags_json, metrics_json,
                        score_json, created_at
                 FROM watchlist_quant_strategy_run_items
-                WHERE user_id = %s AND cycle_id = %s
-                ORDER BY is_opportunity DESC, confidence DESC, id ASC
-                LIMIT 20
+                WHERE user_id = %s AND cycle_id IN ({placeholders})
+                ORDER BY cycle_id ASC, is_opportunity DESC, confidence DESC, id ASC
                 """,
-                (user_id, row.get('cycle_id'))
+                (user_id, *cycle_ids)
             ) or []
+            for item in item_rows:
+                cycle_id = str(item.get('cycle_id') or '').strip()
+                if cycle_id in items_by_cycle_id and len(items_by_cycle_id[cycle_id]) < 20:
+                    items_by_cycle_id[cycle_id].append(item)
+
+        runs = []
+        for row in rows:
+            cycle_id = str(row.get('cycle_id') or '').strip()
+            items = items_by_cycle_id.get(cycle_id, [])
             runs.append({
                 "id": row.get('id'),
                 "cycleId": row.get('cycle_id'),

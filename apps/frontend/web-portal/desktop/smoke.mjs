@@ -53,6 +53,14 @@ async function runSmoke() {
         complete(new Error(`Electron smoke missing load marker\n${output}`))
         return
       }
+      if (!output.includes('desktop_context:')) {
+        complete(new Error(`Electron smoke missing preload context marker\n${output}`))
+        return
+      }
+      if (!/"desktop":true/.test(output) || !/"platform":"desktop"/.test(output)) {
+        complete(new Error(`Electron smoke loaded without desktop preload context\n${output}`))
+        return
+      }
       complete()
     })
   })

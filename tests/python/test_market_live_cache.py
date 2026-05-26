@@ -495,6 +495,44 @@ def test_history_coverage_name_search_keeps_full_query_path(monkeypatch) -> None
     assert payload["total"] == 0
 
 
+def test_history_coverage_cache_key_normalizes_exact_symbol_search() -> None:
+    base_key = market_service._build_history_coverage_cache_key(
+        user_id=1,
+        start_date=date(2024, 1, 1),
+        search=" nvdl.us ",
+        status="",
+        page=1,
+        page_size=20,
+        expected_start=None,
+        expected_end=None,
+    )
+    normalized_key = market_service._build_history_coverage_cache_key(
+        user_id=1,
+        start_date=date(2024, 1, 1),
+        search="NVDL.US",
+        status=" ",
+        page=1,
+        page_size=20,
+        expected_start="",
+        expected_end="",
+    )
+    different_page_key = market_service._build_history_coverage_cache_key(
+        user_id=1,
+        start_date=date(2024, 1, 1),
+        search="NVDL.US",
+        status="",
+        page=2,
+        page_size=20,
+        expected_start=None,
+        expected_end=None,
+    )
+
+    assert base_key == normalized_key
+    assert base_key != different_page_key
+    assert "NVDL.US" in base_key
+    assert "nvdl.us" not in base_key
+
+
 def test_backfill_status_exposes_operational_progress(monkeypatch) -> None:
     def fake_fetch_one(sql, params=None):
         if "total_universe_symbols" in sql:

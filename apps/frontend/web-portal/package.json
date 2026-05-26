@@ -39,7 +39,7 @@
     "perf:api:critical": "BENCHMARK_ONLY=market-stock-pool,market-insights,market-history-compare,market-history-coverage,risk-overview,orders-projection,positions-projection node ../../../scripts/admin_benchmark_smoke.cjs",
     "gate:continuous": "node ../../../scripts/continuous_regression_gate.cjs",
     "scan:contrast": "node ./scripts/contrast-scan.mjs",
-    "desktop:mac": "npm run build && electron-builder --mac dir",
+    "desktop:mac": "npm run build && electron-builder --mac dir && node ./desktop/verify-package.mjs",
     "trade:regression": "node ./scripts/trade-regression.mjs",
     "verify:platform": "sh ../../../scripts/verify_platform.sh",
     "mobile:debug": "sh ./scripts/mobile-debug-all.sh",
@@ -78,7 +78,7 @@
   },
   "build": {
     "appId": "com.refactorv2.portal.desktop",
-    "productName": "Refactor V2",
+    "productName": "量化交易终端",
     "icon": "build/icon.icns",
     "directories": {
       "output": "desktop-dist"
