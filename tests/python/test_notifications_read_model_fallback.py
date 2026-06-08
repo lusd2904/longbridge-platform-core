@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from datetime import datetime
 from pathlib import Path
@@ -282,6 +283,130 @@ def test_risk_service_merge_reuses_existing_agent_events(monkeypatch) -> None:
     assert result["overview"]["riskEventCount"] == 2
     assert result["meta"]["agentRiskEventCount"] == 1
     assert result["meta"]["eventCount"] == 2
+
+
+def test_risk_service_realtime_overview_defaults_to_snapshot_path(monkeypatch) -> None:
+    module = _load_module("risk_service_realtime_snapshot_path_test", RISK_SERVICE_MAIN)
+    snapshot = {
+        "snapshotAt": "2026-05-20 10:00:00",
+        "overview": {"score": 91, "scoreLabel": "低风险"},
+        "events": [],
+    }
+    calls = {"snapshot": 0, "live": 0}
+
+    monkeypatch.setattr(module.RiskOverviewSnapshotService, "get_latest", lambda **kwargs: snapshot)
+
+    def snapshot_payload(**kwargs):
+        calls["snapshot"] += 1
+        assert kwargs["snapshot"] is snapshot
+        return {"dataSource": "snapshot", "snapshotAt": snapshot["snapshotAt"]}
+
+    def fail_live(*args, **kwargs):
+        calls["live"] += 1
+        raise AssertionError("realtime=true without refresh must not rebuild live risk overview")
+
+    monkeypatch.setattr(module, "_build_risk_snapshot_payload", snapshot_payload)
+    monkeypatch.setattr(module, "build_risk_overview", fail_live)
+
+    payload = asyncio.run(
+        module.risk_overview(
+            account_id=None,
+            realtime=True,
+            refresh=False,
+            session={"user_id": 1},
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["data"]["dataSource"] == "snapshot"
+    assert calls == {"snapshot": 1, "live": 0}
+
+
+def test_risk_service_refresh_parameter_allows_live_rebuild(monkeypatch) -> None:
+    module = _load_module("risk_service_refresh_live_path_test", RISK_SERVICE_MAIN)
+    calls = {"live": 0, "saved": 0}
+
+    monkeypatch.setattr(module.RiskOverviewSnapshotService, "get_latest", lambda **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "build_risk_overview",
+        lambda **kwargs: calls.__setitem__("live", calls["live"] + 1) or {
+            "overview": {"score": 88},
+            "events": [],
+            "stopLossOrders": [],
+            "takeProfitOrders": [],
+            "snapshotAt": "2026-05-20 10:00:00",
+        },
+    )
+    monkeypatch.setattr(module, "_merge_agent_risk_events", lambda payload, **kwargs: payload)
+    monkeypatch.setattr(module, "_build_risk_snapshot_meta", lambda **kwargs: {"dataSource": kwargs["data_source"]})
+    monkeypatch.setattr(
+        module.RiskOverviewSnapshotService,
+        "save_snapshot",
+        lambda **kwargs: calls.__setitem__("saved", calls["saved"] + 1),
+    )
+
+    payload = asyncio.run(
+        module.risk_overview(
+            account_id=None,
+            realtime=True,
+            refresh=True,
+            session={"user_id": 1},
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["data"]["meta"]["dataSource"] == "live"
+    assert calls == {"live": 1, "saved": 1}
+
+
+def test_risk_snapshot_orders_use_cached_read_models(monkeypatch) -> None:
+    module = _load_module("risk_service_cached_orders_test", RISK_SERVICE_MAIN)
+    calls = {"legacy_live": 0, "positions": 0}
+
+    monkeypatch.setattr(module, "ensure_risk_control_tables", lambda: None)
+    monkeypatch.setattr(
+        module.DbUtil,
+        "fetch_all",
+        lambda *args, **kwargs: [
+            {
+                "id": 7,
+                "account_id": 3,
+                "symbol": "AAPL.US",
+                "trigger_price": 180,
+                "quantity": None,
+                "status": "active",
+                "note": "guard",
+                "created_at": datetime(2026, 5, 20, 9, 0, 0),
+                "updated_at": datetime(2026, 5, 20, 10, 0, 0),
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        module.QuoteSnapshotService,
+        "get_latest_map",
+        lambda symbols: {"AAPL.US": {"lastPrice": 200}},
+    )
+    monkeypatch.setattr(
+        module.PositionSnapshotService,
+        "get_latest",
+        lambda **kwargs: calls.__setitem__("positions", calls["positions"] + 1) or [
+            {"symbol": "AAPL.US", "quantity": 4}
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "_load_risk_orders",
+        lambda *args, **kwargs: calls.__setitem__("legacy_live", calls["legacy_live"] + 1) or [],
+    )
+
+    orders = module._load_cached_risk_orders(1, "stop_loss", None)
+
+    assert calls == {"legacy_live": 0, "positions": 1}
+    assert orders[0]["symbol"] == "AAPL.US"
+    assert orders[0]["currentPrice"] == 200
+    assert orders[0]["quantity"] == 4
+    assert orders[0]["distance"] == 10.0
 
 
 def test_data_routes_do_not_fallback_to_bootstrap_user() -> None:

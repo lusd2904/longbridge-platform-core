@@ -105,6 +105,26 @@ def test_run_monitor_manual_source_only_records_alert(monkeypatch) -> None:
     assert called == {"submit": 0, "load_orders": 0}
 
 
+def test_delete_strategy_unlinks_risk_orders_before_deleting_strategy(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(StrategyMonitorService, "ensure_schema", classmethod(lambda cls, user_id=1: None))
+    monkeypatch.setattr(
+        "core.analysis.StrategyMonitorService.DbUtil.execute_sql",
+        staticmethod(lambda sql, params=None: calls.append((sql, params)) or 1),
+    )
+
+    StrategyMonitorService.delete_strategy(user_id=7, strategy_id=42)
+
+    assert "UPDATE user_risk_orders" in calls[0][0]
+    assert "SET strategy_id = 0" in calls[0][0]
+    assert "protection order retained as global" in calls[0][1][0]
+    assert calls[0][1][-2:] == (7, 42)
+    assert "DELETE FROM strategy_alerts" in calls[1][0]
+    assert calls[1][1] == (42, 7)
+    assert "DELETE FROM strategies" in calls[2][0]
+    assert calls[2][1] == (42, 7)
+
+
 def test_run_monitor_scheduler_auto_sell_submits_full_position(monkeypatch) -> None:
     _install_common_monkeypatches(
         monkeypatch,
@@ -264,3 +284,37 @@ def test_trade_service_account_lookup_does_not_fall_back_when_strategy_account_i
         raise AssertionError("missing explicit account id must fail")
 
     assert calls == ["/api/v1/trade/accounts"]
+
+
+def test_monitor_summary_counts_positions_via_trade_service_without_legacy_broker(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(StrategyMonitorService, "ensure_schema", classmethod(lambda cls, user_id=1: None))
+    monkeypatch.setattr(StrategyMonitorService, "list_strategies", classmethod(lambda cls, user_id=1: []))
+    monkeypatch.setattr(StrategyMonitorService, "get_alerts", classmethod(lambda cls, user_id=1, limit=20: []))
+    monkeypatch.setattr(
+        "core.analysis.StrategyMonitorService.DbUtil.fetch_one",
+        staticmethod(lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(
+        "core.analysis.StrategyMonitorService.get_broker_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("summary must not open legacy broker sessions")),
+    )
+
+    def _request(cls, *, method, path, user_id, **kwargs):
+        calls.append((method, path, user_id))
+        if path == "/api/v1/trade/accounts/default":
+            return {"success": True, "data": {"id": 22, "tradingMode": "paper"}}
+        if path == "/api/v1/trade/accounts/22/positions":
+            return {"success": True, "data": [{"symbol": "AAPL.US"}, {"symbol": "MSFT.US"}]}
+        raise AssertionError(f"unexpected trade-service path: {path}")
+
+    monkeypatch.setattr(StrategyMonitorService, "_request_trade_service", classmethod(_request))
+
+    result = StrategyMonitorService.get_monitor_summary(user_id=7)
+
+    assert result["overview"]["positionCount"] == 2
+    assert calls == [
+        ("GET", "/api/v1/trade/accounts/default", 7),
+        ("GET", "/api/v1/trade/accounts/22/positions", 7),
+    ]

@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { normalizePageStabilityOptions, waitForPageStable, withStepTimeout } from '../../scripts/smoke-helpers.mjs'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  normalizePageStabilityOptions,
+  shouldIgnoreSmokeConsoleError,
+  shouldIgnoreSmokeHttpError,
+  shouldIgnoreSmokeRequestFailure,
+  waitForPageStable,
+  withStepTimeout
+} from '../../scripts/smoke-helpers.mjs'
 import {
   collectRenderableSuggestionTexts,
   filterLocalSuggestionMatches,
@@ -9,6 +19,10 @@ import {
   rankSuggestionMatches
 } from '../../src/utils/aiAnalysisSuggestions.js'
 import { normalizeBaseUrl } from '../../../../../scripts/base_url_helper.cjs'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const projectRoot = path.resolve(__dirname, '../..')
 
 describe('withStepTimeout', () => {
   it('resolves the original result before the timeout window', async () => {
@@ -73,6 +87,99 @@ describe('normalizeBaseUrl', () => {
     expect(() => normalizeBaseUrl('http//127.0.0.1:3100')).toThrow('must include "://"')
     expect(() => normalizeBaseUrl('http:/127.0.0.1:3100')).toThrow('must include "://"')
     expect(() => normalizeBaseUrl('http:127.0.0.1:3100')).toThrow('must include "://"')
+  })
+})
+
+describe('smoke page route coverage', () => {
+  const expectedAuthenticatedRoutes = () => {
+    const routerSource = readFileSync(path.join(projectRoot, 'src/router/index.js'), 'utf8')
+    return Array.from(routerSource.matchAll(/path: '([^']+)'/g))
+      .map((match) => match[1])
+      .filter((routePath) => (
+        routePath !== '/' &&
+        routePath !== '/login' &&
+        routePath !== '/:pathMatch(.*)*'
+      ))
+      .map((routePath) => routePath.startsWith('/') ? routePath : `/${routePath}`)
+      .map((routePath) => routePath
+        .replace('/:symbol/scan-result', '/AAPL.US/scan-result')
+        .replace('/:symbol', '/AAPL.US')
+      )
+  }
+
+  it('keeps desktop smoke visits aligned with authenticated router pages', () => {
+    const smokeSource = readFileSync(path.join(projectRoot, 'scripts/smoke-pages.mjs'), 'utf8')
+    const desktopVisitsMatch = smokeSource.match(/const desktopVisits = \[([\s\S]*?)\n\]/)
+
+    expect(desktopVisitsMatch).toBeTruthy()
+
+    const smokeRoutes = new Set(
+      Array.from(desktopVisitsMatch[1].matchAll(/route: '([^']+)'/g)).map((match) => match[1])
+    )
+
+    expect(smokeRoutes).toContain('/')
+    for (const routePath of expectedAuthenticatedRoutes()) {
+      expect(smokeRoutes).toContain(routePath)
+    }
+  })
+
+  it('keeps mobile smoke visits aligned with the full desktop page matrix', () => {
+    const smokeSource = readFileSync(path.join(projectRoot, 'scripts/smoke-pages.mjs'), 'utf8')
+
+    expect(smokeSource).toMatch(/const mobileVisits = desktopVisits\b/)
+  })
+
+  it('keeps contrast scan routes aligned with authenticated router pages', () => {
+    const contrastSource = readFileSync(path.join(projectRoot, 'scripts/contrast-scan.mjs'), 'utf8')
+    const routesMatch = contrastSource.match(/const routes = \[([\s\S]*?)\n\]/)
+
+    expect(routesMatch).toBeTruthy()
+
+    const contrastRoutes = new Set(
+      Array.from(routesMatch[1].matchAll(/route: '([^']+)'/g)).map((match) => match[1])
+    )
+
+    expect(contrastSource).toContain("scanTarget({ route: '/login', name: 'login' })")
+    expect(contrastRoutes).toContain('/')
+    for (const routePath of expectedAuthenticatedRoutes()) {
+      expect(contrastRoutes).toContain(routePath)
+    }
+  })
+})
+
+describe('smoke failure ignore rules', () => {
+  it('ignores only documented optional trade outbox 404 endpoints', () => {
+    expect(shouldIgnoreSmokeHttpError({
+      url: 'http://127.0.0.1:3100/svc/trade/api/v1/trade/outbox/events',
+      status: 404
+    })).toBe(true)
+    expect(shouldIgnoreSmokeHttpError({
+      url: 'http://127.0.0.1:3100/svc/trade/api/v1/trade/outbox/sagas',
+      status: 404
+    })).toBe(true)
+    expect(shouldIgnoreSmokeHttpError({
+      url: 'http://127.0.0.1:3100/svc/trade/api/v1/trade/outbox/events',
+      status: 500
+    })).toBe(false)
+    expect(shouldIgnoreSmokeHttpError({
+      url: 'http://127.0.0.1:3100/svc/market/api/v1/quotes',
+      status: 404
+    })).toBe(false)
+  })
+
+  it('keeps console and request-failure ignores narrow', () => {
+    expect(shouldIgnoreSmokeConsoleError({
+      type: 'error',
+      text: 'Failed to load resource: the server responded with a status of 404 (Not Found)',
+      pageUrl: 'http://127.0.0.1:3100/settings'
+    })).toBe(true)
+    expect(shouldIgnoreSmokeConsoleError({
+      type: 'error',
+      text: 'Failed to load resource: the server responded with a status of 500 (Internal Server Error)',
+      pageUrl: 'http://127.0.0.1:3100/settings'
+    })).toBe(false)
+    expect(shouldIgnoreSmokeRequestFailure('net::ERR_ABORTED')).toBe(true)
+    expect(shouldIgnoreSmokeRequestFailure('net::ECONNRESET')).toBe(false)
   })
 })
 

@@ -96,10 +96,14 @@ npm run dev
 npm run build
 npm run test:unit
 npm run smoke:web
+npm run smoke:web:mobile
+npm run smoke:web:ai:mobile
 npm run smoke:web:critical
 npm run trade:regression
 npm run verify:platform
 ```
+
+Web smoke 的规范报告路径是 `apps/runtime/smoke/web-portal-smoke-report.json`。根目录下旧的 `runtime/smoke/...` 只可能是历史遗留产物，不作为当前验证依据。
 
 移动端：
 

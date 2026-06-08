@@ -51,6 +51,28 @@ bootstrap_runtime()
 PORT = service_port("REF_TRADE_SERVICE_PORT", 8105)
 
 
+def _build_longbridge_connectivity_status(longbridge_status: Dict[str, Any]) -> Dict[str, Any]:
+    configured = bool(longbridge_status.get("configured"))
+    enabled = bool(longbridge_status.get("enabled"))
+    last_error = str(longbridge_status.get("lastError") or "").strip()
+    last_success_at = str(longbridge_status.get("lastSuccessAt") or "").strip()
+
+    if configured or enabled or last_success_at:
+        status = "degraded" if last_error else "healthy"
+        status_text = "长桥观测存在最近错误" if last_error else "长桥观测已接入"
+    else:
+        status = "disabled"
+        status_text = "长桥交易观测未启用；模拟账户保护仍由下单链路校验"
+
+    return {
+        "status": status,
+        "status_text": status_text,
+        "configured": configured,
+        "enabled": enabled,
+        **longbridge_status,
+    }
+
+
 def _serialize_datetime(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -1081,11 +1103,7 @@ async def health():
     if has_failed_delivery:
         alerts.append(build_alert("trade-event-delivery-failed", "critical", "事件总线存在投递失败", action="检查 Kafka 连接与 outbox relay 日志"))
     broker_connectivity = {
-        "longbridge": {
-            "status": "healthy" if longbridge_status.get("configured") or longbridge_status.get("enabled") else "degraded",
-            "status_text": "长桥观测已接入" if longbridge_status.get("configured") or longbridge_status.get("enabled") else "长桥配置未完成",
-            **longbridge_status,
-        }
+        "longbridge": _build_longbridge_connectivity_status(longbridge_status)
     }
     return build_health_payload(
         service="trade-service",

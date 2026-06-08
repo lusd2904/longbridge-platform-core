@@ -4,10 +4,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/load_env.sh"
+REF_PYTHON="${REF_PYTHON:-$ROOT_DIR/.venv/bin/python}"
+if [ ! -x "$REF_PYTHON" ]; then
+    REF_PYTHON="${PYTHON:-python3}"
+fi
 if [ -x "$ROOT_DIR/scripts/redis/start_redis.sh" ]; then
     "$ROOT_DIR/scripts/redis/start_redis.sh"
 fi
-python3 "$ROOT_DIR/scripts/bootstrap_refactor_db.py"
+"$REF_PYTHON" "$ROOT_DIR/scripts/bootstrap_refactor_db.py"
 
 "$ROOT_DIR/scripts/start_service.sh" user-center "apps/platform/user-center" "${REF_USER_CENTER_PORT:-8101}"
 "$ROOT_DIR/scripts/start_service.sh" market-service "apps/market/market-service" "${REF_MARKET_SERVICE_PORT:-8102}"

@@ -562,9 +562,7 @@ class LongbridgeAPI(BaseBrokerAPI):
         try:
             return self._execute_with_resilience('positions', fetch, fallback=fallback)
         except Exception as e:
-            logger.error(f"获取持仓失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.warning("获取持仓已降级且没有可用缓存: account_id=%s error=%s", self.account_id, e)
             self._log_connection('query', 'failed', f'get_positions: {e}')
             return fallback()
     
@@ -629,11 +627,9 @@ class LongbridgeAPI(BaseBrokerAPI):
         try:
             return self._execute_with_resilience('account', fetch, fallback=fallback)
         except Exception as e:
-            logger.error(f"获取账户信息失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.warning("获取账户信息已降级且没有可用缓存: account_id=%s error=%s", self.account_id, e)
             self._log_connection('query', 'failed', f'get_account_info: {e}')
-            return fallback()
+            raise
     
     def place_order(self, symbol: str, action: str, quantity: int,
                    order_type: str = 'LIMIT', price: Optional[float] = None,

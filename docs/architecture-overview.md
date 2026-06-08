@@ -77,6 +77,13 @@ graph TD
     class HR human;
 ```
 
+## 运行时语义
+
+- `analysis-service` 的 `deferredAnalysisJobs` 当前执行队列仍在进程内存中，用来承接超过同步上限的 `analyze-positions` 请求；它不是完整分布式任务系统。
+- 每次 job 状态更新会写入 Redis snapshot 并带 TTL。容器重启后，已完成/失败等终态 snapshot 可继续读取；仍在 queued/running 的旧 job 没有可恢复 worker，客户端查询时会收到结构化 `410 expired`，应停止轮询并重新提交分析请求。
+- `/health` 会暴露 `deferredAnalysisJobs.storage`、队列水位和 restart behavior，用于区分“终态 snapshot 可读”“任务过期需重提”和“服务异常”。
+- `user_risk_orders.strategy_id=0` 是保留值，表示全局/未归属保护单；策略删除时关联保护单会解除到该保留值并保留保护单本身，避免删除策略时误删止损/止盈保护。
+
 ## 最近重构方向与计划
 
 最近一轮重构重点不在新增业务功能，而在先清理运行时隐式依赖和交易遗留单体结构，当前主线包括：

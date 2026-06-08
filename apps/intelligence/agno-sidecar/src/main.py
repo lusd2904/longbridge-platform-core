@@ -21,7 +21,7 @@ from apps.runtime_shared.health import build_dependency_status, build_health_pay
 
 
 PORT = int(os.getenv("REF_AGNO_SIDECAR_PORT", os.getenv("SERVICE_PORT", "3200")))
-AI_BASE_URL = str(os.getenv("LONGBRIDGE_AI_BASE_URL") or "http://sub2api:8080/v1").strip().rstrip("/")
+AI_BASE_URL = str(os.getenv("LONGBRIDGE_AI_BASE_URL") or "https://lucen.cc/v1").strip().rstrip("/")
 AI_CHAT_URL = str(os.getenv("LONGBRIDGE_AI_URL") or f"{AI_BASE_URL}/chat/completions").strip()
 AI_API_KEY = str(os.getenv("LONGBRIDGE_AI_API_KEY") or "").strip()
 AI_MODEL = str(os.getenv("LONGBRIDGE_AI_MODEL_SCAN_FINAL") or os.getenv("LONGBRIDGE_AI_MODEL") or "gpt-5.5").strip()

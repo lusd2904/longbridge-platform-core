@@ -5,6 +5,29 @@ const normalizeTimeout = (value, fallback) => {
 
 export const sanitizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim()
 
+export const OPTIONAL_OUTBOX_ENDPOINTS = [
+  '/svc/trade/api/v1/trade/outbox/events',
+  '/svc/trade/api/v1/trade/outbox/sagas'
+]
+
+export const isOptionalOutbox404 = (url = '', status = 0) => {
+  return Number(status) === 404 && OPTIONAL_OUTBOX_ENDPOINTS.some((pattern) => String(url || '').includes(pattern))
+}
+
+export const shouldIgnoreSmokeHttpError = ({ url = '', status = 0 } = {}) => {
+  return isOptionalOutbox404(url, status)
+}
+
+export const shouldIgnoreSmokeConsoleError = ({ type = '', text = '', pageUrl = '' } = {}) => {
+  return type === 'error' &&
+    text === 'Failed to load resource: the server responded with a status of 404 (Not Found)' &&
+    String(pageUrl || '').includes('/settings')
+}
+
+export const shouldIgnoreSmokeRequestFailure = (failure = '') => {
+  return String(failure || '').includes('ERR_ABORTED')
+}
+
 export const normalizePageStabilityOptions = (options = {}) => {
   if (typeof options === 'number') {
     const minimumMs = normalizeTimeout(options, 0)

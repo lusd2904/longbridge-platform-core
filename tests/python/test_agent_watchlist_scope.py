@@ -188,9 +188,13 @@ def test_scheduler_does_not_fallback_to_first_active_user_when_watchlist_empty()
 def test_scheduler_watchlist_user_query_uses_target_session_and_active_users() -> None:
     list_users_source = _scheduler_function_source("_list_watchlist_review_users")
 
-    assert 'flag_column = "scan_before_open" if session_name == "pre_open" else "scan_after_close"' in list_users_source
+    assert 'if session_name == "pre_open":' in list_users_source
+    assert 'watchlist_filter = "w.scan_before_open = 1"' in list_users_source
+    assert 'elif session_name == "post_close":' in list_users_source
+    assert 'watchlist_filter = "w.scan_after_close = 1"' in list_users_source
+    assert 'watchlist_filter = "(w.scan_before_open = 1 OR w.scan_after_close = 1)"' in list_users_source
     assert "JOIN user_watchlist_stocks w" in list_users_source
-    assert "w.{flag_column} = 1" in list_users_source
+    assert "AND {watchlist_filter}" in list_users_source
     assert "COALESCE(u.status, 'active') NOT IN ('disabled', 'locked')" in list_users_source
     assert "ORDER BY target_count DESC, u.id ASC" in list_users_source
 
@@ -365,6 +369,17 @@ def test_scheduler_runs_watchlist_review_for_listed_users_only(monkeypatch) -> N
     monkeypatch.setattr(module, "_list_watchlist_review_users", lambda session_name: list(users))
     monkeypatch.setattr(module, "_request_watchlist_review_for_user", fake_request)
     monkeypatch.setattr(module, "_write_job_status", lambda *args, **kwargs: writes.append((args, kwargs)))
+    monkeypatch.setattr(
+        module,
+        "_watchlist_auto_buy_settings",
+        lambda session_name: {
+            "enabled": False,
+            "maxSymbols": 2,
+            "maxAmount": 2000.0,
+            "maxPositionRatio": 0.08,
+            "minConfidence": 72,
+        },
+    )
 
     result = module._run_watchlist_review("post_close")
 

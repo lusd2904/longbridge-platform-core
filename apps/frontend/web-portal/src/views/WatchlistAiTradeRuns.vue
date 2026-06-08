@@ -355,6 +355,7 @@ onMounted(loadRuns)
 .ai-trade-runs-page {
   padding: 24px;
   background: #f6f8fb;
+  color: #0f172a;
   min-height: 100%;
 }
 
@@ -388,6 +389,7 @@ h2 {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+  color: #0f172a;
 }
 
 .header-meta {
@@ -434,6 +436,64 @@ h2 {
 
 .runs-table {
   width: 100%;
+}
+
+.ai-trade-runs-page :deep(.el-table) {
+  --el-table-text-color: #1e293b;
+  --el-table-header-text-color: #334155;
+  --el-table-row-hover-bg-color: #f1f5f9;
+  color: #1e293b;
+}
+
+.ai-trade-runs-page :deep(.el-table th.el-table__cell) {
+  background: #f8fafc;
+  color: #334155;
+}
+
+.ai-trade-runs-page :deep(.el-table .cell) {
+  color: #1e293b;
+}
+
+.ai-trade-runs-page :deep(.el-table__inner-wrapper),
+.ai-trade-runs-page :deep(.el-table__body),
+.ai-trade-runs-page :deep(.el-table__body tbody),
+.ai-trade-runs-page :deep(.el-table__row) {
+  color: #1e293b !important;
+  background: #ffffff;
+}
+
+.ai-trade-runs-page :deep(.el-table__row--striped) {
+  background: #f8fafc;
+}
+
+.ai-trade-runs-page :deep(.el-button--primary.is-plain) {
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: #0f5f8f;
+  --el-button-border-color: #0b4f78;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: #0b4f78;
+  --el-button-hover-border-color: #08415f;
+  --el-button-active-bg-color: #083d59;
+  --el-button-active-border-color: #083d59;
+  color: #ffffff !important;
+  background: #0f5f8f !important;
+  border-color: #0b4f78 !important;
+}
+
+.ai-trade-runs-page :deep(.el-button--primary.is-plain span) {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+.ai-trade-runs-page :deep(.el-tag) {
+  color: #1e3a8a !important;
+  background: #eff6ff !important;
+  border-color: #bfdbfe !important;
+}
+
+.ai-trade-runs-page :deep(.el-tag__content) {
+  color: #1e3a8a !important;
+  -webkit-text-fill-color: #1e3a8a !important;
 }
 
 .time-cell,

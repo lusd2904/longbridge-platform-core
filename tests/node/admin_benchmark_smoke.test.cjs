@@ -93,6 +93,20 @@ test('buildSuite infers account-scoped endpoints from enveloped trade accounts r
   assert.ok(paths.includes('/svc/trade/api/v1/trade/accounts/28/snapshot/state'))
 })
 
+test('health benchmark targets gateway observability and validates JSON registry', () => {
+  const suite = benchmark.buildSuiteForTest({
+    token: 'test-token',
+    authInfo: { data: { user: {} } },
+    brokerAccounts: { data: [] }
+  })
+  const health = suite.find((item) => item.id === 'health')
+
+  assert.equal(health.path, '/svc/gateway/api/v1/system/observability')
+  assert.equal(health.validate({ data: { status: 'healthy', services: { gateway: { status: 'healthy' } } } }), '')
+  assert.match(health.validate({ raw: '<!doctype html><html></html>' }), /did not return JSON/)
+  assert.match(health.validate({ data: { status: 'healthy' } }), /missing services registry/)
+})
+
 test('formatConsoleSummary prints p50 and p95 for successful endpoints', () => {
   const lines = benchmark.formatConsoleSummaryForTest({
     endpoints: [

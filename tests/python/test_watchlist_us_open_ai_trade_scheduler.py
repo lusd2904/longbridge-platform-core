@@ -43,6 +43,21 @@ def test_system_task_service_exposes_watchlist_us_open_ai_trade_defaults() -> No
     assert "交易边界保护" in policy["description"]
 
 
+def test_system_task_service_exposes_watchlist_midday_agent_review_defaults() -> None:
+    from core.platform.SystemTaskService import SystemTaskService
+
+    policy = SystemTaskService.DEFAULT_POLICIES["watchlist_midday_review"]
+
+    assert policy["taskName"] == "自选股盘中复核"
+    assert policy["category"] == "analysis"
+    assert policy["scheduleType"] == "daily"
+    assert policy["enabled"] is True
+    assert policy["runHour"] == 12
+    assert policy["runMinute"] == 30
+    assert policy["settings"]["autoBuyEnabled"] is False
+    assert "默认只复核不交易" in policy["description"]
+
+
 def test_scheduler_runtime_and_manual_runner_register_watchlist_us_open_ai_trade(monkeypatch) -> None:
     scheduler_main = _load_scheduler_main()
 
@@ -63,6 +78,11 @@ def test_scheduler_runtime_and_manual_runner_register_watchlist_us_open_ai_trade
         scheduler_main,
         "_write_job_status",
         lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        scheduler_main.SystemTaskService,
+        "get_policy",
+        lambda task_key: scheduler_main.SystemTaskService.DEFAULT_POLICIES[task_key],
     )
 
     settings = scheduler_main._us_open_ai_trade_settings()
@@ -87,3 +107,11 @@ def test_scheduler_runtime_and_manual_runner_register_watchlist_us_open_ai_trade
     assert result["failureCount"] == 0
     managed = scheduler_main.scheduler_runtime.snapshot()["threads"]
     assert any(item["taskKey"] == "watchlist_us_open_ai_trade" for item in managed)
+
+
+def test_scheduler_runtime_and_manual_runner_register_watchlist_midday_review() -> None:
+    scheduler_main = _load_scheduler_main()
+
+    assert "watchlist_midday_review" in scheduler_main.TASK_RUNNERS
+    managed = scheduler_main.scheduler_runtime.snapshot()["threads"]
+    assert any(item["taskKey"] == "watchlist_midday_review" for item in managed)

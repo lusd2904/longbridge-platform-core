@@ -23,16 +23,24 @@ const progress = createProgressReporter({
 })
 
 const routes = [
+  { route: '/', name: 'root-redirect' },
   { route: '/dashboard', name: 'dashboard' },
   { route: '/market', name: 'market' },
   { route: '/stock-pool', name: 'stock-pool' },
+  { route: '/watchlist-pool', name: 'watchlist-pool' },
+  { route: '/watchlist-ai-trade-runs', name: 'watchlist-ai-trade-runs' },
+  { route: '/watchlist-pool/AAPL.US/scan-result', name: 'watchlist-scan-result' },
+  { route: '/watchlist-pool/NVDL.US/scan-result', name: 'watchlist-scan-result-alt' },
   { route: '/ai-analysis', name: 'ai-analysis' },
   { route: '/trading', name: 'trading' },
   { route: '/positions', name: 'positions' },
   { route: '/orders', name: 'orders' },
   { route: '/symbol/AAPL.US', name: 'symbol-detail' },
+  { route: '/symbol/000001.SZ', name: 'symbol-detail-cn' },
   { route: '/kline', name: 'kline' },
   { route: '/recommendations', name: 'recommendations' },
+  { route: '/sentiment-center', name: 'sentiment-center' },
+  { route: '/market-sentiment', name: 'market-sentiment-redirect' },
   { route: '/finance-news', name: 'finance-news' },
   { route: '/strategy', name: 'strategy' },
   { route: '/backtest', name: 'backtest' },
@@ -42,7 +50,8 @@ const routes = [
   { route: '/notifications', name: 'notifications' },
   { route: '/settings', name: 'settings' },
   { route: '/user-management', name: 'user-management' },
-  { route: '/scheduler-center', name: 'scheduler-center' }
+  { route: '/scheduler-center', name: 'scheduler-center' },
+  { route: '/history-coverage', name: 'history-coverage' }
 ]
 
 const fileExists = async (candidate) => {
@@ -58,7 +67,10 @@ const fileExists = async (candidate) => {
 }
 
 const resolveBrowserLaunchOptions = async () => {
-  const executablePath = process.env.SMOKE_BROWSER_EXECUTABLE ||
+  const requestedExecutable = process.env.SMOKE_BROWSER_EXECUTABLE || ''
+  const bundledExecutable = chromium.executablePath()
+  const executablePath = requestedExecutable ||
+    (await fileExists(bundledExecutable) ? bundledExecutable : '') ||
     (await fileExists(DEFAULT_CHROME_EXECUTABLE) ? DEFAULT_CHROME_EXECUTABLE : '')
   return executablePath
     ? { headless: true, executablePath }
@@ -318,30 +330,35 @@ page.on('response', (response) => {
 
 const results = []
 
+const scanTarget = async (target) => {
+  progress(`scan ${target.name} ${target.route}`)
+  await withStepTimeout(
+    page.goto(`${baseUrl}${target.route}`, { waitUntil: 'domcontentloaded' }),
+    { label: `contrast:${target.name}:goto`, timeoutMs: PAGE_TIMEOUT_MS }
+  )
+  await withStepTimeout(
+    waitForStable(page, 1600),
+    { label: `contrast:${target.name}:stable`, timeoutMs: ACTION_TIMEOUT_MS }
+  )
+  const issues = await withStepTimeout(
+    scanVisibleTextContrast(page),
+    { label: `contrast:${target.name}:scan`, timeoutMs: ACTION_TIMEOUT_MS }
+  )
+  results.push({
+    ...target,
+    url: page.url(),
+    issueCount: issues.length,
+    issues
+  })
+  progress(`done ${target.name} issues=${issues.length}`)
+}
+
 try {
+  await scanTarget({ route: '/login', name: 'login' })
   await login(page)
 
   for (const target of routes) {
-    progress(`scan ${target.name} ${target.route}`)
-    await withStepTimeout(
-      page.goto(`${baseUrl}${target.route}`, { waitUntil: 'domcontentloaded' }),
-      { label: `contrast:${target.name}:goto`, timeoutMs: PAGE_TIMEOUT_MS }
-    )
-    await withStepTimeout(
-      waitForStable(page, 1600),
-      { label: `contrast:${target.name}:stable`, timeoutMs: ACTION_TIMEOUT_MS }
-    )
-    const issues = await withStepTimeout(
-      scanVisibleTextContrast(page),
-      { label: `contrast:${target.name}:scan`, timeoutMs: ACTION_TIMEOUT_MS }
-    )
-    results.push({
-      ...target,
-      url: page.url(),
-      issueCount: issues.length,
-      issues
-    })
-    progress(`done ${target.name} issues=${issues.length}`)
+    await scanTarget(target)
   }
 } finally {
   await closeBrowserQuietly(browser)

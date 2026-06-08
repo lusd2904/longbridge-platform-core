@@ -71,6 +71,12 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (rawPath) => rawPath.replace(/^\/svc\/user/, '')
         },
+        '/svc/market/ws': {
+          target: serviceUrl(env, 'REF_MARKET_SERVICE_PORT', 8102),
+          changeOrigin: true,
+          ws: true,
+          rewrite: (rawPath) => rawPath.replace(/^\/svc\/market/, '')
+        },
         '/svc/market': {
           target: serviceUrl(env, 'REF_MARKET_SERVICE_PORT', 8102),
           changeOrigin: true,
@@ -86,6 +92,12 @@ export default defineConfig(({ mode }) => {
           target: serviceUrl(env, 'REF_STRATEGY_SERVICE_PORT', 8104),
           changeOrigin: true,
           rewrite: (rawPath) => rawPath.replace(/^\/svc\/strategy/, '')
+        },
+        '/svc/trade/ws': {
+          target: serviceUrl(env, 'REF_TRADE_SERVICE_PORT', 8105),
+          changeOrigin: true,
+          ws: true,
+          rewrite: (rawPath) => rawPath.replace(/^\/svc\/trade/, '')
         },
         '/svc/trade': {
           target: serviceUrl(env, 'REF_TRADE_SERVICE_PORT', 8105),

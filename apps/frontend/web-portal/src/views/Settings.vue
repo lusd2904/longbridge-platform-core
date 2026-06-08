@@ -145,7 +145,7 @@
               </el-select>
             </el-form-item>
             <el-form-item label="API Base URL">
-              <el-input v-model="aiSettings.baseUrl" placeholder="http://sub2api:8080/v1" />
+              <el-input v-model="aiSettings.baseUrl" placeholder="https://lucen.cc/v1" />
             </el-form-item>
             <el-form-item v-if="aiSettings.provider === 'ollama' || aiSettings.provider === 'hybrid'" label="本地模型地址">
               <el-input v-model="aiSettings.localUrl" placeholder="http://127.0.0.1:11434/api/generate" />
@@ -618,11 +618,11 @@ const basicSettings = ref({
   timezone: 'Asia/Shanghai'
 })
 
-const SUB2API_BASE_URL = 'http://sub2api:8080/v1'
+const OPENAI_COMPAT_BASE_URL = 'https://lucen.cc/v1'
 const DEFAULT_AI_SETTINGS = {
   provider: 'nvidia',
   fallbackProvider: '',
-  baseUrl: SUB2API_BASE_URL,
+  baseUrl: OPENAI_COMPAT_BASE_URL,
   localUrl: 'http://127.0.0.1:11434/api/generate',
   localModel: 'gemma3:12b',
   model: 'gpt-5.5',

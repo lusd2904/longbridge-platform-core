@@ -44,6 +44,34 @@ def test_trade_service_build_account_runtime_hints_marks_tiger_prod_as_live() ->
     assert "实盘" in hints["accountModeLabel"]
 
 
+def test_trade_service_marks_missing_longbridge_observability_as_disabled() -> None:
+    module = _load_module("trade_service_longbridge_health_disabled_test", TRADE_SERVICE_MAIN)
+
+    status = module._build_longbridge_connectivity_status({
+        "tradeContextAttachCount": 0,
+        "quoteContextAttachCount": 0,
+        "lastError": "",
+        "lastSuccessAt": "",
+    })
+
+    assert status["status"] == "disabled"
+    assert status["configured"] is False
+    assert status["enabled"] is False
+    assert "模拟账户保护" in status["status_text"]
+
+
+def test_trade_service_marks_longbridge_observability_healthy_after_success() -> None:
+    module = _load_module("trade_service_longbridge_health_success_test", TRADE_SERVICE_MAIN)
+
+    status = module._build_longbridge_connectivity_status({
+        "lastError": "",
+        "lastSuccessAt": "2026-06-08T02:54:19",
+        "lastSuccessOperation": "orders",
+    })
+
+    assert status["status"] == "healthy"
+
+
 def test_trade_service_live_failure_snapshot_meta_is_marked_degraded(monkeypatch) -> None:
     module = _load_module("trade_service_snapshot_degraded_test", TRADE_SERVICE_MAIN)
 

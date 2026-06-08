@@ -3,7 +3,15 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { createProgressReporter, sanitizeText, waitForPageStable, withStepTimeout } from './smoke-helpers.mjs'
+import {
+  createProgressReporter,
+  sanitizeText,
+  shouldIgnoreSmokeConsoleError,
+  shouldIgnoreSmokeHttpError,
+  shouldIgnoreSmokeRequestFailure,
+  waitForPageStable,
+  withStepTimeout
+} from './smoke-helpers.mjs'
 import { collectRenderableSuggestionTexts, hasExpectedSuggestion } from '../src/utils/aiAnalysisSuggestions.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -21,6 +29,18 @@ const ACTION_TIMEOUT_MS = Number(process.env.SMOKE_ACTION_TIMEOUT_MS || 60000)
 const OPTIONAL_ACTION_TIMEOUT_MS = Number(process.env.SMOKE_OPTIONAL_ACTION_TIMEOUT_MS || 1200)
 const RUN_MOBILE_SMOKE = process.env.SMOKE_INCLUDE_MOBILE === '1'
 const AI_ANALYSIS_DEEP_SCAN = process.env.SMOKE_AI_ANALYSIS_DEEP === '1'
+const AI_ANALYSIS_EXPECT_DEFERRED = process.env.SMOKE_AI_ANALYSIS_EXPECT_DEFERRED === '1'
+const CORE_MOBILE_LAYOUT_PAGES = new Set([
+  'root-redirect',
+  'dashboard',
+  'market',
+  'watchlist-pool',
+  'trading',
+  'orders',
+  'positions',
+  'recommendations',
+  'notifications'
+])
 const PAGE_FILTERS = String(process.env.SMOKE_PAGE_FILTER || '')
   .split(',')
   .map((item) => item.trim().toLowerCase())
@@ -32,10 +52,6 @@ const progress = createProgressReporter({
 
 const errors = []
 const results = []
-const OPTIONAL_OUTBOX_ENDPOINTS = [
-  '/svc/trade/api/v1/trade/outbox/events',
-  '/svc/trade/api/v1/trade/outbox/sagas'
-]
 
 const pushError = (type, payload) => {
   errors.push({
@@ -43,10 +59,6 @@ const pushError = (type, payload) => {
     at: new Date().toISOString(),
     ...payload
   })
-}
-
-const isOptionalOutbox404 = (url = '', status = 0) => {
-  return Number(status) === 404 && OPTIONAL_OUTBOX_ENDPOINTS.some((pattern) => url.includes(pattern))
 }
 
 const readSuggestionTexts = async (suggestionsLocator) => {
@@ -134,6 +146,56 @@ const waitForAiAnalysisScanOutcome = async (page, timeoutMs = 45000) => {
   }
 }
 
+const verifyAiAnalysisApiSurface = async (page, timeoutMs = 8000) => {
+  const apiSignals = await page.waitForFunction(
+    () => {
+      const targetCount = document.querySelectorAll('.target-item').length
+      const hasTargetPanel = Boolean(document.querySelector('.target-panel'))
+      const hasControlPanel = Boolean(document.querySelector('.control-panel'))
+      const hasAccountControl = Boolean(document.querySelector('.account-select'))
+      const hasScanButton = Array.from(document.querySelectorAll('button')).some((node) => /扫描/.test(node.textContent || ''))
+      const ready = hasTargetPanel && hasControlPanel && hasAccountControl && hasScanButton && targetCount > 0
+      if (!ready) {
+        return false
+      }
+      return {
+        hasTargetPanel,
+        hasControlPanel,
+        hasAccountControl,
+        hasScanButton,
+        targetCount
+      }
+    },
+    undefined,
+    { timeout: timeoutMs }
+  )
+  const value = await apiSignals.jsonValue()
+  const missing = Object.entries(value)
+    .filter(([key, val]) => key !== 'targetCount' && !val)
+    .map(([key]) => key)
+  if (missing.length) {
+    throw new Error(`AI analysis API/display surface missing: ${missing.join(', ')}`)
+  }
+  if (Number(value.targetCount || 0) <= 0) {
+    throw new Error('AI analysis did not render any scan targets from watchlist/positions API data')
+  }
+  return value
+}
+
+const verifyAiAnalysisDeferredOutcome = async (page, timeoutMs = 8000) => {
+  await page.waitForFunction(
+    () => {
+      const status = document.querySelector('.analysis-scan-status')
+      const statusText = (status?.textContent || '').replace(/\s+/g, ' ').trim()
+      const queuedDecision = Array.from(document.querySelectorAll('.target-decision'))
+        .some((node) => (node.textContent || '').includes('排队中'))
+      return queuedDecision && /延后分析|排队|已接受/.test(statusText)
+    },
+    undefined,
+    { timeout: timeoutMs }
+  )
+}
+
 const fileExists = async (candidate) => {
   if (!candidate) {
     return false
@@ -147,7 +209,10 @@ const fileExists = async (candidate) => {
 }
 
 const resolveBrowserLaunchOptions = async () => {
-  const executablePath = process.env.SMOKE_BROWSER_EXECUTABLE ||
+  const requestedExecutable = process.env.SMOKE_BROWSER_EXECUTABLE || ''
+  const bundledExecutable = chromium.executablePath()
+  const executablePath = requestedExecutable ||
+    (await fileExists(bundledExecutable) ? bundledExecutable : '') ||
     (await fileExists(DEFAULT_CHROME_EXECUTABLE) ? DEFAULT_CHROME_EXECUTABLE : '')
   return executablePath
     ? { headless: true, executablePath }
@@ -272,6 +337,127 @@ const expectVisible = async (locator, label, timeoutMs = 3000) => {
   return label
 }
 
+const verifyMobileShellLayout = async (page, name, timeoutMs = 5000) => {
+  await expectVisible(page.locator('.mobile-header'), `verified ${name} mobile header`, timeoutMs)
+  const metrics = await page.evaluate(() => {
+    const isVisible = (node) => {
+      if (!node) {
+        return false
+      }
+      const style = window.getComputedStyle(node)
+      const rect = node.getBoundingClientRect()
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
+    }
+
+    const content = document.querySelector('.content')
+    const main = document.querySelector('.main-content')
+    const sidebar = document.querySelector('.sidebar, aside[class*="sidebar"], nav[class*="sidebar"]')
+    const contentRect = content?.getBoundingClientRect()
+    const mainRect = main?.getBoundingClientRect()
+    const viewportWidth = window.innerWidth
+    const isClippedInsideViewport = (node) => {
+      let current = node.parentElement
+      while (current && current !== document.body) {
+        const style = window.getComputedStyle(current)
+        const overflowX = String(style.overflowX || style.overflow || '').toLowerCase()
+        const clipsContent = ['auto', 'scroll', 'hidden', 'clip'].includes(overflowX)
+        const rect = current.getBoundingClientRect()
+        if (clipsContent && rect.width <= viewportWidth + 4 && rect.right >= -4 && rect.left <= viewportWidth + 4) {
+          return true
+        }
+        current = current.parentElement
+      }
+      return false
+    }
+    const wideNodes = Array.from(document.querySelectorAll('body *'))
+      .filter((node) => {
+        if (!isVisible(node)) {
+          return false
+        }
+        if (node.closest('.el-popper, .el-overlay, .el-drawer, .el-dialog, .el-select-dropdown')) {
+          return false
+        }
+        const rect = node.getBoundingClientRect()
+        return (
+          rect.width > viewportWidth + 12 &&
+          rect.left < viewportWidth &&
+          rect.right > 0 &&
+          !isClippedInsideViewport(node)
+        )
+      })
+      .slice(0, 5)
+      .map((node) => {
+        const rect = node.getBoundingClientRect()
+        return {
+          tag: node.tagName.toLowerCase(),
+          className: String(node.className || '').slice(0, 120),
+          width: Math.round(rect.width),
+        }
+      })
+
+    return {
+      viewportWidth,
+      hasMobileHeader: isVisible(document.querySelector('.mobile-header')),
+      hasDesktopSidebar: isVisible(sidebar),
+      contentWidth: Math.round(contentRect?.width || 0),
+      mainWidth: Math.round(mainRect?.width || 0),
+      scrollWidth: Math.round(document.documentElement.scrollWidth || document.body.scrollWidth || 0),
+      wideNodes,
+    }
+  })
+
+  const failures = []
+  if (!metrics.hasMobileHeader) {
+    failures.push('mobile header hidden')
+  }
+  if (metrics.hasDesktopSidebar) {
+    failures.push('desktop sidebar visible in mobile layout')
+  }
+  if (metrics.contentWidth > metrics.viewportWidth + 4 || metrics.mainWidth > metrics.viewportWidth + 4) {
+    failures.push(`content/main wider than viewport (${metrics.contentWidth}/${metrics.mainWidth} > ${metrics.viewportWidth})`)
+  }
+  if (metrics.wideNodes.length) {
+    failures.push(`wide visible nodes: ${metrics.wideNodes.map((item) => `${item.tag}.${item.className}:${item.width}`).join(' | ')}`)
+  }
+  if (failures.length) {
+    throw new Error(`Mobile layout check failed for ${name}: ${failures.join('; ')}`)
+  }
+  return `verified ${name} mobile shell layout`
+}
+
+const recordLoginPage = async (page, scenario) => {
+  const startedAt = Date.now()
+  const result = {
+    name: 'login',
+    route: '/login',
+    scenario,
+    ok: true,
+    actions: [],
+    verificationActions: [],
+    readinessDurationMs: 0,
+    initialReadyDurationMs: 0,
+    actionDurationMs: 0,
+    snapshotDurationMs: 0,
+    verificationDurationMs: 0,
+    durationMs: 0
+  }
+
+  try {
+    await expectVisible(page.getByPlaceholder('用户名'), 'verified login username input', 5000)
+    await expectVisible(page.getByPlaceholder('密码'), 'verified login password input', 5000)
+    await expectVisible(page.getByRole('button', { name: '登录' }), 'verified login submit', 5000)
+    result.actions.push('verified login form')
+    Object.assign(result, await collectPageSnapshot(page, 'login', scenario))
+  } catch (error) {
+    result.ok = false
+    result.error = error?.stack || error?.message || String(error)
+    pushError('page_action', { route: '/login', name: 'login', message: result.error })
+  } finally {
+    result.durationMs = Date.now() - startedAt
+    results.push(result)
+  }
+}
+
 const expectOverlay = async (page, title, timeoutMs = 3000) => {
   const overlay = page.locator('.el-dialog, .el-drawer').filter({ hasText: title }).first()
   await overlay.waitFor({ state: 'visible', timeout: timeoutMs })
@@ -388,13 +574,23 @@ const visitPage = async (page, route, name, action, scenario = 'desktop') => {
     ))
     result.snapshotDurationMs = Date.now() - snapshotStartedAt
 
+    if (scenario === 'mobile' && CORE_MOBILE_LAYOUT_PAGES.has(name)) {
+      const verificationStartedAt = Date.now()
+      result.verificationActions.push(await withStepTimeout(
+        verifyMobileShellLayout(page, name),
+        { label: `${stepPrefix}:mobile-layout`, timeoutMs: 8000 }
+      ))
+      result.verificationDurationMs += Date.now() - verificationStartedAt
+    }
+
     if (actionPlan.afterReady) {
       const verificationStartedAt = Date.now()
-      result.verificationActions = await withStepTimeout(
+      const afterReadyActions = await withStepTimeout(
         actionPlan.afterReady(page),
         { label: `${stepPrefix}:verify`, timeoutMs: ACTION_TIMEOUT_MS }
       )
-      result.verificationDurationMs = Date.now() - verificationStartedAt
+      result.verificationActions.push(...afterReadyActions)
+      result.verificationDurationMs += Date.now() - verificationStartedAt
     }
   } catch (error) {
     result.ok = false
@@ -410,6 +606,10 @@ const visitPage = async (page, route, name, action, scenario = 'desktop') => {
 const pageActions = {
   dashboard: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.dashboard-page'), 'verified dashboard page container', 8000)
+    actions.push('verified dashboard page container')
+    await expectVisible(page.getByText('工作台'), 'verified dashboard title', 8000)
+    actions.push('verified dashboard title')
     if (await clickByRole(page, 'button', /刷新|更新/)) {
       actions.push('clicked refresh')
       await waitForRefreshStable(page, { timeoutMs: 2200 })
@@ -458,11 +658,17 @@ const pageActions = {
   },
   stockPool: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.stock-pool-page'), 'verified stock-pool page container', 8000)
+    actions.push('verified stock-pool page container')
+    await expectVisible(page.getByText(/股票池|长桥实时|当前筛选暂无结果/), 'verified stock-pool data surface', 8000)
+    actions.push('verified stock-pool data surface')
     const search = page.getByPlaceholder('搜索股票代码或名称')
     if (await search.isVisible().catch(() => false)) {
       await search.fill('AAPL')
       actions.push('searched AAPL')
       await waitForStable(page)
+      await expectVisible(page.locator('.stock-pool-page'), 'verified stock-pool remains visible after search')
+      actions.push('verified stock-pool remains visible after search')
     }
     const detailButton = page.locator('button').filter({ hasText: '详情' }).first()
     if (await safeClick(page, detailButton)) {
@@ -487,10 +693,55 @@ const pageActions = {
     }
     return actions
   },
+  watchlistPool: async (page) => {
+    const actions = []
+    await expectVisible(page.getByText('自选股票池'), 'verified watchlist pool title', 5000)
+    actions.push('verified watchlist pool title')
+    if (await clickSegmentByText(page, '开盘前')) {
+      actions.push('switched watchlist pre-market targets')
+      await waitForRefreshStable(page, { timeoutMs: 3200 })
+    }
+    if (await clickSegmentByText(page, '收盘后')) {
+      actions.push('switched watchlist post-market targets')
+      await waitForRefreshStable(page, { timeoutMs: 3200 })
+    }
+    const scanResultButton = page.locator('button').filter({ hasText: '扫描结果' }).first()
+    if (await safeClick(page, scanResultButton, { timeout: 2200 })) {
+      actions.push('opened watchlist scan result')
+      await waitForStable(page)
+      await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {})
+      await waitForRoutePath(page, (pathname) => pathname === '/watchlist-pool', 4000).catch(() => {})
+      await waitForStable(page, { quietWindowMs: 180, timeoutMs: 1600 })
+    }
+    return actions
+  },
+  watchlistAiTradeRuns: async (page) => {
+    const actions = []
+    await expectVisible(page.getByText('AI交易扫描记录'), 'verified watchlist ai trade runs title', 5000)
+    actions.push('verified watchlist ai trade runs title')
+    await expectVisible(page.locator('.ai-trade-runs-page, .el-table'), 'verified watchlist ai trade runs content', 5000)
+    actions.push('verified watchlist ai trade runs content')
+    return actions
+  },
+  watchlistScanResult: async (page) => {
+    const actions = []
+    await expectVisible(page.getByText(/最新扫描结果|暂无扫描结果/), 'verified watchlist scan result content', 8000)
+    actions.push('verified watchlist scan result content')
+    if (await clickByRole(page, 'button', '返回自选池')) {
+      actions.push('verified return to watchlist pool button')
+      await waitForStable(page)
+      await page.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {})
+      await waitForStable(page)
+    }
+    return actions
+  },
   aiAnalysis: async (page) => {
     const actions = []
     const search = page.getByPlaceholder('输入代码 / 名称，如 NVDA、NVDL')
     if (await search.isVisible().catch(() => false)) {
+      const apiSurface = await verifyAiAnalysisApiSurface(page)
+      actions.push(`verified ai analysis api surface targets=${apiSurface.targetCount}`)
+
       const nvdaSuggestions = await verifyAiAnalysisSuggestions(page, search, 'nvda', ['NVDA.US', 'NVDL.US'])
       actions.push(`verified ${nvdaSuggestions.length} symbol suggestions for nvda`)
 
@@ -506,6 +757,10 @@ const pageActions = {
         if (AI_ANALYSIS_DEEP_SCAN) {
           await waitForAiAnalysisScanOutcome(page)
           actions.push('verified scan completed state')
+          if (AI_ANALYSIS_EXPECT_DEFERRED) {
+            await verifyAiAnalysisDeferredOutcome(page)
+            actions.push('verified deferred scan queued state')
+          }
         } else {
           actions.push('skipped deep scan completion wait')
         }
@@ -530,7 +785,12 @@ const pageActions = {
       actions.push('searched symbol')
       await waitForRefreshStable(page, { timeoutMs: 3200 })
     }
-    await expectVisible(page.getByText('盘口与逐笔'), 'verified depth and trades panel', 4000)
+    const quoteSegment = page.locator('.segment-button').filter({ hasText: '行情' }).first()
+    if (await safeClick(page, quoteSegment, { timeout: 1600 })) {
+      actions.push('switched trading mobile segment quote')
+      await waitForLightTransition(page)
+    }
+    await expectVisible(page.getByText(/实时盘口与逐笔|盘口与逐笔/), 'verified depth and trades panel', 9000)
     actions.push('verified depth and trades panel')
     await expectVisible(page.getByText('公告 / 资讯 / 讨论'), 'verified content panel', 4000)
     actions.push('verified content panel')
@@ -549,9 +809,15 @@ const pageActions = {
   },
   positions: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.positions-page'), 'verified positions page container', 8000)
+    actions.push('verified positions page container')
+    await expectVisible(page.getByText(/持仓明细|当前账户暂无持仓|持仓管理/), 'verified positions data surface', 8000)
+    actions.push('verified positions data surface')
     if (await clickByRole(page, 'button', /刷新/)) {
       actions.push('refreshed positions')
       await waitForStable(page)
+      await expectVisible(page.getByText(/持仓明细|当前账户暂无持仓|持仓管理/), 'verified positions surface after refresh')
+      actions.push('verified positions surface after refresh')
     }
     const detailButton = page.locator('button').filter({ hasText: '详情' }).first()
     if (await safeClick(page, detailButton)) {
@@ -605,6 +871,10 @@ const pageActions = {
   },
   recommendations: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.recommendations-page'), 'verified recommendations page container', 8000)
+    actions.push('verified recommendations page container')
+    await expectVisible(page.getByText(/智能化推荐|推荐状态|暂无推荐结果/), 'verified recommendations data surface', 8000)
+    actions.push('verified recommendations data surface')
     if (await clickByRole(page, 'button', '立即刷新')) {
       actions.push('refreshed recommendations')
       await waitForRefreshStable(page, { timeoutMs: 3200 })
@@ -726,9 +996,15 @@ const pageActions = {
   },
   financeNews: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.finance-news-page'), 'verified finance news page container', 8000)
+    actions.push('verified finance news page container')
+    await expectVisible(page.getByText(/资讯列表|财经快讯|暂无财经快讯/), 'verified finance news data surface', 8000)
+    actions.push('verified finance news data surface')
     if (await clickSegmentByText(page, '美股')) {
       actions.push('selected news US')
       await waitForStable(page, { quietWindowMs: 120, timeoutMs: 1000 })
+      await expectVisible(page.getByText(/资讯列表|财经快讯|暂无财经快讯/), 'verified finance news US surface')
+      actions.push('verified finance news US surface')
     }
     if (await clickSegmentByText(page, 'A股')) {
       actions.push('selected news CN')
@@ -743,20 +1019,36 @@ const pageActions = {
   profile: async (page) => {
     const actions = []
     await waitForStable(page)
-    actions.push('loaded profile')
+    await expectVisible(page.locator('.profile-page'), 'verified profile page container', 8000)
+    actions.push('verified profile page container')
+    await expectVisible(page.getByText('个人中心'), 'verified profile title', 8000)
+    actions.push('verified profile title')
+    await expectVisible(page.getByText(/实时账户|账户总资产|等待账户/), 'verified profile account surface', 8000)
+    actions.push('verified profile account surface')
     return actions
   },
   brokers: async (page) => {
     const actions = []
     await waitForStable(page)
-    actions.push('loaded brokers')
+    await expectVisible(page.locator('.broker-management'), 'verified broker management container', 8000)
+    actions.push('verified broker management container')
+    await expectVisible(page.getByText('券商连接'), 'verified broker management title', 8000)
+    actions.push('verified broker management title')
+    await expectVisible(page.getByText(/总账户数|还没有券商连接|添加账户/), 'verified broker account surface', 8000)
+    actions.push('verified broker account surface')
     return actions
   },
   notifications: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.notifications-page'), 'verified notifications page container', 8000)
+    actions.push('verified notifications page container')
+    await expectVisible(page.getByText(/消息通知|暂无消息|全部已读/), 'verified notifications data surface', 8000)
+    actions.push('verified notifications data surface')
     if (await clickByRole(page, 'button', /刷新/)) {
       actions.push('refreshed notifications')
       await waitForStable(page, { minimumMs: 220, quietWindowMs: 180, timeoutMs: 1400 })
+      await expectVisible(page.getByText(/消息通知|暂无消息|全部已读/), 'verified notifications surface after refresh')
+      actions.push('verified notifications surface after refresh')
     }
     if (await clickSegmentByText(page, '交易')) {
       actions.push('filtered trade notifications')
@@ -774,6 +1066,12 @@ const pageActions = {
   },
   settings: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.settings-page'), 'verified settings page container', 8000)
+    actions.push('verified settings page container')
+    await expectVisible(page.getByText('系统设置'), 'verified settings title', 8000)
+    actions.push('verified settings title')
+    await expectVisible(page.getByText(/基础设置|AI 设置|系统日志/), 'verified settings sections', 8000)
+    actions.push('verified settings sections')
     if (await clickByRole(page, 'button', /刷新/)) {
       actions.push('refreshed system logs')
       await waitForRefreshStable(page)
@@ -783,11 +1081,18 @@ const pageActions = {
   users: async (page) => {
     const actions = []
     await waitForStable(page)
-    actions.push('loaded user-management')
+    await expectVisible(page.locator('.user-management-page'), 'verified user management container', 8000)
+    actions.push('verified user management container')
+    await expectVisible(page.getByText('用户与角色'), 'verified user management title', 8000)
+    actions.push('verified user management title')
+    await expectVisible(page.getByText(/角色与菜单权限|用户列表/), 'verified user management data surface', 8000)
+    actions.push('verified user management data surface')
     return actions
   },
   scheduler: async (page) => {
     const actions = []
+    await expectVisible(page.locator('.task-grid, .scheduler-page'), 'verified scheduler content visible', 5000)
+    actions.push('verified scheduler content visible')
     if (await clickByRole(page, 'button', '刷新任务')) {
       actions.push('refreshed scheduler tasks')
       await waitForRefreshStable(page)
@@ -823,11 +1128,7 @@ const attachListeners = (page) => {
   })
 
   page.on('console', (msg) => {
-    if (
-      msg.type() === 'error' &&
-      msg.text() === 'Failed to load resource: the server responded with a status of 404 (Not Found)' &&
-      page.url().includes('/settings')
-    ) {
+    if (shouldIgnoreSmokeConsoleError({ type: msg.type(), text: msg.text(), pageUrl: page.url() })) {
       return
     }
     if (msg.type() === 'error') {
@@ -837,7 +1138,7 @@ const attachListeners = (page) => {
 
   page.on('requestfailed', (request) => {
     const failure = request.failure()?.errorText || 'request failed'
-    if (failure.includes('ERR_ABORTED')) {
+    if (shouldIgnoreSmokeRequestFailure(failure)) {
       return
     }
     pushError('requestfailed', {
@@ -849,7 +1150,7 @@ const attachListeners = (page) => {
 
   page.on('response', async (response) => {
     if (response.status() >= 400 && response.url().includes('/svc/')) {
-      if (isOptionalOutbox404(response.url(), response.status())) {
+      if (shouldIgnoreSmokeHttpError({ url: response.url(), status: response.status() })) {
         return
       }
       let body = ''
@@ -868,17 +1169,24 @@ const attachListeners = (page) => {
 }
 
 const desktopVisits = [
+  { route: '/', name: 'root-redirect', action: pageActions.dashboard },
   { route: '/dashboard', name: 'dashboard', action: pageActions.dashboard },
   { route: '/market', name: 'market', action: pageActions.market },
   { route: '/stock-pool', name: 'stock-pool', action: pageActions.stockPool },
+  { route: '/watchlist-pool', name: 'watchlist-pool', action: pageActions.watchlistPool },
+  { route: '/watchlist-ai-trade-runs', name: 'watchlist-ai-trade-runs', action: pageActions.watchlistAiTradeRuns },
+  { route: '/watchlist-pool/AAPL.US/scan-result', name: 'watchlist-scan-result', action: pageActions.watchlistScanResult },
+  { route: '/watchlist-pool/NVDL.US/scan-result', name: 'watchlist-scan-result-alt', action: pageActions.watchlistScanResult },
   { route: '/ai-analysis', name: 'ai-analysis', action: pageActions.aiAnalysis },
   { route: '/trading', name: 'trading', action: pageActions.trading },
   { route: '/positions', name: 'positions', action: pageActions.positions },
   { route: '/orders', name: 'orders', action: pageActions.orders },
   { route: '/symbol/AAPL.US', name: 'symbol-detail', action: pageActions.symbolDetail },
+  { route: '/symbol/000001.SZ', name: 'symbol-detail-cn', action: pageActions.symbolDetail },
   { route: '/kline', name: 'kline', action: pageActions.kline },
   { route: '/recommendations', name: 'recommendations', action: pageActions.recommendations },
   { route: '/sentiment-center', name: 'sentiment-center', action: pageActions.sentimentCenter },
+  { route: '/market-sentiment', name: 'market-sentiment-redirect', action: pageActions.sentimentCenter },
   { route: '/finance-news', name: 'finance-news', action: pageActions.financeNews },
   { route: '/strategy', name: 'strategy', action: pageActions.strategy },
   { route: '/backtest', name: 'backtest', action: pageActions.backtest },
@@ -892,11 +1200,7 @@ const desktopVisits = [
   { route: '/history-coverage', name: 'history-coverage', action: pageActions.historyCoverage }
 ]
 
-const mobileVisits = [
-  { route: '/dashboard', name: 'dashboard', action: pageActions.dashboard },
-  { route: '/market', name: 'market', action: pageActions.market },
-  { route: '/trading', name: 'trading', action: pageActions.trading }
-]
+const mobileVisits = desktopVisits
 
 const login = async (page) => {
   const scenario = page === mobilePage ? 'mobile' : 'desktop'
@@ -905,6 +1209,10 @@ const login = async (page) => {
   await withStepTimeout(
     page.goto(`${baseUrl}/login`, { waitUntil: 'domcontentloaded' }),
     { label: `${scenario}:login:goto`, timeoutMs: PAGE_TIMEOUT_MS }
+  )
+  await withStepTimeout(
+    recordLoginPage(page, scenario),
+    { label: `${scenario}:login:verify`, timeoutMs: 12000 }
   )
   await withStepTimeout(
     page.getByPlaceholder('用户名').fill(username),
@@ -961,6 +1269,7 @@ const report = {
   username,
   mobileIncluded: RUN_MOBILE_SMOKE,
   aiAnalysisDeepScan: AI_ANALYSIS_DEEP_SCAN,
+  aiAnalysisExpectDeferred: AI_ANALYSIS_EXPECT_DEFERRED,
   pageFilters: PAGE_FILTERS,
   pages: results,
   errors
@@ -973,6 +1282,7 @@ const summaryLines = [
   `baseUrl=${baseUrl}`,
   `mobileIncluded=${RUN_MOBILE_SMOKE}`,
   `aiAnalysisDeepScan=${AI_ANALYSIS_DEEP_SCAN}`,
+  `aiAnalysisExpectDeferred=${AI_ANALYSIS_EXPECT_DEFERRED}`,
   `pageFilters=${PAGE_FILTERS.join(',') || 'all'}`,
   `pages=${results.length}`,
   `errors=${errors.length}`

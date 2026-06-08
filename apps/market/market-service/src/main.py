@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
+import os
 import re
 import sys
 import threading
@@ -72,6 +74,8 @@ from push_hub import push_hub
 from stock_pool_query import load_stock_pool_page
 from watchlist_service import WatchlistService
 
+LOGGER = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def market_service_lifespan(_: Any):
@@ -120,6 +124,23 @@ _HISTORY_BACKFILL_LOCK = threading.Lock()
 _HISTORY_BACKFILL_SYMBOLS: set[str] = set()
 _LIVE_MARKET_CACHE_LOCK = threading.Lock()
 _LIVE_MARKET_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_LIVE_FALLBACK_LOG_INTERVAL_SECONDS = max(
+    5.0,
+    float(os.getenv("REF_MARKET_LIVE_FALLBACK_LOG_INTERVAL_SECONDS", "60") or "60"),
+)
+_LIVE_FALLBACK_LOG_LOCK = threading.Lock()
+_LIVE_FALLBACK_LAST_LOGS: Dict[str, float] = {}
+
+
+def _warn_live_fallback_once(key: str, message: str, *args: Any) -> None:
+    now = time.monotonic()
+    with _LIVE_FALLBACK_LOG_LOCK:
+        last_log = float(_LIVE_FALLBACK_LAST_LOGS.get(key) or 0.0)
+        if now - last_log >= _LIVE_FALLBACK_LOG_INTERVAL_SECONDS:
+            _LIVE_FALLBACK_LAST_LOGS[key] = now
+            LOGGER.warning(message, *args)
+            return
+    LOGGER.debug(message, *args)
 
 
 def _as_bool(value: object) -> bool:
@@ -1590,7 +1611,21 @@ async def _load_longbridge_quotes(
         return cached_payload
 
     quote_context = ctx or _with_quote_context(int(user_id))
-    payload = await _run_live_pull(lambda: quote_context.quote(normalized_symbols))
+    try:
+        payload = await _run_live_pull(lambda: quote_context.quote(normalized_symbols))
+    except Exception as exc:
+        _warn_live_fallback_once(
+            "longbridge_quote_pull",
+            "Longbridge quote pull degraded: user_id=%s symbol_count=%s error=%s",
+            user_id,
+            len(normalized_symbols),
+            exc,
+        )
+        return _fallback_live_payload(
+            [],
+            reason=str(exc)[:180],
+            data_source="longbridge-live-unavailable",
+        )
     return _live_cache_set(cache_key, _live_response(payload), _LIVE_MARKET_CACHE_TTL_SECONDS)
 
 
@@ -1608,7 +1643,21 @@ async def _load_longbridge_depth(
         return cached_payload
 
     quote_context = ctx or _with_quote_context(int(user_id))
-    payload = await _run_live_pull(lambda: quote_context.depth(normalized_symbol))
+    try:
+        payload = await _run_live_pull(lambda: quote_context.depth(normalized_symbol))
+    except Exception as exc:
+        _warn_live_fallback_once(
+            "longbridge_depth_pull",
+            "Longbridge depth pull degraded: user_id=%s symbol=%s error=%s",
+            user_id,
+            normalized_symbol,
+            exc,
+        )
+        return _fallback_live_payload(
+            {},
+            reason=str(exc)[:180],
+            data_source="longbridge-live-unavailable",
+        )
     return _live_cache_set(cache_key, _live_response(payload), _LIVE_MARKET_CACHE_TTL_SECONDS)
 
 
@@ -1628,7 +1677,22 @@ async def _load_longbridge_trades(
         return cached_payload
 
     quote_context = ctx or _with_quote_context(int(user_id))
-    payload = await _run_live_pull(lambda: quote_context.trades(normalized_symbol, safe_count))
+    try:
+        payload = await _run_live_pull(lambda: quote_context.trades(normalized_symbol, safe_count))
+    except Exception as exc:
+        _warn_live_fallback_once(
+            "longbridge_trades_pull",
+            "Longbridge trades pull degraded: user_id=%s symbol=%s count=%s error=%s",
+            user_id,
+            normalized_symbol,
+            safe_count,
+            exc,
+        )
+        return _fallback_live_payload(
+            [],
+            reason=str(exc)[:180],
+            data_source="longbridge-live-unavailable",
+        )
     return _live_cache_set(cache_key, _live_response(payload), _LIVE_MARKET_CACHE_TTL_SECONDS)
 
 
@@ -3016,7 +3080,12 @@ async def longbridge_trading_session(session: dict = Depends(get_current_session
         })
         return {"success": True, "data": data}
     except Exception as exc:
-        print(f"[market-service] longbridge trading-session fallback: {exc}")
+        _warn_live_fallback_once(
+            "longbridge_trading_session",
+            "Longbridge trading-session degraded: user_id=%s error=%s",
+            user_id,
+            exc,
+        )
         fallback_payload = {
             "US": {"market": "US", "trade_sessions": []},
             "HK": {"market": "HK", "trade_sessions": []},

@@ -103,6 +103,22 @@ function isHtmlResponse(data) {
   return /^<!doctype html>/i.test(raw.trim()) || /<html[\s>]/i.test(raw)
 }
 
+function validateGatewayObservability(payload) {
+  if (!payload || typeof payload !== 'object' || isHtmlResponse(payload)) {
+    return 'gateway observability did not return JSON'
+  }
+  const data = payload.data && typeof payload.data === 'object' ? payload.data : payload
+  const services = data.services || data.registry
+  if (!services || typeof services !== 'object' || Array.isArray(services)) {
+    return 'gateway observability missing services registry'
+  }
+  const status = String(data.status || payload.status || '').trim().toLowerCase()
+  if (!status) {
+    return 'gateway observability missing status'
+  }
+  return ''
+}
+
 function normalizePath(pathname, query = {}) {
   const url = new URL(pathname, BASE_URL)
   Object.entries(query).forEach(([key, value]) => {
@@ -239,10 +255,16 @@ function buildSuite(token, authInfo, brokerAccounts = null) {
       id: 'health',
       label: 'Gateway Health',
       method: 'GET',
-      path: '/api/health',
+      path: '/svc/gateway/api/v1/system/observability',
+      validate: validateGatewayObservability,
       summarize: (payload) => ({
-        status: payload?.status || null,
-        services: payload?.services || {}
+        status: payload?.data?.status || payload?.status || null,
+        serviceCount: payload?.data?.services && typeof payload.data.services === 'object'
+          ? Object.keys(payload.data.services).length
+          : payload?.services && typeof payload.services === 'object'
+            ? Object.keys(payload.services).length
+            : 0,
+        alertCount: Array.isArray(payload?.data?.alerts) ? payload.data.alerts.length : 0
       })
     },
     {
@@ -706,14 +728,17 @@ async function sampleEndpoint(spec) {
       query: spec.query,
       body: spec.body
     })
+    const validationError = result.ok && typeof spec.validate === 'function'
+      ? spec.validate(result.data)
+      : ''
     const sample = {
       iteration: index + 1,
       status: result.status,
-      ok: result.ok,
+      ok: result.ok && !validationError,
       durationMs: roundNumber(result.durationMs),
       responseTimeHeader: result.responseTimeHeader,
       requestId: result.requestId,
-      error: result.ok ? '' : extractErrorBody(result.data)
+      error: validationError || (result.ok ? '' : extractErrorBody(result.data))
     }
     samples.push(sample)
     lastResponse = result

@@ -2421,6 +2421,17 @@ onUnmounted(() => {
   --el-button-hover-text-color: var(--text-primary);
 }
 
+.trade-search-button {
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: #0f5f8f;
+  --el-button-border-color: #0b4f78;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: #0b4f78;
+  --el-button-hover-border-color: #08415f;
+  --el-button-active-bg-color: #083d59;
+  --el-button-active-border-color: #083d59;
+}
+
 .trade-submit-button {
   --el-button-bg-color: color-mix(in srgb, var(--surface-strong) 82%, var(--accent) 18%);
   --el-button-border-color: color-mix(in srgb, var(--border-strong) 72%, var(--accent));
@@ -2431,21 +2442,21 @@ onUnmounted(() => {
 }
 
 .trading-page :deep(.el-input-group__append .el-button) {
-  --el-button-text-color: var(--text-primary);
-  --el-button-bg-color: color-mix(in srgb, var(--surface-strong) 90%, transparent);
-  --el-button-border-color: var(--border-strong);
-  --el-button-hover-text-color: var(--text-primary);
-  --el-button-hover-bg-color: color-mix(in srgb, var(--surface-strong) 78%, var(--accent) 22%);
-  --el-button-hover-border-color: var(--border-strong);
-  color: var(--text-primary) !important;
-  background-color: color-mix(in srgb, var(--surface-strong) 90%, transparent) !important;
+  --el-button-text-color: #ffffff;
+  --el-button-bg-color: #0f5f8f;
+  --el-button-border-color: #0b4f78;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-hover-bg-color: #0b4f78;
+  --el-button-hover-border-color: #08415f;
+  color: #ffffff !important;
+  background-color: #0f5f8f !important;
   background-image: none !important;
-  border-color: var(--border-strong) !important;
+  border-color: #0b4f78 !important;
 }
 
 .trading-page :deep(.el-input-group__append .el-button span) {
-  color: var(--text-primary) !important;
-  -webkit-text-fill-color: var(--text-primary) !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
 }
 
 .card-actions {

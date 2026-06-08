@@ -14,6 +14,7 @@ if str(REFACTOR_ROOT) not in sys.path:
 from apps.governance.module_shared import (
     DbUtil,
     PositionSnapshotService,
+    QuoteSnapshotService,
     RiskOverviewSnapshotService,
     bootstrap_runtime,
     build_dependency_status,
@@ -105,15 +106,22 @@ def _parse_order_payload(payload: dict, price_field: str) -> Dict[str, Any]:
         if quantity <= 0:
             raise HTTPException(status_code=400, detail="quantity 必须大于0")
 
-    account_id = payload.get("account_id")
+    account_id = payload.get("account_id") or payload.get("accountId")
     if account_id not in (None, ""):
         account_id = int(account_id)
+
+    strategy_id = payload.get("strategy_id") or payload.get("strategyId")
+    if strategy_id not in (None, ""):
+        strategy_id = int(strategy_id)
+    else:
+        strategy_id = 0
 
     return {
         "symbol": symbol,
         "triggerPrice": trigger_price,
         "quantity": quantity,
         "accountId": account_id,
+        "strategyId": strategy_id,
         "note": payload.get("note"),
     }
 
@@ -209,21 +217,37 @@ def _build_strategy_order_records(
     take_profit_orders: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     strategy_type = _normalize_text(strategy.get("type"))
-    stop_loss_records = stop_loss_orders if strategy_type == "stop_loss" else []
-    take_profit_records = take_profit_orders if strategy_type == "take_profit" else []
+    strategy_id = int(strategy.get("id") or 0)
+    linked_stop_loss_orders = [
+        item for item in stop_loss_orders
+        if int(item.get("strategyId") or 0) == strategy_id
+    ]
+    linked_take_profit_orders = [
+        item for item in take_profit_orders
+        if int(item.get("strategyId") or 0) == strategy_id
+    ]
+    stop_loss_records = linked_stop_loss_orders if strategy_type == "stop_loss" else []
+    take_profit_records = linked_take_profit_orders if strategy_type == "take_profit" else []
+    unlinked_same_type_count = 0
+    if strategy_type == "stop_loss":
+        unlinked_same_type_count = len([item for item in stop_loss_orders if not item.get("strategyId")])
+    elif strategy_type == "take_profit":
+        unlinked_same_type_count = len([item for item in take_profit_orders if not item.get("strategyId")])
 
-    notes = ["当前保护单记录按用户/账户维护，未与策略 ID 建立直接关联。"]
+    notes = ["保护单按 strategyId 精确归因；未带 strategyId 的旧保护单不会挂到具体策略。"]
     if not stop_loss_records and not take_profit_records:
         if strategy_type in {"stop_loss", "take_profit"}:
-            notes.append("当前没有可直接复用的同类型保护单记录。")
+            notes.append("当前没有与该策略 ID 直接关联的同类型保护单记录。")
         else:
             notes.append("当前策略类型没有专属保护单表，仅返回告警/触发记录。")
+    if unlinked_same_type_count:
+        notes.append(f"存在 {unlinked_same_type_count} 条同类型旧保护单缺少 strategyId，已从本策略归因中排除。")
 
     return {
         "autoOrderRecords": [],
         "stopLossOrders": stop_loss_records,
         "takeProfitOrders": take_profit_records,
-        "orderLinkMode": "unlinked-by-user-account",
+        "orderLinkMode": "linked-by-strategy-id",
         "notes": notes,
     }
 
@@ -360,6 +384,23 @@ def _parse_datetime_sort_value(value: Any) -> str:
     return str(value or "")
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_datetime_value(value: Any) -> Optional[str]:
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
 def _extract_existing_agent_risk_events(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     events = payload.get("events") if isinstance(payload.get("events"), list) else []
     return [dict(item) for item in events if item.get("source") == "agent-review"]
@@ -448,7 +489,85 @@ def _build_risk_snapshot_meta(
 
 
 def _load_cached_risk_orders(user_id: int, order_type: str, account_id: Optional[int]) -> List[Dict[str, Any]]:
-    return _load_risk_orders(user_id, order_type, account_id)
+    ensure_risk_control_tables()
+    rows = DbUtil.fetch_all(
+        """
+        SELECT id, account_id, strategy_id, symbol, trigger_price, quantity, status, note, created_at, updated_at
+        FROM user_risk_orders
+        WHERE user_id = %s AND order_type = %s AND status = 'active'
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 100
+        """,
+        (user_id, order_type),
+    ) or []
+    if not rows:
+        return []
+
+    symbols = [
+        normalize_market_symbol(row.get("symbol"))
+        for row in rows
+        if normalize_market_symbol(row.get("symbol"))
+    ]
+    quote_map = QuoteSnapshotService.get_latest_map(symbols) if symbols else {}
+
+    position_map: Dict[str, Dict[str, Any]] = {}
+    account_ids = {
+        int(row.get("account_id"))
+        for row in rows
+        if row.get("account_id") not in (None, "")
+    }
+    for row_account_id in account_ids:
+        if account_id not in (None, "") and row_account_id != int(account_id):
+            continue
+        for position in PositionSnapshotService.get_latest(
+            user_id=user_id,
+            account_id=row_account_id,
+        ):
+            symbol = normalize_market_symbol(position.get("symbol"))
+            if symbol:
+                position_map[symbol] = position
+
+    results = []
+    for row in rows:
+        symbol = normalize_market_symbol(row.get("symbol"))
+        quote = quote_map.get(symbol) or {}
+        position = position_map.get(symbol) or {}
+        current_price = _safe_float(
+            quote.get("last_price")
+            or quote.get("lastPrice")
+            or quote.get("price")
+            or position.get("currentPrice")
+            or position.get("current_price")
+        )
+        trigger_price = _safe_float(row.get("trigger_price"))
+        if current_price > 0:
+            if order_type == "stop_loss":
+                distance = ((current_price - trigger_price) / current_price) * 100
+            else:
+                distance = ((trigger_price - current_price) / current_price) * 100
+        else:
+            distance = 0.0
+        quantity = row.get("quantity")
+        if quantity in (None, ""):
+            quantity = position.get("quantity")
+
+        results.append({
+            "id": int(row.get("id") or 0),
+            "accountId": row.get("account_id"),
+            "strategyId": int(row.get("strategy_id") or 0) or None,
+            "symbol": symbol,
+            "price": trigger_price,
+            "stopPrice": trigger_price if order_type == "stop_loss" else None,
+            "profitPrice": trigger_price if order_type == "take_profit" else None,
+            "quantity": _safe_float(quantity),
+            "currentPrice": round(current_price, 4),
+            "distance": round(distance, 2),
+            "status": row.get("status") or "active",
+            "note": row.get("note") or "",
+            "updatedAt": _format_datetime_value(row.get("updated_at")),
+            "createdAt": _format_datetime_value(row.get("created_at")),
+        })
+    return results
 
 
 def _build_risk_snapshot_payload(
@@ -528,7 +647,7 @@ def _load_risk_limits(user_id: int) -> Dict[str, Any]:
 
 
 def _load_risk_orders(user_id: int, order_type: str, account_id: Optional[int]) -> List[Dict[str, Any]]:
-    return load_risk_orders(
+    return _load_cached_risk_orders(
         user_id=user_id,
         order_type=order_type,
         account_id=account_id,
@@ -570,15 +689,26 @@ async def risk_bootstrap(
 async def risk_overview(
     account_id: Optional[int] = Query(default=None),
     realtime: bool = Query(default=False),
+    refresh: bool = Query(default=False),
     session: dict = Depends(get_current_session),
 ):
     user_id = int(session["user_id"])
     safe_account_id = _coerce_account_id(account_id)
+    snapshot = RiskOverviewSnapshotService.get_latest(
+        user_id=user_id,
+        account_id=safe_account_id,
+    )
     if not realtime:
-        snapshot = RiskOverviewSnapshotService.get_latest(
-            user_id=user_id,
-            account_id=safe_account_id,
-        )
+        return {
+            "success": True,
+            "data": _build_risk_snapshot_payload(
+                user_id=user_id,
+                account_id=safe_account_id,
+                snapshot=snapshot,
+            ),
+        }
+
+    if not refresh:
         return {
             "success": True,
             "data": _build_risk_snapshot_payload(
@@ -744,10 +874,11 @@ async def create_stoploss_order(
     parsed = _parse_order_payload(payload, "stopPrice")
     DbUtil.execute_sql(
         """
-        INSERT INTO user_risk_orders (user_id, account_id, symbol, order_type, trigger_price, quantity, status, note)
-        VALUES (%s, %s, %s, 'stop_loss', %s, %s, 'active', %s)
+        INSERT INTO user_risk_orders (user_id, account_id, strategy_id, symbol, order_type, trigger_price, quantity, status, note)
+        VALUES (%s, %s, %s, %s, 'stop_loss', %s, %s, 'active', %s)
         ON DUPLICATE KEY UPDATE
             account_id = VALUES(account_id),
+            strategy_id = VALUES(strategy_id),
             trigger_price = VALUES(trigger_price),
             quantity = VALUES(quantity),
             status = 'active',
@@ -757,6 +888,7 @@ async def create_stoploss_order(
         (
             user_id,
             parsed["accountId"],
+            parsed["strategyId"],
             parsed["symbol"],
             parsed["triggerPrice"],
             parsed["quantity"],
@@ -806,10 +938,11 @@ async def create_takeprofit_order(
     parsed = _parse_order_payload(payload, "profitPrice")
     DbUtil.execute_sql(
         """
-        INSERT INTO user_risk_orders (user_id, account_id, symbol, order_type, trigger_price, quantity, status, note)
-        VALUES (%s, %s, %s, 'take_profit', %s, %s, 'active', %s)
+        INSERT INTO user_risk_orders (user_id, account_id, strategy_id, symbol, order_type, trigger_price, quantity, status, note)
+        VALUES (%s, %s, %s, %s, 'take_profit', %s, %s, 'active', %s)
         ON DUPLICATE KEY UPDATE
             account_id = VALUES(account_id),
+            strategy_id = VALUES(strategy_id),
             trigger_price = VALUES(trigger_price),
             quantity = VALUES(quantity),
             status = 'active',
@@ -819,6 +952,7 @@ async def create_takeprofit_order(
         (
             user_id,
             parsed["accountId"],
+            parsed["strategyId"],
             parsed["symbol"],
             parsed["triggerPrice"],
             parsed["quantity"],

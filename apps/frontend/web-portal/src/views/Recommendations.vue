@@ -206,6 +206,40 @@
         </el-table-column>
       </el-table>
 
+      <div class="recommendation-mobile-list" v-loading="loading && !items.length">
+        <article
+          v-for="row in pagedRecommendations"
+          :key="`mobile-${row.symbol}`"
+          class="recommendation-mobile-card"
+        >
+          <div class="mobile-card-head">
+            <div>
+              <strong>{{ row.symbol }}</strong>
+              <span>{{ row.name }}</span>
+            </div>
+            <el-tag size="small" :type="row.assetType === 'etf' ? 'warning' : 'info'">
+              {{ row.assetType === 'etf' ? 'ETF' : '股票' }}
+            </el-tag>
+          </div>
+          <div class="mobile-card-metrics">
+            <span>{{ row.market }}</span>
+            <span>评分 {{ formatDecimal(row.aiScore) }}</span>
+            <span class="up">{{ formatPercent(row.expectedReturn) }}</span>
+            <span :class="trendClass(row.changePercent)">{{ formatPercent(row.changePercent) }}</span>
+          </div>
+          <p class="mobile-card-thesis">
+            {{ getReadableParagraphs(row.thesis)[0] || '暂无推荐摘要' }}
+          </p>
+          <div class="mobile-card-actions">
+            <el-button class="pool-button" size="small" @click="addToPool(row)">加入股票池</el-button>
+            <el-button class="trade-button" size="small" @click="quickTrade(row)">去交易</el-button>
+          </div>
+        </article>
+        <div v-if="!pagedRecommendations.length && !loading" class="table-empty-state">
+          <strong>暂无候选明细</strong>
+        </div>
+      </div>
+
       <div class="pagination">
         <el-pagination
           v-model:current-page="currentPage"
@@ -1014,6 +1048,10 @@ onUnmounted(() => {
   }
 }
 
+.recommendation-mobile-list {
+  display: none;
+}
+
 @media (max-width: 1180px) {
   .content-grid,
   .stats-row,
@@ -1028,6 +1066,115 @@ onUnmounted(() => {
 
   .spotlight-side {
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .recommendations-page {
+    min-width: 0;
+  }
+
+  .hero-actions,
+  .pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recommend-type-switch {
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .recommendations-table {
+    overflow: hidden;
+  }
+
+  .recommendations-table :deep(.el-table) {
+    display: none !important;
+    width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+  }
+
+  .recommendations-table :deep(.el-table__inner-wrapper),
+  .recommendations-table :deep(.el-table__header-wrapper),
+  .recommendations-table :deep(.el-table__body-wrapper),
+  .recommendations-table :deep(.el-scrollbar),
+  .recommendations-table :deep(.el-scrollbar__wrap),
+  .recommendations-table :deep(.el-scrollbar__view),
+  .recommendations-table :deep(.el-table__header),
+  .recommendations-table :deep(.el-table__body),
+  .recommendations-table :deep(colgroup),
+  .recommendations-table :deep(thead),
+  .recommendations-table :deep(tbody),
+  .recommendations-table :deep(tr) {
+    display: none !important;
+    width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+  }
+
+  .recommendation-mobile-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .recommendation-mobile-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--panel-stroke);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
+  }
+
+  .mobile-card-head,
+  .mobile-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .mobile-card-head div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .mobile-card-head strong,
+  .mobile-card-head span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-card-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .mobile-card-metrics span {
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: var(--surface-muted);
+    font-size: 12px;
+  }
+
+  .mobile-card-thesis {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-card-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
 </style>

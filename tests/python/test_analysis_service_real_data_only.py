@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from apps.intelligence.intelligence_shared import boundary as analysis_boundary
 from core.analysis.AiConsultant import AiConsultant
+from core.analysis.RecommendationService import RecommendationService
 from core.analysis import ai_analyst
 
 
@@ -215,3 +217,173 @@ def test_recommendation_and_batch_analysis_stop_fabricating_ai_text_or_prices() 
     assert "random.uniform" not in ai_routes_source
     assert "HistoricalMarketDataService.get_history(symbol, timeframe='daily', limit=90)" in ai_routes_source
     assert "AI 推荐摘要当前不可用" in frontend_api_source
+
+
+def test_recommendation_ai_provider_cooldown_prevents_repeated_dead_provider_calls(monkeypatch) -> None:
+    calls = {"nvidia": 0, "ollama": 0}
+    ai_analyst.AIAnalyst._provider_failures.clear()
+    ai_analyst.AIAnalyst._provider_inflight.clear()
+
+    config_values = {
+        "AI_PROVIDER": "nvidia",
+        "AI_FALLBACK_PROVIDER": "ollama",
+        "AI_PROVIDER_COOLDOWN_SECONDS": 90,
+        "AI_PROVIDER_COOLDOWN_FAILURES": 1,
+    }
+
+    def fake_get(key, user_id=1, default=None):
+        return config_values.get(key, default)
+
+    def fake_nvidia(cls, prompt, model, task="general", user_id=1):
+        calls["nvidia"] += 1
+        return "ERROR: AI研判服务超时，请稍后重试"
+
+    def fake_ollama(cls, prompt, model, task="general", user_id=1):
+        calls["ollama"] += 1
+        return "ERROR: HTTPConnectionPool(host='127.0.0.1', port=11434): Connection refused"
+
+    monkeypatch.setattr(ai_analyst.AppConfig, "get", staticmethod(fake_get))
+    monkeypatch.setattr(ai_analyst.MonitorLink, "log", staticmethod(lambda *args, **kwargs: None))
+    monkeypatch.setattr(ai_analyst.AIAnalyst, "_request_nvidia", classmethod(fake_nvidia))
+    monkeypatch.setattr(ai_analyst.AIAnalyst, "_request_ollama", classmethod(fake_ollama))
+
+    candidate = {
+        "symbol": "AAPL.US",
+        "name": "Apple",
+        "market": "US",
+        "asset_type": "stock",
+        "price": 100.0,
+        "change_percent": 1.2,
+        "volume": 1000000,
+        "market_cap": 3000000000000,
+        "pe": 28,
+        "score": 72.5,
+        "expected_return": 8.1,
+        "risk_level": 2,
+        "confidence": 64,
+    }
+
+    first = RecommendationService._ai_enrich_candidate("growth", dict(candidate), user_id=1)
+    second = RecommendationService._ai_enrich_candidate("growth", dict(candidate), user_id=1)
+
+    assert calls == {"nvidia": 1, "ollama": 1}
+    assert first["ai_generated"] is False
+    assert second["ai_generated"] is False
+    assert first["ai_score"] == candidate["score"]
+    assert second["ai_score"] == candidate["score"]
+
+    summary = RecommendationService._generate_summary("growth", [first, second], user_id=1)
+
+    assert calls == {"nvidia": 2, "ollama": 2}
+    assert summary == "AI 组合摘要当前不可用，以下列表仅包含真实量化筛选结果与市场快照。"
+
+
+def test_recommendation_ai_provider_inflight_guard_prevents_concurrent_storm(monkeypatch) -> None:
+    calls = {"nvidia": 0, "ollama": 0}
+    ai_analyst.AIAnalyst._provider_failures.clear()
+    ai_analyst.AIAnalyst._provider_inflight.clear()
+
+    config_values = {
+        "AI_PROVIDER": "nvidia",
+        "AI_FALLBACK_PROVIDER": "ollama",
+        "AI_PROVIDER_COOLDOWN_SECONDS": 90,
+        "AI_PROVIDER_COOLDOWN_FAILURES": 1,
+        "AI_PROVIDER_INFLIGHT_TTL_SECONDS": 30,
+    }
+
+    def fake_get(key, user_id=1, default=None):
+        return config_values.get(key, default)
+
+    def fake_nvidia(cls, prompt, model, task="general", user_id=1):
+        calls["nvidia"] += 1
+        time.sleep(0.08)
+        return "ERROR: AI研判服务超时，请稍后重试"
+
+    def fake_ollama(cls, prompt, model, task="general", user_id=1):
+        calls["ollama"] += 1
+        time.sleep(0.08)
+        return "ERROR: HTTPConnectionPool(host='127.0.0.1', port=11434): Connection refused"
+
+    monkeypatch.setattr(ai_analyst.AppConfig, "get", staticmethod(fake_get))
+    monkeypatch.setattr(ai_analyst.MonitorLink, "log", staticmethod(lambda *args, **kwargs: None))
+    monkeypatch.setattr(ai_analyst.AIAnalyst, "_request_nvidia", classmethod(fake_nvidia))
+    monkeypatch.setattr(ai_analyst.AIAnalyst, "_request_ollama", classmethod(fake_ollama))
+
+    base_candidate = {
+        "name": "Apple",
+        "market": "US",
+        "asset_type": "stock",
+        "price": 100.0,
+        "change_percent": 1.2,
+        "volume": 1000000,
+        "market_cap": 3000000000000,
+        "pe": 28,
+        "score": 72.5,
+        "expected_return": 8.1,
+        "risk_level": 2,
+        "confidence": 64,
+    }
+    candidates = [
+        {**base_candidate, "symbol": symbol}
+        for symbol in ["AAPL.US", "MSFT.US", "NVDA.US", "TSLA.US"]
+    ]
+
+    enriched = RecommendationService._enrich_with_ai("growth", candidates, user_id=1)
+
+    assert calls == {"nvidia": 1, "ollama": 1}
+    assert len(enriched) == 4
+    assert all(item["ai_generated"] is False for item in enriched)
+
+
+def test_openai_compatible_scan_timeouts_are_short_and_sanitized(monkeypatch) -> None:
+    logs = []
+    config_values = {
+        "AI_TIMEOUT": 30,
+        "AI_PROVIDER": "nvidia",
+        "AI_API_KEY": "test-key",
+        "AI_BASE_URL": "https://lucen.cc/v1",
+        "AI_URL": "https://lucen.cc/v1/chat/completions",
+        "AI_API_STYLE": "openai-chat-completions",
+        "AI_MODEL": "gpt-5.5",
+        "AI_MODEL_SCAN_PULSE": "gpt-5.4",
+        "TEMPERATURE": 0.2,
+        "NUM_PREDICT": 360,
+        "AI_SCAN_REASONING_EFFORT": "high",
+    }
+
+    def fake_get(key, user_id=1, default=None):
+        return config_values.get(key, default)
+
+    class FakeSession:
+        trust_env = False
+
+        def post(self, url, json=None, headers=None, timeout=None):
+            assert timeout == 8
+            raise TimeoutError("Read timed out")
+
+    monkeypatch.setattr(ai_analyst.AppConfig, "get", staticmethod(fake_get))
+    monkeypatch.setattr(ai_analyst.requests, "Session", lambda: FakeSession())
+    monkeypatch.setattr(ai_analyst.MonitorLink, "log", staticmethod(lambda message: logs.append(str(message))))
+    ai_analyst.AIAnalyst._nvidia_call_times.clear()
+
+    result = ai_analyst.AIAnalyst.get_decision(None, "scan", task="scan_pulse", user_id=1)
+
+    assert "AI 服务超时，先展示降级研判结果" in result
+    assert any("provider timeout handled" in item for item in logs)
+    assert not any("Read timed out" in item for item in logs)
+
+
+def test_openai_compatible_timeout_caps_by_task(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ai_analyst.AppConfig,
+        "get",
+        staticmethod(lambda key, user_id=1, default=None: {
+            "AI_TIMEOUT": 30,
+            "AI_PROVIDER": "nvidia",
+        }.get(key, default)),
+    )
+
+    assert ai_analyst.AIAnalyst._request_timeout_for_task("scan_pulse", provider="nvidia") == 8
+    assert ai_analyst.AIAnalyst._request_timeout_for_task("recommend_brief", provider="nvidia") == 8
+    assert ai_analyst.AIAnalyst._request_timeout_for_task("trend_batch", provider="nvidia") == 12
+    assert ai_analyst.AIAnalyst._request_timeout_for_task("scan_final", provider="nvidia") == 12

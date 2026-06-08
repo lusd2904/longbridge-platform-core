@@ -257,3 +257,7 @@ service_edges:
     to: longbridge-quote
     kind: external_call
     purpose: quote and push data runtime
+  - from: scheduler-service
+    to: longbridge-quote
+    kind: external_call
+    purpose: scheduled symbol content cache refresh

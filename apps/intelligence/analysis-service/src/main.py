@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import asyncio
 import hashlib
 import json
 import os
@@ -63,7 +64,18 @@ app = create_service_app(
     description="Phase 1 live service for AI model plans, trend scans and recommendation datasets.",
 )
 PORT = service_port("REF_ANALYSIS_SERVICE_PORT", 8103)
-SYNC_ANALYZE_POSITIONS_LIMIT = 12
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+SYNC_ANALYZE_POSITIONS_LIMIT = _env_int("REF_ANALYSIS_SYNC_POSITIONS_LIMIT", 12)
 AGNO_SIDECAR_BASE_URL = (
     str(os.getenv("REF_AGNO_SIDECAR_URL") or "http://127.0.0.1:3200").strip().rstrip("/")
 )
@@ -85,6 +97,22 @@ _AGENT_RUN_OVERRIDE_STATUS_OPTIONS = {
     "needs_review": {"failed"},
     "dismissed": {"cancelled"},
 }
+_DEFERRED_ANALYSIS_JOBS: Dict[str, Dict[str, Any]] = {}
+_DEFERRED_ANALYSIS_JOB_LOCK = threading.Lock()
+_DEFERRED_ANALYSIS_JOB_MAX_RESULTS = 300
+_DEFERRED_ANALYSIS_JOB_TTL_SECONDS = _env_int("REF_ANALYSIS_DEFERRED_JOB_TTL_SECONDS", 3600, minimum=60)
+_DEFERRED_ANALYSIS_JOB_MAX_JOBS = _env_int("REF_ANALYSIS_DEFERRED_JOB_MAX_JOBS", 200, minimum=10)
+_DEFERRED_ANALYSIS_JOB_STRANDED_SECONDS = _env_int("REF_ANALYSIS_DEFERRED_JOB_STRANDED_SECONDS", 1800, minimum=60)
+_DEFERRED_ANALYSIS_JOB_REDIS_PREFIX = "analysis:deferred-job:"
+_DEFERRED_ANALYSIS_JOB_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+def _utc_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _utc_iso_from_epoch(epoch_seconds: float) -> str:
+    return datetime.utcfromtimestamp(epoch_seconds).isoformat(timespec="seconds") + "Z"
 
 
 def _normalize_position_batch_payload(raw_positions: object, sync_limit: int = SYNC_ANALYZE_POSITIONS_LIMIT) -> Tuple[List[dict], Dict[str, int | bool]]:
@@ -102,7 +130,12 @@ def _normalize_position_batch_payload(raw_positions: object, sync_limit: int = S
     }
 
 
-def _build_deferred_analysis_placeholders(raw_positions: object, *, model_plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_deferred_analysis_placeholders(
+    raw_positions: object,
+    *,
+    model_plan: Dict[str, Any],
+    sync_limit: int = SYNC_ANALYZE_POSITIONS_LIMIT,
+) -> List[Dict[str, Any]]:
     positions = raw_positions if isinstance(raw_positions, list) else []
     placeholders: List[Dict[str, Any]] = []
     for item in positions:
@@ -118,7 +151,7 @@ def _build_deferred_analysis_placeholders(raw_positions: object, *, model_plan: 
                 "name": item.get("name") or item.get("symbol_name") or symbol,
                 "queued": True,
                 "deferred": True,
-                "reason": f"批量分析超过同步上限 {SYNC_ANALYZE_POSITIONS_LIMIT}，已降级为异步/延后处理",
+                "reason": f"批量分析超过同步上限 {sync_limit}，已降级为异步/延后处理",
                 "modelPlan": model_plan,
                 "scanLayers": [],
                 "source": "manual_scan",
@@ -128,6 +161,297 @@ def _build_deferred_analysis_placeholders(raw_positions: object, *, model_plan: 
             }
         )
     return placeholders
+
+
+def _deferred_analysis_job_redis_key(job_id: str) -> str:
+    return f"{_DEFERRED_ANALYSIS_JOB_REDIS_PREFIX}{job_id}"
+
+
+def _deferred_analysis_job_storage_mode() -> str:
+    try:
+        return "memory+redis_snapshot" if bool(redis_client.ping()) else "memory"
+    except Exception:
+        return "memory"
+
+
+def _persist_deferred_analysis_job_snapshot(job: Dict[str, Any]) -> None:
+    job_id = str(job.get("jobId") or "").strip()
+    if not job_id:
+        return
+    try:
+        redis_client.set(
+            _deferred_analysis_job_redis_key(job_id),
+            dict(job),
+            expire=max(int(job.get("ttlSeconds") or _DEFERRED_ANALYSIS_JOB_TTL_SECONDS), 60),
+        )
+    except Exception:
+        pass
+
+
+def _load_deferred_analysis_job_snapshot_from_redis(job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        payload = redis_client.get_json(_deferred_analysis_job_redis_key(job_id))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _delete_deferred_analysis_job_snapshot_from_redis(job_id: str) -> None:
+    try:
+        redis_client.delete(_deferred_analysis_job_redis_key(job_id))
+    except Exception:
+        pass
+
+
+def _deferred_analysis_job_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
+    with _DEFERRED_ANALYSIS_JOB_LOCK:
+        _prune_deferred_analysis_jobs_locked()
+        job = _DEFERRED_ANALYSIS_JOBS.get(job_id)
+        if job:
+            return dict(job)
+
+    redis_job = _load_deferred_analysis_job_snapshot_from_redis(job_id)
+    if not redis_job:
+        return None
+    if str(redis_job.get("status") or "").lower() in _DEFERRED_ANALYSIS_JOB_TERMINAL_STATUSES:
+        return dict(redis_job)
+    return None
+
+
+def _deferred_job_epoch(job: Dict[str, Any]) -> float:
+    raw_epoch = job.get("createdEpoch")
+    try:
+        epoch = float(raw_epoch)
+        if epoch > 0:
+            return epoch
+    except (TypeError, ValueError):
+        pass
+
+    raw_created = str(job.get("createdAt") or "").strip()
+    if raw_created:
+        try:
+            return datetime.fromisoformat(raw_created.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _prune_deferred_analysis_jobs_locked(now: Optional[float] = None) -> None:
+    current_time = float(now if now is not None else time.time())
+    expired_job_ids = [
+        job_id
+        for job_id, job in _DEFERRED_ANALYSIS_JOBS.items()
+        if str(job.get("status") or "").lower() in _DEFERRED_ANALYSIS_JOB_TERMINAL_STATUSES
+        and _deferred_job_epoch(job)
+        and current_time - _deferred_job_epoch(job) > _DEFERRED_ANALYSIS_JOB_TTL_SECONDS
+    ]
+    for job_id in expired_job_ids:
+        _DEFERRED_ANALYSIS_JOBS.pop(job_id, None)
+        _delete_deferred_analysis_job_snapshot_from_redis(job_id)
+
+    overflow = len(_DEFERRED_ANALYSIS_JOBS) - _DEFERRED_ANALYSIS_JOB_MAX_JOBS
+    if overflow <= 0:
+        return
+
+    def sort_key(item: Tuple[str, Dict[str, Any]]) -> Tuple[int, float]:
+        _, job = item
+        is_active = str(job.get("status") or "").lower() not in _DEFERRED_ANALYSIS_JOB_TERMINAL_STATUSES
+        return (1 if is_active else 0, _deferred_job_epoch(job))
+
+    for job_id, _job in sorted(_DEFERRED_ANALYSIS_JOBS.items(), key=sort_key)[:overflow]:
+        _DEFERRED_ANALYSIS_JOBS.pop(job_id, None)
+        _delete_deferred_analysis_job_snapshot_from_redis(job_id)
+
+
+def _set_deferred_analysis_job(job_id: str, **updates: Any) -> Dict[str, Any]:
+    with _DEFERRED_ANALYSIS_JOB_LOCK:
+        _prune_deferred_analysis_jobs_locked()
+        current = dict(_DEFERRED_ANALYSIS_JOBS.get(job_id) or {})
+        current.update(updates)
+        current["updatedAt"] = _utc_iso()
+        current.setdefault("createdEpoch", time.time())
+        current.setdefault("jobId", job_id)
+        current.setdefault("ttlSeconds", _DEFERRED_ANALYSIS_JOB_TTL_SECONDS)
+        _DEFERRED_ANALYSIS_JOBS[job_id] = current
+        snapshot = dict(current)
+    _persist_deferred_analysis_job_snapshot(snapshot)
+    return snapshot
+
+
+def _deferred_analysis_job_runtime() -> Dict[str, Any]:
+    with _DEFERRED_ANALYSIS_JOB_LOCK:
+        _prune_deferred_analysis_jobs_locked()
+        now = time.time()
+        status_counts: Dict[str, int] = {}
+        active_ages: List[float] = []
+        for job in _DEFERRED_ANALYSIS_JOBS.values():
+            status = str(job.get("status") or "unknown").lower()
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status in {"queued", "running"}:
+                epoch = _deferred_job_epoch(job)
+                if epoch:
+                    active_ages.append(max(0.0, now - epoch))
+
+    active_count = int(status_counts.get("queued", 0) + status_counts.get("running", 0))
+    oldest_active_age = round(max(active_ages or [0.0]), 3)
+    degraded_reasons: List[str] = []
+    if active_count >= _DEFERRED_ANALYSIS_JOB_MAX_JOBS:
+        degraded_reasons.append("active job count reached capacity")
+    if oldest_active_age > _DEFERRED_ANALYSIS_JOB_STRANDED_SECONDS:
+        degraded_reasons.append("oldest active job exceeded stranded threshold")
+
+    return {
+        "status": "degraded" if degraded_reasons else "healthy",
+        "detail": ", ".join(degraded_reasons) or "deferred analysis jobs within healthy bounds",
+        "statusCounts": status_counts,
+        "activeCount": active_count,
+        "oldestActiveAgeSeconds": oldest_active_age,
+        "strandedThresholdSeconds": _DEFERRED_ANALYSIS_JOB_STRANDED_SECONDS,
+        "maxJobs": _DEFERRED_ANALYSIS_JOB_MAX_JOBS,
+        "storage": _deferred_analysis_job_storage_mode(),
+        "restartBehavior": (
+            "terminal snapshots may be read from redis until TTL; "
+            "queued/running jobs missing from memory return 410 expired and must be resubmitted"
+        ),
+    }
+
+
+def _json_response_payload(response: Any) -> Dict[str, Any]:
+    if isinstance(response, JSONResponse):
+        return json.loads(response.body.decode("utf-8"))
+    return response if isinstance(response, dict) else {}
+
+
+def _position_chunks(positions: List[dict], chunk_size: int) -> List[List[dict]]:
+    safe_chunk_size = max(1, int(chunk_size or 1))
+    return [positions[index:index + safe_chunk_size] for index in range(0, len(positions), safe_chunk_size)]
+
+
+def _run_deferred_positions_analysis_job(
+    job_id: str,
+    positions: List[dict],
+    base_payload: Dict[str, Any],
+    session: Dict[str, Any],
+) -> None:
+    _set_deferred_analysis_job(job_id, status="running", startedAt=_utc_iso())
+    results: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+    market_summary = None
+    try:
+        chunks = _position_chunks(positions, SYNC_ANALYZE_POSITIONS_LIMIT)
+        for index, chunk in enumerate(chunks):
+            _set_deferred_analysis_job(
+                job_id,
+                progress={"chunk": index + 1, "chunks": len(chunks), "completed": len(results)},
+            )
+            chunk_payload = dict(base_payload)
+            chunk_payload["positions"] = chunk
+            response_payload = _json_response_payload(
+                asyncio.run(analyze_positions(payload=chunk_payload, session=session))
+            )
+            chunk_results = response_payload.get("data") or []
+            if isinstance(chunk_results, list):
+                results.extend([item for item in chunk_results if isinstance(item, dict)])
+            if response_payload.get("marketSummary"):
+                market_summary = response_payload.get("marketSummary")
+            for item in chunk_results if isinstance(chunk_results, list) else []:
+                if isinstance(item, dict) and item.get("error"):
+                    errors.append({"symbol": item.get("symbol"), "error": item.get("error")})
+
+        result_payload = {
+            "success": True,
+            "data": results[:_DEFERRED_ANALYSIS_JOB_MAX_RESULTS],
+            "marketSummary": market_summary,
+            "message": f"后台持仓分析完成：{len(results)} / {len(positions)}",
+            "stats": {
+                "total": len(positions),
+                "accepted": len(positions),
+                "successful": len(results) - len(errors),
+                "failed": len(errors),
+                "deferred": 0,
+            },
+            "errors": errors,
+        }
+        _set_deferred_analysis_job(
+            job_id,
+            status="completed",
+            completedAt=_utc_iso(),
+            progress={"chunk": len(chunks), "chunks": len(chunks), "completed": len(results)},
+            result=result_payload,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _set_deferred_analysis_job(
+            job_id,
+            status="failed",
+            completedAt=_utc_iso(),
+            error=str(exc),
+            result={
+                "success": False,
+                "data": results[:_DEFERRED_ANALYSIS_JOB_MAX_RESULTS],
+                "marketSummary": market_summary,
+                "message": "后台持仓分析失败",
+                "stats": {
+                    "total": len(positions),
+                    "accepted": len(positions),
+                    "successful": len(results) - len(errors),
+                    "failed": len(errors) + 1,
+                    "deferred": 0,
+                },
+                "errors": [*errors, {"error": str(exc)}],
+            },
+        )
+
+
+def _start_deferred_positions_analysis_worker(
+    job_id: str,
+    positions: List[dict],
+    base_payload: Dict[str, Any],
+    session: Dict[str, Any],
+) -> None:
+    worker = threading.Thread(
+        target=_run_deferred_positions_analysis_job,
+        args=(job_id, positions, base_payload, session),
+        name=f"analysis-deferred-{job_id[:8]}",
+        daemon=True,
+    )
+    worker.start()
+
+
+def _enqueue_deferred_positions_analysis(
+    *,
+    positions: List[dict],
+    base_payload: Dict[str, Any],
+    session: Dict[str, Any],
+    model_plan: Dict[str, Any],
+    batch_meta: Dict[str, int | bool],
+) -> Dict[str, Any]:
+    job_id = uuid.uuid4().hex
+    now = _utc_iso()
+    job = {
+        "jobId": job_id,
+        "status": "queued",
+        "createdAt": now,
+        "createdEpoch": time.time(),
+        "expiresAt": _utc_iso_from_epoch(time.time() + _DEFERRED_ANALYSIS_JOB_TTL_SECONDS),
+        "ttlSeconds": _DEFERRED_ANALYSIS_JOB_TTL_SECONDS,
+        "updatedAt": now,
+        "requested": int(batch_meta.get("requested") or len(positions)),
+        "syncLimit": int(batch_meta.get("syncLimit") or SYNC_ANALYZE_POSITIONS_LIMIT),
+        "modelPlan": model_plan,
+        "progress": {"chunk": 0, "chunks": len(_position_chunks(positions, SYNC_ANALYZE_POSITIONS_LIMIT)), "completed": 0},
+        "userId": int(session.get("user_id") or 0),
+    }
+    with _DEFERRED_ANALYSIS_JOB_LOCK:
+        _prune_deferred_analysis_jobs_locked()
+        _DEFERRED_ANALYSIS_JOBS[job_id] = dict(job)
+    _persist_deferred_analysis_job_snapshot(job)
+    _start_deferred_positions_analysis_worker(
+        job_id,
+        list(positions),
+        dict(base_payload),
+        dict(session),
+    )
+    return dict(job)
 
 
 def _normalize_watchlist_session(raw_value: object) -> str:
@@ -420,6 +744,47 @@ def _safe_watchlist_int(value: object, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _extract_read_model_quote_fallback(symbol: str) -> Tuple[float, int, float, float]:
+    try:
+        trend_scan = DailySymbolTrendScanService.get_latest_for_symbol(symbol) or {}
+    except Exception:
+        trend_scan = {}
+    indicators = trend_scan.get("indicators") if isinstance(trend_scan, dict) else {}
+    indicators = indicators if isinstance(indicators, dict) else {}
+    current_price = _safe_watchlist_float(
+        indicators.get("latestClose")
+        or indicators.get("closePrice")
+        or indicators.get("close")
+        or trend_scan.get("latestClose")
+        or trend_scan.get("closePrice")
+    )
+    volume = _safe_watchlist_int(
+        indicators.get("volume")
+        or indicators.get("avgVolume20")
+        or trend_scan.get("volume")
+        or 0
+    )
+    change_percent = _safe_watchlist_float(
+        indicators.get("dayChangePercent")
+        or indicators.get("changePercent")
+        or trend_scan.get("dayChangePercent")
+        or 0
+    )
+    prev_close = _safe_watchlist_float(
+        indicators.get("prevClose")
+        or indicators.get("prev_close")
+        or indicators.get("previousClose")
+        or 0
+    )
+    if prev_close <= 0 and current_price > 0 and change_percent:
+        denominator = 1 + (change_percent / 100)
+        if denominator:
+            prev_close = current_price / denominator
+    if prev_close <= 0:
+        prev_close = current_price
+    return current_price, volume, change_percent, prev_close
 
 
 def _watchlist_text_contains_buy_signal(value: object) -> bool:
@@ -1631,9 +1996,24 @@ async def health():
         redis_ok = bool(redis_client.client.ping())
     except Exception:
         redis_ok = False
+    deferred_jobs = _deferred_analysis_job_runtime()
     deps = {
         "mysql": build_dependency_status("mysql", "healthy" if mysql_ok else "degraded", detail="分析历史与推荐读写数据库"),
         "redis": build_dependency_status("redis", "healthy" if redis_ok else "degraded", detail="AI 缓存与热点结果缓存"),
+        "deferredAnalysisJobs": build_dependency_status(
+            "deferredAnalysisJobs",
+            deferred_jobs["status"],
+            detail=deferred_jobs["detail"],
+            extra={
+                "statusCounts": deferred_jobs["statusCounts"],
+                "activeCount": deferred_jobs["activeCount"],
+                "oldestActiveAgeSeconds": deferred_jobs["oldestActiveAgeSeconds"],
+                "strandedThresholdSeconds": deferred_jobs["strandedThresholdSeconds"],
+                "maxJobs": deferred_jobs["maxJobs"],
+                "storage": deferred_jobs["storage"],
+                "restartBehavior": deferred_jobs["restartBehavior"],
+            },
+        ),
     }
     return build_health_payload(
         service="analysis-service",
@@ -1691,6 +2071,12 @@ async def analyze_positions(
     positions = payload.get("positions") or []
     account_id = payload.get("account_id") or payload.get("accountId")
     force_refresh = bool(payload.get("force_refresh", payload.get("forceRefresh", True)))
+    allow_single_quote_retry = bool(
+        payload.get("allow_live_quote")
+        or payload.get("allowLiveQuote")
+        or payload.get("allow_single_quote_retry")
+        or payload.get("allowSingleQuoteRetry")
+    )
     model_plan = AIAnalyst.get_task_model_plan(user_id=user_id)
 
     if not positions:
@@ -1699,12 +2085,32 @@ async def analyze_positions(
     original_positions = positions if isinstance(positions, list) else []
     positions, batch_meta = _normalize_position_batch_payload(original_positions)
     if batch_meta["partial"]:
+        deferred_job = _enqueue_deferred_positions_analysis(
+            positions=[item for item in original_positions if isinstance(item, dict)],
+            base_payload={
+                **payload,
+                "force_refresh": force_refresh,
+                "forceRefresh": force_refresh,
+            },
+            session={"user_id": user_id},
+            model_plan=model_plan,
+            batch_meta=batch_meta,
+        )
         response_payload = {
             "success": True,
-            "data": _build_deferred_analysis_placeholders(original_positions, model_plan=model_plan),
+            "data": _build_deferred_analysis_placeholders(
+                original_positions,
+                model_plan=model_plan,
+                sync_limit=int(batch_meta["syncLimit"]),
+            ),
+            "jobId": deferred_job["jobId"],
+            "jobStatus": deferred_job["status"],
+            "statusUrl": f"/api/v1/analysis/analyze-positions/jobs/{deferred_job['jobId']}",
+            "jobExpiresAt": deferred_job.get("expiresAt"),
+            "jobTtlSeconds": deferred_job.get("ttlSeconds"),
             "marketSummary": None,
             "modelPlan": model_plan,
-            "message": f"批量分析请求共 {batch_meta['requested']} 只股票，超过同步上限 {batch_meta['syncLimit']}，已快速接受并延后处理",
+            "message": f"批量分析请求共 {batch_meta['requested']} 只股票，超过同步上限 {batch_meta['syncLimit']}，已创建后台任务 {deferred_job['jobId']}",
             "duration": time.time() - started_at,
             "accepted": True,
             "degraded": True,
@@ -1720,6 +2126,9 @@ async def analyze_positions(
                 **batch_meta,
                 "status": "accepted",
                 "executionMode": "deferred",
+                "jobId": deferred_job["jobId"],
+                "jobExpiresAt": deferred_job.get("expiresAt"),
+                "jobTtlSeconds": deferred_job.get("ttlSeconds"),
             },
         }
         return JSONResponse(status_code=202, content=response_payload)
@@ -1733,11 +2142,15 @@ async def analyze_positions(
         for position in positions
         if str(position.get("symbol") or "").strip()
     ]
-    quote_cache = get_quotes_from_broker(
-        normalized_symbols,
-        resolved_account_id,
-        user_id=user_id,
-    ) if normalized_symbols else {}
+    quote_cache = (
+        get_quotes_from_broker(
+            normalized_symbols,
+            resolved_account_id,
+            user_id=user_id,
+        )
+        if normalized_symbols and allow_single_quote_retry
+        else {}
+    )
 
     for position in positions:
         raw_symbol = str(position.get("symbol") or "").strip()
@@ -1764,9 +2177,17 @@ async def analyze_positions(
                     change_percent = float(cached_quote.get("change_percent") or 0)
                     prev_close = float(cached_quote.get("prev_close") or 0)
                 else:
-                    current_price, volume, change_percent, prev_close = get_quote_from_broker(
-                        symbol, resolved_account_id, user_id=user_id
+                    current_price, volume, change_percent, prev_close = (
+                        extract_position_quote_fallback(position)
                     )
+                    if current_price <= 0:
+                        current_price, volume, change_percent, prev_close = (
+                            _extract_read_model_quote_fallback(symbol)
+                        )
+                    if current_price <= 0 and allow_single_quote_retry:
+                        current_price, volume, change_percent, prev_close = get_quote_from_broker(
+                            symbol, resolved_account_id, user_id=user_id
+                        )
                 market_key = detect_market(symbol)
                 market_snapshot = market_snapshot_cache.get(market_key)
                 if not market_snapshot:
@@ -1801,18 +2222,17 @@ async def analyze_positions(
                 change_percent = float(cached_quote.get("change_percent") or 0)
                 prev_close = float(cached_quote.get("prev_close") or 0)
             else:
-                current_price, volume, change_percent, prev_close = get_quote_from_broker(
-                    symbol, resolved_account_id, user_id=user_id
-                )
-            if current_price <= 0:
-                fallback_price, fallback_volume, fallback_change, fallback_prev_close = (
+                current_price, volume, change_percent, prev_close = (
                     extract_position_quote_fallback(position)
                 )
-                if fallback_price > 0:
-                    current_price = fallback_price
-                    volume = volume or fallback_volume
-                    change_percent = change_percent or fallback_change
-                    prev_close = prev_close or fallback_prev_close
+                if current_price <= 0:
+                    current_price, volume, change_percent, prev_close = (
+                        _extract_read_model_quote_fallback(symbol)
+                    )
+                if current_price <= 0 and allow_single_quote_retry:
+                    current_price, volume, change_percent, prev_close = get_quote_from_broker(
+                        symbol, resolved_account_id, user_id=user_id
+                    )
 
             if current_price <= 0:
                 results.append(
@@ -1956,6 +2376,33 @@ async def analyze_positions(
     if batch_meta["partial"]:
         return JSONResponse(status_code=202, content=response_payload)
     return response_payload
+
+
+@app.get("/api/v1/analysis/analyze-positions/jobs/{job_id}")
+async def analyze_positions_job_status(
+    job_id: str,
+    session: dict = Depends(get_current_session),
+):
+    job = _deferred_analysis_job_snapshot(job_id)
+    if not job:
+        return JSONResponse(
+            status_code=410,
+            content={
+                "success": False,
+                "error": "分析任务已失效或不存在，请重新发起扫描",
+                "data": {
+                    "jobId": job_id,
+                    "status": "expired",
+                    "retryable": False,
+                },
+            },
+        )
+    if int(job.get("userId") or 0) != int(session["user_id"]):
+        raise HTTPException(status_code=404, detail="分析任务不存在")
+    return {
+        "success": True,
+        "data": job,
+    }
 
 
 @app.get("/api/v1/analysis/trend-scans")

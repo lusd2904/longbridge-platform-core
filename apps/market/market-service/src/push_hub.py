@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -9,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Deque, Dict, Iterable, List, Optional, Set
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 from apps.market.longbridge_shared import (
     PushCandlestickMode,
@@ -28,6 +30,24 @@ CLI_QUOTE_POLL_INTERVAL_SECONDS = 4.0
 CLI_DEPTH_POLL_INTERVAL_SECONDS = 5.0
 CLI_BROKERS_POLL_INTERVAL_SECONDS = 5.0
 CLI_TRADES_POLL_INTERVAL_SECONDS = 5.0
+INITIAL_PUSH_BROADCAST_SUPPRESS_SECONDS = 2.0
+CLI_FAILURE_COOLDOWN_SECONDS = max(
+    5.0,
+    float(os.getenv("LONGBRIDGE_CLI_PUSH_FAILURE_COOLDOWN_SECONDS", "60") or "60"),
+)
+CLI_FAILURE_LOG_INTERVAL_SECONDS = max(
+    5.0,
+    float(os.getenv("LONGBRIDGE_CLI_PUSH_FAILURE_LOG_INTERVAL_SECONDS", "60") or "60"),
+)
+
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    raw = str(os.getenv(name, default) or default).strip().lower()
+    return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+def _cli_push_polling_enabled() -> bool:
+    return _env_flag("LONGBRIDGE_CLI_PUSH_POLLING_ENABLED", "false")
 
 
 def _utc_now() -> str:
@@ -66,6 +86,33 @@ def _sub_type_name(value: Any) -> str:
     return raw
 
 
+def _websocket_connected(websocket: WebSocket) -> bool:
+    return (
+        getattr(websocket, "application_state", WebSocketState.CONNECTED) == WebSocketState.CONNECTED
+        and getattr(websocket, "client_state", WebSocketState.CONNECTED) == WebSocketState.CONNECTED
+    )
+
+
+def _event_poll_due(last_run: Dict[str, float], event_type: str, now: float, interval: float) -> bool:
+    due_at = last_run.get(event_type)
+    if due_at is None:
+        last_run[event_type] = now
+        return False
+    return now - due_at >= interval
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    class_name = exc.__class__.__name__.lower()
+    message = str(exc or "").lower()
+    return (
+        "ratelimit" in class_name
+        or "rate_limit" in class_name
+        or "429002" in message
+        or "api request is limited" in message
+        or "rate limit" in message
+    )
+
+
 class LongbridgePushSession:
     def __init__(self, user_id: int, loop: asyncio.AbstractEventLoop):
         self.user_id = int(user_id)
@@ -85,8 +132,13 @@ class LongbridgePushSession:
         self._cli_poller_thread: Optional[threading.Thread] = None
         self._cli_poller_stop = threading.Event()
         self._cli_poller_wakeup = threading.Event()
+        self._cli_failure_cooldowns: Dict[str, float] = {}
+        self._cli_failure_last_logs: Dict[str, float] = {}
+        self._cli_last_failure: Dict[str, Any] = {}
+        self._cli_snapshot_last_logs: Dict[str, float] = {}
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._heartbeat_stop = threading.Event()
+        self._suppress_push_broadcast_until = 0.0
         self._bind_callbacks()
 
     def _bind_callbacks(self) -> None:
@@ -96,8 +148,18 @@ class LongbridgePushSession:
         self._ctx.set_on_trades(lambda *args: self._handle_push("trades", *args))
         self._ctx.set_on_candlestick(lambda *args: self._handle_push("candlestick", *args))
 
-    def _cli_polling_mode(self) -> bool:
+    def _is_cli_quote_context(self) -> bool:
         return str(self._ctx.__class__.__name__) == "CliQuoteContext"
+
+    def _cli_polling_mode(self) -> bool:
+        return self._is_cli_quote_context() and _cli_push_polling_enabled()
+
+    def _cli_polling_disabled_reason(self) -> Optional[str]:
+        if not self._is_cli_quote_context():
+            return None
+        if not _cli_push_polling_enabled():
+            return "disabled-by-default"
+        return None
 
     def _split_callback_args(self, args: tuple[Any, ...]) -> tuple[Optional[str], Any, Dict[str, Any]]:
         if not args:
@@ -129,7 +191,7 @@ class LongbridgePushSession:
 
         return symbol, payload, meta
 
-    def _handle_push(self, event_type: str, *args: Any) -> None:
+    def _handle_push(self, event_type: str, *args: Any, broadcast: bool = True) -> None:
         symbol, payload, meta = self._split_callback_args(args)
         envelope = {
             "type": event_type,
@@ -142,7 +204,8 @@ class LongbridgePushSession:
             "dataSource": "longbridge-push",
         }
         self._latest_events.appendleft(envelope)
-        self._schedule_broadcast(envelope)
+        if broadcast and time.monotonic() >= self._suppress_push_broadcast_until:
+            self._schedule_broadcast(envelope)
 
     def _has_cli_polling_targets(self) -> bool:
         return bool(self._quote_subscriptions)
@@ -202,9 +265,10 @@ class LongbridgePushSession:
             for event_type, symbols in target_symbols.items():
                 if not symbols:
                     continue
+                if self._cli_polling_in_cooldown(event_type):
+                    continue
                 interval = interval_map[event_type]
-                due_at = last_run.get(event_type, 0.0)
-                if now - due_at < interval:
+                if not _event_poll_due(last_run, event_type, now, interval):
                     continue
                 self._poll_cli_event_type(event_type, symbols)
                 last_run[event_type] = time.monotonic()
@@ -234,13 +298,48 @@ class LongbridgePushSession:
                     continue
                 self._ctx.emit_push_event(event_type, symbol, payload)
         except Exception as exc:
-            LOGGER.warning(
-                "Longbridge CLI polling failed: user_id=%s event_type=%s symbols=%s error=%s",
+            self._record_cli_poll_failure(event_type, symbols, exc)
+
+    def _cli_polling_in_cooldown(self, event_type: str) -> bool:
+        return time.monotonic() < float(self._cli_failure_cooldowns.get(event_type) or 0.0)
+
+    def _record_cli_poll_failure(self, event_type: str, symbols: List[str], exc: Exception) -> None:
+        now = time.monotonic()
+        rate_limited = _is_rate_limit_error(exc)
+        self._cli_failure_cooldowns[event_type] = now + CLI_FAILURE_COOLDOWN_SECONDS
+        self._cli_last_failure = {
+            "eventType": event_type,
+            "symbolCount": len(symbols),
+            "error": str(exc),
+            "rateLimited": rate_limited,
+            "failedAt": _utc_now(),
+            "cooldownSeconds": CLI_FAILURE_COOLDOWN_SECONDS,
+        }
+
+        last_log = float(self._cli_failure_last_logs.get(event_type) or 0.0)
+        if now - last_log < CLI_FAILURE_LOG_INTERVAL_SECONDS:
+            LOGGER.debug(
+                "Longbridge CLI polling still %s: user_id=%s event_type=%s symbol_count=%s rate_limited=%s error=%s",
+                "rate limited" if rate_limited else "degraded",
                 self.user_id,
                 event_type,
-                symbols,
+                len(symbols),
+                rate_limited,
                 exc,
             )
+            return
+
+        self._cli_failure_last_logs[event_type] = now
+        LOGGER.warning(
+            "Longbridge CLI polling %s: user_id=%s event_type=%s symbol_count=%s cooldown_seconds=%s rate_limited=%s error=%s",
+            "rate limited" if rate_limited else "degraded",
+            self.user_id,
+            event_type,
+            len(symbols),
+            int(CLI_FAILURE_COOLDOWN_SECONDS),
+            rate_limited,
+            exc,
+        )
 
     def _emit_snapshot_events(self, snapshots: Dict[str, Any]) -> None:
         quote_rows = snapshots.get("quote")
@@ -248,7 +347,7 @@ class LongbridgePushSession:
             for row in quote_rows:
                 symbol = _normalize_symbol(row.get("symbol") if isinstance(row, dict) else getattr(row, "symbol", None))
                 if symbol:
-                    self._handle_push("quote", symbol, row)
+                    self._handle_push("quote", symbol, row, broadcast=False)
         for event_type in ("depth", "brokers", "trades"):
             event_map = snapshots.get(event_type)
             if not isinstance(event_map, dict):
@@ -256,7 +355,7 @@ class LongbridgePushSession:
             for symbol, payload in event_map.items():
                 normalized_symbol = _normalize_symbol(symbol)
                 if normalized_symbol:
-                    self._handle_push(event_type, normalized_symbol, payload)
+                    self._handle_push(event_type, normalized_symbol, payload, broadcast=False)
 
     def _build_snapshots(
         self,
@@ -266,18 +365,20 @@ class LongbridgePushSession:
         trade_count: int,
     ) -> Dict[str, Any]:
         snapshots: Dict[str, Any] = {}
+        if self._is_cli_quote_context() and not self._cli_polling_mode():
+            return snapshots
         if SubType.Quote in parsed_sub_types and hasattr(self._ctx, "realtime_quote"):
             try:
                 snapshots["quote"] = to_plain(self._ctx.realtime_quote(parsed_symbols))
             except Exception as exc:
-                LOGGER.warning("Longbridge quote snapshot failed: user_id=%s symbols=%s error=%s", self.user_id, parsed_symbols, exc)
+                self._record_cli_snapshot_failure("quote", len(parsed_symbols), exc)
         if SubType.Depth in parsed_sub_types and hasattr(self._ctx, "realtime_depth"):
             depth_snapshots: Dict[str, Any] = {}
             for symbol in parsed_symbols:
                 try:
                     depth_snapshots[symbol] = to_plain(self._ctx.realtime_depth(symbol))
                 except Exception as exc:
-                    LOGGER.warning("Longbridge depth snapshot failed: user_id=%s symbol=%s error=%s", self.user_id, symbol, exc)
+                    self._record_cli_snapshot_failure("depth", 1, exc)
             if depth_snapshots:
                 snapshots["depth"] = depth_snapshots
         if SubType.Brokers in parsed_sub_types and hasattr(self._ctx, "realtime_brokers"):
@@ -286,7 +387,7 @@ class LongbridgePushSession:
                 try:
                     broker_snapshots[symbol] = to_plain(self._ctx.realtime_brokers(symbol))
                 except Exception as exc:
-                    LOGGER.warning("Longbridge brokers snapshot failed: user_id=%s symbol=%s error=%s", self.user_id, symbol, exc)
+                    self._record_cli_snapshot_failure("brokers", 1, exc)
             if broker_snapshots:
                 snapshots["brokers"] = broker_snapshots
         if SubType.Trade in parsed_sub_types and hasattr(self._ctx, "realtime_trades"):
@@ -296,10 +397,37 @@ class LongbridgePushSession:
                 try:
                     trade_snapshots[symbol] = to_plain(self._ctx.realtime_trades(symbol, bounded_trade_count))
                 except Exception as exc:
-                    LOGGER.warning("Longbridge trades snapshot failed: user_id=%s symbol=%s error=%s", self.user_id, symbol, exc)
+                    self._record_cli_snapshot_failure("trades", 1, exc)
             if trade_snapshots:
                 snapshots["trades"] = trade_snapshots
         return snapshots
+
+    def _record_cli_snapshot_failure(self, event_type: str, symbol_count: int, exc: Exception) -> None:
+        now = time.monotonic()
+        rate_limited = _is_rate_limit_error(exc)
+        last_log = float(self._cli_snapshot_last_logs.get(event_type) or 0.0)
+        if now - last_log < CLI_FAILURE_LOG_INTERVAL_SECONDS:
+            LOGGER.debug(
+                "Longbridge CLI snapshot still %s: user_id=%s event_type=%s symbol_count=%s rate_limited=%s error=%s",
+                "rate limited" if rate_limited else "degraded",
+                self.user_id,
+                event_type,
+                symbol_count,
+                rate_limited,
+                exc,
+            )
+            return
+
+        self._cli_snapshot_last_logs[event_type] = now
+        LOGGER.warning(
+            "Longbridge CLI snapshot %s: user_id=%s event_type=%s symbol_count=%s rate_limited=%s error=%s",
+            "rate limited" if rate_limited else "degraded",
+            self.user_id,
+            event_type,
+            symbol_count,
+            rate_limited,
+            exc,
+        )
 
     def _schedule_broadcast(self, payload: Dict[str, Any]) -> None:
         if not self._connections:
@@ -309,13 +437,39 @@ class LongbridgePushSession:
 
     async def _broadcast(self, payload: Dict[str, Any]) -> None:
         stale: List[WebSocket] = []
+        failed_send_count = 0
+        last_send_error = ""
         for websocket in list(self._connections):
+            if not _websocket_connected(websocket):
+                stale.append(websocket)
+                continue
             try:
                 await websocket.send_json(payload)
-            except Exception:
+            except Exception as exc:
+                failed_send_count += 1
+                last_send_error = str(exc)
                 stale.append(websocket)
+        if failed_send_count and last_send_error:
+            LOGGER.warning(
+                "Longbridge push WebSocket send failed: user_id=%s event_type=%s failed_count=%s active_connections=%s error=%s",
+                self.user_id,
+                payload.get("type"),
+                failed_send_count,
+                len(self._connections),
+                last_send_error,
+            )
+        elif failed_send_count:
+            LOGGER.debug(
+                "Longbridge push WebSocket stale connections pruned: user_id=%s event_type=%s failed_count=%s active_connections=%s",
+                self.user_id,
+                payload.get("type"),
+                failed_send_count,
+                len(self._connections),
+            )
         for websocket in stale:
             self._connections.discard(websocket)
+        if stale and not self._connections:
+            self._stop_heartbeat()
 
     async def register_connection(self, websocket: WebSocket) -> None:
         self._connections.add(websocket)
@@ -388,6 +542,17 @@ class LongbridgePushSession:
                 },
                 "candlestickSubscriptions": self._candlestick_subscriptions,
                 "subscriptions": subscriptions,
+                "cliPolling": {
+                    "available": self._is_cli_quote_context(),
+                    "enabled": self._cli_polling_mode(),
+                    "disabledReason": self._cli_polling_disabled_reason(),
+                    "cooldowns": {
+                        event_type: max(0, round(expires_at - time.monotonic(), 3))
+                        for event_type, expires_at in self._cli_failure_cooldowns.items()
+                        if expires_at > time.monotonic()
+                    },
+                    "lastFailure": self._cli_last_failure,
+                },
                 "latestEvents": list(self._latest_events)[:20],
             }
 
@@ -407,6 +572,7 @@ class LongbridgePushSession:
 
         with self._op_lock:
             self._cli_trade_count = bounded_trade_count
+            self._suppress_push_broadcast_until = time.monotonic() + INITIAL_PUSH_BROADCAST_SUPPRESS_SECONDS
             if not self._cli_polling_mode():
                 self._ctx.subscribe(parsed_symbols, parsed_sub_types)
             else:

@@ -1,13 +1,13 @@
 x-backend-env: &backend-env
   DB_HOST: ${DOCKER_DB_HOST:-host.docker.internal}
   DB_READ_HOST: ${DOCKER_DB_READ_HOST:-host.docker.internal}
-  REDIS_HOST: ${DOCKER_REDIS_HOST:-sub2api-redis}
+  REDIS_HOST: ${DOCKER_REDIS_HOST:-redis}
   SKSHARE_BASE_URL: ${DOCKER_SKSHARE_BASE_URL:-http://host.docker.internal:18081}
   REF_SKSHARE_BASE_URL: ${DOCKER_SKSHARE_BASE_URL:-http://host.docker.internal:18081}
   LONGBRIDGE_AI_PROVIDER: ${LONGBRIDGE_AI_PROVIDER:-nvidia}
   LONGBRIDGE_AI_FALLBACK_PROVIDER: ${LONGBRIDGE_AI_FALLBACK_PROVIDER:-}
-  LONGBRIDGE_AI_BASE_URL: ${LONGBRIDGE_AI_BASE_URL:-http://sub2api:8080/v1}
-  LONGBRIDGE_AI_URL: ${LONGBRIDGE_AI_URL:-http://sub2api:8080/v1/chat/completions}
+  LONGBRIDGE_AI_BASE_URL: ${LONGBRIDGE_AI_BASE_URL:-https://lucen.cc/v1}
+  LONGBRIDGE_AI_URL: ${LONGBRIDGE_AI_URL:-https://lucen.cc/v1/chat/completions}
   LONGBRIDGE_AI_API_STYLE: ${LONGBRIDGE_AI_API_STYLE:-openai-chat-completions}
   LONGBRIDGE_AI_API_KEY: ${LONGBRIDGE_AI_API_KEY:-}
   LONGBRIDGE_AI_MODEL: ${LONGBRIDGE_AI_MODEL:-gpt-5.5}
@@ -21,11 +21,14 @@ x-backend-env: &backend-env
   LONGBRIDGE_AI_MODEL_VISION: ${LONGBRIDGE_AI_MODEL_VISION:-gpt-5.4}
   LONGBRIDGE_AI_REASONING_EFFORT: ${LONGBRIDGE_AI_REASONING_EFFORT:-medium}
   LONGBRIDGE_AI_SCAN_REASONING_EFFORT: ${LONGBRIDGE_AI_SCAN_REASONING_EFFORT:-high}
+  LONGBRIDGE_AI_TIMEOUT: ${LONGBRIDGE_AI_TIMEOUT:-8}
   LONGBRIDGE_RUNTIME: cli
   LONGBRIDGE_CLI_BIN: longbridge
+  LONGBRIDGE_CLI_PUSH_POLLING_ENABLED: ${LONGBRIDGE_CLI_PUSH_POLLING_ENABLED:-false}
   LONGBRIDGE_REGION: cn
   LONGPORT_REGION: cn
   REF_AGNO_SIDECAR_URL: ${REF_AGNO_SIDECAR_URL:-http://agno-sidecar:3200}
+  REF_ANALYSIS_SYNC_POSITIONS_LIMIT: ${REF_ANALYSIS_SYNC_POSITIONS_LIMIT:-12}
 
 x-backend-service: &backend-service
   image: refactor-v2-platform:local
@@ -35,13 +38,30 @@ x-backend-service: &backend-service
     <<: *backend-env
   extra_hosts:
     - "host.docker.internal:host-gateway"
-  volumes:
-    - ${HOME}/.longbridge:/root/.longbridge:ro
   networks:
     - refactor-v2
     - sub2api-network
 
+x-longbridge-cli-volumes: &longbridge-cli-volumes
+  - ${HOME}/.longbridge/config.json:/root/.longbridge/config.json:ro
+  - ${HOME}/.longbridge/openapi:/root/.longbridge/openapi:ro
+
 services:
+  redis:
+    image: ${DOCKER_REDIS_IMAGE:-redis:8-alpine}
+    container_name: refactor-v2-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    networks:
+      - refactor-v2
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   user-center:
     <<: *backend-service
     build:
@@ -65,6 +85,7 @@ services:
     <<: *backend-service
     container_name: refactor-v2-market
     command: ["scripts/docker_service_entrypoint.sh", "apps/market/market-service/src"]
+    volumes: *longbridge-cli-volumes
     depends_on:
       user-center:
         condition: service_started
@@ -144,6 +165,7 @@ services:
     <<: *backend-service
     container_name: refactor-v2-trade
     command: ["scripts/docker_service_entrypoint.sh", "apps/trading/trade-service/src"]
+    volumes: *longbridge-cli-volumes
     depends_on:
       user-center:
         condition: service_started
@@ -183,6 +205,7 @@ services:
     <<: *backend-service
     container_name: refactor-v2-scheduler
     command: ["scripts/docker_service_entrypoint.sh", "apps/operations/scheduler-service/src"]
+    volumes: *longbridge-cli-volumes
     depends_on:
       user-center:
         condition: service_started
@@ -312,3 +335,6 @@ networks:
   sub2api-network:
     external: true
     name: deploy_sub2api-network
+
+volumes:
+  redis-data:

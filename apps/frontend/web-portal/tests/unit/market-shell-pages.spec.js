@@ -704,6 +704,57 @@ describe('market shell pages', () => {
     expect(wrapper.findAll('section-card-header-stub').length).toBeGreaterThanOrEqual(2)
   })
 
+  it('renders legacy risk protection rows with global strategy ids', async () => {
+    riskApiMocks.getRiskOverviewSnapshot.mockResolvedValueOnce({
+      data: {
+        overview: {
+          score: 60,
+          scoreLabel: '可控',
+          scoreDescription: '快照风险概览',
+          maxWeight: 20,
+          positionLimit: 30,
+          drawdown: 4,
+          drawdownLimit: 8,
+          protectionCount: 1,
+          stopLossCount: 1,
+          takeProfitCount: 0
+        },
+        events: [],
+        stopLossOrders: [
+          {
+            id: 'legacy-sl-1',
+            symbol: 'aapl.us',
+            strategyId: 0,
+            stopPrice: 186,
+            currentPrice: 194,
+            distance: 4.1
+          }
+        ],
+        takeProfitOrders: [],
+        snapshotAt: '2026-03-27T08:50:00Z',
+        meta: {
+          dataSource: 'risk_overview_snapshot',
+          snapshotAt: '2026-03-27T08:50:00Z',
+          sources: {},
+          realtimeOverlay: []
+        }
+      }
+    })
+
+    const wrapper = shallowMount(RiskManagement, mountOptions)
+    await flushPromises()
+
+    expect(wrapper.vm.displayStopLossOrders).toHaveLength(1)
+    expect(wrapper.vm.displayStopLossOrders[0]).toEqual(expect.objectContaining({
+      id: 'legacy-sl-1',
+      symbol: 'AAPL.US',
+      strategyId: null,
+      strategyScopeLabel: '全局保护',
+      stopPrice: 186
+    }))
+    expect(wrapper.text()).toContain('止损订单')
+  })
+
   it('maps history coverage read model fields into the system coverage page', async () => {
     marketApiMocks.getMarketHistoryCoverage.mockClear()
     const wrapper = mount(HistoryCoverage, {

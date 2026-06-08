@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from legacy_trade_service import trade_commands as commands
+from legacy_trade_service import trade_submit_flow as submit_flow
 from legacy_trade_service.models import AuthUser, OrderCancelRequest, OrderSubmitRequest
 
 
@@ -91,6 +92,7 @@ def _stub_submit_context(
 ) -> None:
     monkeypatch.setattr(commands, "_build_trade_request_context", lambda *args, **kwargs: _context(broker))
     monkeypatch.setattr(commands, "_create_submit_order_saga", lambda *args, **kwargs: saga_id)
+    monkeypatch.setattr(submit_flow, "_create_submit_order_saga", lambda *args, **kwargs: saga_id)
 
 
 def _stub_cancel_context(
@@ -164,6 +166,7 @@ def test_submit_order_rejects_auto_source_when_account_is_not_paper(monkeypatch:
         ),
     )
     monkeypatch.setattr(commands, "_create_submit_order_saga", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("auto paper guard must run before saga creation")))
+    monkeypatch.setattr(submit_flow, "_create_submit_order_saga", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("auto paper guard must run before saga creation")))
 
     with pytest.raises(HTTPException) as exc_info:
         commands._submit_order(_user(), _request(), _auto_submit_payload())
@@ -187,6 +190,7 @@ def test_submit_order_allows_auto_source_for_longbridge_paper_account(monkeypatc
         ),
     )
     monkeypatch.setattr(commands, "_create_submit_order_saga", lambda *args, **kwargs: "saga-paper-1")
+    monkeypatch.setattr(submit_flow, "_create_submit_order_saga", lambda *args, **kwargs: "saga-paper-1")
     monkeypatch.setattr(commands, "_load_reference_price", lambda *args, **kwargs: (100.0, {"source": "request"}))
     monkeypatch.setattr(commands, "_run_order_risk_check", lambda *args, **kwargs: (True, "ok", "low"))
     monkeypatch.setattr(commands, "_upsert_projection", lambda *args, **kwargs: None)
@@ -213,6 +217,7 @@ def test_submit_order_allows_manual_source_for_non_paper_account(monkeypatch: py
         ),
     )
     monkeypatch.setattr(commands, "_create_submit_order_saga", lambda *args, **kwargs: "saga-manual-1")
+    monkeypatch.setattr(submit_flow, "_create_submit_order_saga", lambda *args, **kwargs: "saga-manual-1")
     monkeypatch.setattr(commands, "_load_reference_price", lambda *args, **kwargs: (100.0, {"source": "request"}))
     monkeypatch.setattr(commands, "_run_order_risk_check", lambda *args, **kwargs: (True, "ok", "low"))
     monkeypatch.setattr(commands, "_upsert_projection", lambda *args, **kwargs: None)

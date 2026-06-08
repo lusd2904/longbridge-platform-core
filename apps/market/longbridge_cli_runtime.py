@@ -20,6 +20,10 @@ class LongbridgeCliError(RuntimeError):
     pass
 
 
+class LongbridgeCliRateLimitError(LongbridgeCliError):
+    pass
+
+
 @dataclass(frozen=True)
 class CliConfig:
     region: str = "cn"
@@ -31,6 +35,19 @@ LOGGER = logging.getLogger(__name__)
 _AUTH_STATUS_CACHE_TTL_SECONDS = max(1, int(os.getenv("LONGBRIDGE_CLI_AUTH_CACHE_TTL_SECONDS", "60") or "60"))
 _AUTH_STATUS_CACHE_LOCK = threading.RLock()
 _AUTH_STATUS_CACHE: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
+_CLI_MIN_INTERVAL_SECONDS = max(
+    0.0,
+    float(os.getenv("LONGBRIDGE_CLI_MIN_INTERVAL_SECONDS", "0.75") or "0.75"),
+)
+_CLI_RATE_LIMIT_COOLDOWN_SECONDS = max(
+    1.0,
+    float(os.getenv("LONGBRIDGE_CLI_RATE_LIMIT_COOLDOWN_SECONDS", "8") or "8"),
+)
+_DEFAULT_CLI_QUOTE_BATCH_SIZE = 50
+_MAX_CLI_QUOTE_BATCH_SIZE = 100
+_CLI_REQUEST_LOCK = threading.RLock()
+_CLI_LAST_REQUEST_AT = 0.0
+_CLI_RATE_LIMIT_UNTIL = 0.0
 
 
 def use_cli_runtime() -> bool:
@@ -67,10 +84,9 @@ def _clean_env() -> Dict[str, str]:
 
 
 def _extract_json(raw: str) -> Any:
-    text = str(raw or "").strip()
+    text = _clean_cli_text(raw)
     if not text:
         return None
-    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -88,6 +104,59 @@ def _extract_json(raw: str) -> Any:
         raise LongbridgeCliError(f"长桥 CLI JSON 解析失败: {text[:300]}") from exc
 
 
+def _clean_cli_text(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text).strip()
+
+
+def _is_rate_limit_error(detail: str) -> bool:
+    normalized = detail.lower()
+    return "429002" in normalized or "api request is limited" in normalized
+
+
+def _throttle_cli_request() -> None:
+    global _CLI_LAST_REQUEST_AT
+    with _CLI_REQUEST_LOCK:
+        now = time.monotonic()
+        wait_until = max(_CLI_LAST_REQUEST_AT + _CLI_MIN_INTERVAL_SECONDS, _CLI_RATE_LIMIT_UNTIL)
+        wait_seconds = wait_until - now
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        _CLI_LAST_REQUEST_AT = time.monotonic()
+
+
+def _record_cli_rate_limit() -> None:
+    global _CLI_RATE_LIMIT_UNTIL
+    with _CLI_REQUEST_LOCK:
+        _CLI_RATE_LIMIT_UNTIL = max(
+            _CLI_RATE_LIMIT_UNTIL,
+            time.monotonic() + _CLI_RATE_LIMIT_COOLDOWN_SECONDS,
+        )
+        cooldown_until = _CLI_RATE_LIMIT_UNTIL
+    LOGGER.warning(
+        "Longbridge CLI rate limit cooldown activated: cooldown_seconds=%s cooldown_until=%.3f",
+        _CLI_RATE_LIMIT_COOLDOWN_SECONDS,
+        cooldown_until,
+    )
+
+
+def _quote_batch_size() -> int:
+    raw = os.getenv("LONGBRIDGE_CLI_QUOTE_BATCH_SIZE", str(_DEFAULT_CLI_QUOTE_BATCH_SIZE))
+    try:
+        size = int(raw or _DEFAULT_CLI_QUOTE_BATCH_SIZE)
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid LONGBRIDGE_CLI_QUOTE_BATCH_SIZE=%r; using %s", raw, _DEFAULT_CLI_QUOTE_BATCH_SIZE)
+        size = _DEFAULT_CLI_QUOTE_BATCH_SIZE
+    return max(1, min(_MAX_CLI_QUOTE_BATCH_SIZE, size))
+
+
+def _symbol_batches(symbols: Sequence[str], batch_size: int) -> Iterable[Sequence[str]]:
+    for start in range(0, len(symbols), batch_size):
+        yield symbols[start : start + batch_size]
+
+
 def run_longbridge_cli(
     args: Sequence[Any],
     *,
@@ -102,6 +171,7 @@ def run_longbridge_cli(
     if require_paper_account:
         ensure_paper_trading()
 
+    _throttle_cli_request()
     completed = subprocess.run(
         [cli_binary(), *normalized_args],
         env=_clean_env(),
@@ -110,8 +180,12 @@ def run_longbridge_cli(
         timeout=timeout or int(os.getenv("LONGBRIDGE_CLI_TIMEOUT", "45") or "45"),
     )
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip()
-        raise LongbridgeCliError(f"长桥 CLI 调用失败: {' '.join(normalized_args)}: {detail}")
+        detail = _clean_cli_text(completed.stderr or completed.stdout)
+        message = f"长桥 CLI 调用失败: {' '.join(normalized_args)}: {detail}"
+        if _is_rate_limit_error(detail):
+            _record_cli_rate_limit()
+            raise LongbridgeCliRateLimitError(message)
+        raise LongbridgeCliError(message)
     if not expect_json:
         return completed.stdout
     return _extract_json(completed.stdout)
@@ -350,8 +424,15 @@ class CliQuoteContext:
         return token
 
     def quote(self, symbols: Iterable[str]) -> List[AttrObject]:
-        payload = run_longbridge_cli(["quote", *list(symbols)])
-        return [_normalize_quote_item(item) for item in payload or [] if isinstance(item, dict)]
+        normalized_symbols = [str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()]
+        if not normalized_symbols:
+            return []
+
+        rows: List[AttrObject] = []
+        for batch in _symbol_batches(normalized_symbols, _quote_batch_size()):
+            payload = run_longbridge_cli(["quote", *batch])
+            rows.extend(_normalize_quote_item(item) for item in payload or [] if isinstance(item, dict))
+        return rows
 
     realtime_quote = quote
 

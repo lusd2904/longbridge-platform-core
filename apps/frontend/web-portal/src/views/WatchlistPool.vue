@@ -1075,4 +1075,83 @@ onUnmounted(() => {
   text-align: center;
   color: var(--text-muted);
 }
+
+@media (max-width: 768px) {
+  .watchlist-pool-page {
+    min-width: 0;
+  }
+
+  .hero-panel,
+  .panel-head,
+  .target-summary,
+  .target-head-meta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action-row {
+    justify-content: stretch;
+  }
+
+  .filter-select,
+  .session-switch {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .stats-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ledger-card,
+  .targets-ledger-card {
+    overflow: hidden;
+  }
+
+  .ledger-card :deep(.el-table),
+  .targets-ledger-card :deep(.el-table) {
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .ledger-card :deep(.el-table__inner-wrapper),
+  .ledger-card :deep(.el-scrollbar),
+  .ledger-card :deep(.el-scrollbar__wrap),
+  .ledger-card :deep(.el-scrollbar__view),
+  .targets-ledger-card :deep(.el-table__inner-wrapper),
+  .targets-ledger-card :deep(.el-scrollbar),
+  .targets-ledger-card :deep(.el-scrollbar__wrap),
+  .targets-ledger-card :deep(.el-scrollbar__view) {
+    max-width: 100%;
+  }
+
+  .ledger-card :deep(.el-table__header),
+  .ledger-card :deep(.el-table__body),
+  .targets-ledger-card :deep(.el-table__header),
+  .targets-ledger-card :deep(.el-table__body) {
+    width: 100% !important;
+    min-width: 100% !important;
+    table-layout: fixed;
+  }
+
+  .ledger-card :deep(col),
+  .targets-ledger-card :deep(col) {
+    width: auto !important;
+  }
+
+  .ledger-card :deep(.el-table__cell),
+  .targets-ledger-card :deep(.el-table__cell) {
+    min-width: 0;
+  }
+
+  .ledger-card :deep(.cell),
+  .targets-ledger-card :deep(.cell),
+  .quote-stack,
+  .scan-count-stack,
+  .table-action-group {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
 </style>

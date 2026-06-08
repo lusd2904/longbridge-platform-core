@@ -45,8 +45,9 @@ export function useAdaptiveLayout() {
     touchCapable.value = detectTouchCapability()
   }
 
-  const isCompactLayout = computed(() => false)
-  const isPhoneLayout = computed(() => false)
+  const compactBreakpoint = isNativeApp ? NATIVE_COMPACT_BREAKPOINT : COMPACT_BREAKPOINT
+  const isCompactLayout = computed(() => viewportWidth.value <= compactBreakpoint)
+  const isPhoneLayout = computed(() => viewportWidth.value <= PHONE_BREAKPOINT)
 
   onMounted(() => {
     syncViewport()

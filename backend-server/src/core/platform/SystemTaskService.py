@@ -139,6 +139,28 @@ class SystemTaskService:
             },
             "description": "每天盘前生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。"
         },
+        "watchlist_midday_review": {
+            "taskName": "自选股盘中复核",
+            "category": "analysis",
+            "scheduleType": "daily",
+            "enabled": True,
+            "intervalSeconds": None,
+            "runHour": 12,
+            "runMinute": 30,
+            "maxRequestsPerMinute": 4,
+            "batchSize": 1,
+            "allowAdminToggle": True,
+            "userScope": "system",
+            "singleRun": False,
+            "settings": {
+                "autoBuyEnabled": False,
+                "autoBuyMaxSymbols": 2,
+                "autoBuyMaxAmount": 2000,
+                "autoBuyMaxPositionRatio": 0.08,
+                "autoBuyMinConfidence": 72
+            },
+            "description": "盘中补充生成自选股 AI 复核建议，用于风险、趋势和仓位线索更新；默认只复核不交易。"
+        },
         "watchlist_post_close_review": {
             "taskName": "自选股盘后复核",
             "category": "analysis",

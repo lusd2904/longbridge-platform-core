@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import http from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import { WebSocket } from 'ws'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -9,8 +10,8 @@ import {
   startDesktopServer
 } from '../../desktop/static-server.mjs'
 
-const projectRoot = path.resolve(import.meta.dirname, '../..')
-const distDir = path.resolve(projectRoot, 'dist')
+let tempRoot
+let distDir
 let desktopServer
 let apiServer
 let upstreamWsPath = ''
@@ -27,6 +28,8 @@ function listen(server) {
 
 describe('desktop static server', () => {
   beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'refv2-desktop-static-'))
+    distDir = path.join(tempRoot, 'dist')
     await fs.mkdir(path.join(distDir, 'assets'), { recursive: true })
     await fs.writeFile(path.join(distDir, 'index.html'), '<main id="app">desktop shell</main>')
     await fs.writeFile(path.join(distDir, 'assets', 'fixture.js'), 'window.fixture = true')
@@ -62,6 +65,7 @@ describe('desktop static server', () => {
     })
     const apiPort = await listen(apiServer)
     desktopServer = await startDesktopServer(0, {
+      distDir,
       serviceTargets: {
         market: `http://127.0.0.1:${apiPort}`
       }
@@ -74,6 +78,9 @@ describe('desktop static server', () => {
     }
     if (apiServer) {
       await new Promise((resolve) => apiServer.close(resolve))
+    }
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true })
     }
   })
 

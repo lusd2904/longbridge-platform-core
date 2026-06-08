@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from pathlib import Path
+import re
 import secrets
+import subprocess
 from typing import Dict
 
 from dotenv import dotenv_values
@@ -171,6 +173,63 @@ def _render_env(payload: "OrderedDict[str, str]") -> str:
     return "\n".join(lines)
 
 
+def ensure_longbridge_cli_auth_alias(home_dir: Path | None = None) -> Path | None:
+    longbridge_home = (home_dir or Path.home()) / ".longbridge" / "openapi"
+    alias_path = longbridge_home / "cli-auth"
+    tokens_dir = longbridge_home / "tokens"
+
+    if alias_path.exists():
+        return alias_path
+    if alias_path.is_symlink():
+        alias_path.unlink()
+    if not tokens_dir.exists():
+        return None
+
+    token_files = [path for path in tokens_dir.iterdir() if path.is_file()]
+    if not token_files:
+        return None
+
+    latest_token = max(token_files, key=lambda path: path.stat().st_mtime)
+    alias_path.symlink_to(Path("tokens") / latest_token.name)
+    return alias_path
+
+
+def _detect_longbridge_cli_version() -> str:
+    try:
+        completed = subprocess.run(
+            ["longbridge", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return ""
+
+    match = re.search(r"(\d+\.\d+\.\d+)", f"{completed.stdout}\n{completed.stderr}")
+    return match.group(1) if match else ""
+
+
+def ensure_longbridge_cli_runtime_files(
+    home_dir: Path | None = None,
+    *,
+    cli_version: str | None = None,
+) -> Path | None:
+    alias_path = ensure_longbridge_cli_auth_alias(home_dir)
+    version = (cli_version or _detect_longbridge_cli_version()).strip()
+    if not version:
+        return alias_path
+
+    longbridge_home = (home_dir or Path.home()) / ".longbridge"
+    if not longbridge_home.exists():
+        return alias_path
+    for filename in (".terminal-last-run-version", ".terminal-latest-version"):
+        version_path = longbridge_home / filename
+        if not version_path.exists() or version_path.read_text(encoding="utf-8").strip() != version:
+            version_path.write_text(version, encoding="utf-8")
+    return alias_path
+
+
 def ensure_refactor_env() -> Dict[str, str]:
     example = _read_env(EXAMPLE_ENV)
     current = _read_env(TARGET_ENV)
@@ -209,10 +268,10 @@ def ensure_refactor_env() -> Dict[str, str]:
     ai_url = _coalesce(
         current.get("REF_LONGBRIDGE_AI_URL"),
         example.get("REF_LONGBRIDGE_AI_URL"),
-        default="http://sub2api:8080/v1/chat/completions",
+        default="https://lucen.cc/v1/chat/completions",
     )
     if "localhost:5005" in ai_url.lower():
-        ai_url = "http://sub2api:8080/v1/chat/completions"
+        ai_url = "https://lucen.cc/v1/chat/completions"
     skshare_base = _coalesce(
         current.get("REF_SKSHARE_BASE_URL"),
         current.get("SKSHARE_BASE_URL"),
@@ -310,7 +369,7 @@ def ensure_refactor_env() -> Dict[str, str]:
             "SKSHARE_TIMEOUT": skshare_timeout,
             "LONGBRIDGE_AI_PROVIDER": _coalesce(current.get("LONGBRIDGE_AI_PROVIDER"), example.get("LONGBRIDGE_AI_PROVIDER"), default="nvidia"),
             "LONGBRIDGE_AI_FALLBACK_PROVIDER": _coalesce(current.get("LONGBRIDGE_AI_FALLBACK_PROVIDER"), example.get("LONGBRIDGE_AI_FALLBACK_PROVIDER"), default=""),
-            "LONGBRIDGE_AI_BASE_URL": _coalesce(current.get("LONGBRIDGE_AI_BASE_URL"), example.get("LONGBRIDGE_AI_BASE_URL"), default="http://sub2api:8080/v1"),
+            "LONGBRIDGE_AI_BASE_URL": _coalesce(current.get("LONGBRIDGE_AI_BASE_URL"), example.get("LONGBRIDGE_AI_BASE_URL"), default="https://lucen.cc/v1"),
             "LONGBRIDGE_AI_URL": _coalesce(current.get("LONGBRIDGE_AI_URL"), example.get("LONGBRIDGE_AI_URL"), ai_url, default=ai_url),
             "LONGBRIDGE_AI_API_STYLE": _coalesce(current.get("LONGBRIDGE_AI_API_STYLE"), example.get("LONGBRIDGE_AI_API_STYLE"), default="openai-chat-completions"),
             "LONGBRIDGE_AI_API_KEY": _coalesce(current.get("LONGBRIDGE_AI_API_KEY"), example.get("LONGBRIDGE_AI_API_KEY"), default=""),
@@ -334,6 +393,7 @@ def ensure_refactor_env() -> Dict[str, str]:
         if value:
             payload[key] = value
 
+    ensure_longbridge_cli_runtime_files()
     TARGET_ENV.write_text(_render_env(payload), encoding="utf-8")
     return dict(payload)
 

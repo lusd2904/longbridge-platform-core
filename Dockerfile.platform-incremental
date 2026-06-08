@@ -1,0 +1,4 @@
+FROM refactor-v2-platform:local
+
+WORKDIR /app
+COPY . .

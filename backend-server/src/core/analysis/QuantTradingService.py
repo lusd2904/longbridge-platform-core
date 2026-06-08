@@ -332,6 +332,7 @@ class QuantTradingService:
                 max_amount=safe_max_amount,
                 max_position_ratio=safe_position_ratio,
                 min_confidence=safe_min_confidence,
+                require_paper=True,
             )
             auto_trade = {"enabled": True, **execution}
 
@@ -366,26 +367,75 @@ class QuantTradingService:
                 {
                     "key": "trend",
                     "label": "趋势因子",
-                    "inputs": ["latestClose", "ma20", "ma60", "ma120", "return20", "return60", "macdHist", "momentumScore"],
+                    "inputs": [
+                        "latestClose", "ma5", "ma10", "ma20", "ma30", "ma60", "ma120",
+                        "ema12", "ema26", "return20", "return60", "maSpread20_60",
+                        "maSlope20", "adx14", "macdHist",
+                    ],
                     "source": "Qlib-style factor pipeline",
+                },
+                {
+                    "key": "priceAction",
+                    "label": "价型因子",
+                    "inputs": [
+                        "kMid", "kLen", "upperShadow", "lowerShadow",
+                        "pricePosition20", "pricePosition60", "bollPercentB20",
+                    ],
+                    "source": "Qlib Alpha158-style candle and rolling position factors",
+                },
+                {
+                    "key": "momentum",
+                    "label": "动量因子",
+                    "inputs": [
+                        "rsi6", "rsi14", "rsi28", "roc12", "stochK14",
+                        "williamsR14", "cci20", "momentumScore",
+                    ],
+                    "source": "TA-Lib/pandas-ta style momentum factors",
                 },
                 {
                     "key": "breakout",
                     "label": "突破因子",
-                    "inputs": ["distanceHigh20", "volumeRatio20", "dayChangePercent"],
+                    "inputs": ["distanceHigh20", "distanceHigh60", "volumeRatio20", "volumeRatio60", "dayChangePercent", "bollBandwidth20"],
                     "source": "Qlib-style factor pipeline",
+                },
+                {
+                    "key": "volumeFlow",
+                    "label": "量能资金因子",
+                    "inputs": ["volumeRatio5", "volumeRatio20", "obvSlope20", "mfi14", "cmf20", "closeVolumeCorr20"],
+                    "source": "TA-Lib/pandas-ta style volume factors",
                 },
                 {
                     "key": "reversion",
                     "label": "回归因子",
-                    "inputs": ["rsi14", "supportDistance", "return20"],
+                    "inputs": ["rsi14", "stochK14", "bollPercentB20", "supportDistance", "distanceLow20", "return20"],
                     "source": "Qlib-style factor pipeline",
                 },
                 {
-                    "key": "risk",
+                    "key": "volatility",
+                    "label": "波动因子",
+                    "inputs": ["volatility5", "volatility20", "volatility60", "atr14Percent", "bollBandwidth20", "downsideVol20"],
+                    "source": "TA-Lib/pandas-ta style volatility factors",
+                },
+                {
+                    "key": "liquidity",
+                    "label": "流动性因子",
+                    "inputs": ["avgVolume20", "avgDollarVolume20", "volumeTrend20", "vwapDistance20"],
+                    "source": "Qlib-style volume/liquidity factors",
+                },
+                {
+                    "key": "riskPenalty",
                     "label": "风险扣分",
-                    "inputs": ["trendScanRisk", "volatility20", "atrPercent", "rsi14", "distanceHigh20"],
+                    "inputs": [
+                        "trendScanRisk", "volatility20", "atr14Percent", "rsi14",
+                        "distanceHigh20", "maxDrawdown20", "maxDrawdown60", "downsideVol20",
+                    ],
                     "source": "vn.py/Lean-style pre-trade gate",
+                },
+                {
+                    "key": "factorSet",
+                    "label": "高维 Alpha 因子集",
+                    "inputs": ["factorSet", "factorSetVersion", "factorCount", "factorFamilies"],
+                    "source": "Qlib Alpha158/Alpha360-style OHLCV lag, rolling, rank and correlation factors",
                 },
             ],
         }
@@ -1561,6 +1611,7 @@ class QuantTradingService:
         snapshot: Dict[str, Any],
         trend_scan: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        opens = [cls._safe_float(item.get('open') or item.get('close')) for item in series]
         closes = [cls._safe_float(item.get('close')) for item in series]
         highs = [cls._safe_float(item.get('high') or item.get('close')) for item in series]
         lows = [cls._safe_float(item.get('low') or item.get('close')) for item in series]
@@ -1568,50 +1619,180 @@ class QuantTradingService:
         latest = series[-1] if series else {}
         previous_close = closes[-2] if len(closes) >= 2 else 0.0
         latest_close = closes[-1] if closes else 0.0
+        latest_open = opens[-1] if opens else latest_close
+        latest_high = highs[-1] if highs else latest_close
+        latest_low = lows[-1] if lows else latest_close
+        ma5 = cls._moving_average(closes, 5)
+        ma10 = cls._moving_average(closes, 10)
         ma20 = cls._moving_average(closes, 20)
+        ma30 = cls._moving_average(closes, 30)
         ma60 = cls._moving_average(closes, 60)
         ma120 = cls._moving_average(closes, 120)
+        ema12 = cls._ema(closes, 12)
+        ema26 = cls._ema(closes, 26)
+        return5 = cls._period_return(closes, 5)
+        return10 = cls._period_return(closes, 10)
         return20 = cls._period_return(closes, 20)
+        return30 = cls._period_return(closes, 30)
         return60 = cls._period_return(closes, 60)
         return120 = cls._period_return(closes, 120)
-        rsi14 = cls._safe_float(snapshot.get('rsi'), cls._rsi(closes, 14)) or cls._rsi(closes, 14)
+        rsi6 = cls._rsi(closes, 6)
+        computed_rsi14 = cls._rsi(closes, 14)
+        rsi14 = cls._safe_float(snapshot.get('rsi'), computed_rsi14) or computed_rsi14
+        rsi28 = cls._rsi(closes, 28)
+        macd_hist = cls._safe_float(snapshot.get('macdHist'), cls._macd_hist(closes))
+        roc12 = cls._safe_float(snapshot.get('roc'), cls._period_return(closes, 12))
         volatility20 = cls._volatility(closes, 20)
+        volatility5 = cls._volatility(closes, 5)
+        volatility10 = cls._volatility(closes, 10)
+        volatility60 = cls._volatility(closes, 60)
         high20_previous = max(highs[-21:-1]) if len(highs) >= 21 else max(highs[:-1] or highs or [0.0])
+        high60_previous = max(highs[-61:-1]) if len(highs) >= 61 else max(highs[:-1] or highs or [0.0])
         low20 = min(lows[-20:]) if lows else 0.0
+        low60 = min(lows[-60:]) if lows else 0.0
         avg_volume20 = cls._moving_average(volumes[:-1], 20) if len(volumes) > 1 else 0.0
+        avg_volume5 = cls._moving_average(volumes[:-1], 5) if len(volumes) > 1 else 0.0
+        avg_volume60 = cls._moving_average(volumes[:-1], 60) if len(volumes) > 1 else 0.0
+        latest_volume = volumes[-1] if volumes else 0.0
+        volume_ratio5 = round(latest_volume / avg_volume5, 2) if latest_volume and avg_volume5 else 0.0
         volume_ratio20 = round(volumes[-1] / avg_volume20, 2) if volumes and avg_volume20 else 0.0
+        volume_ratio60 = round(latest_volume / avg_volume60, 2) if latest_volume and avg_volume60 else 0.0
+        volume_trend20 = round(((avg_volume5 - avg_volume20) / avg_volume20) * 100, 2) if avg_volume5 and avg_volume20 else 0.0
         distance_high20 = round(((latest_close - high20_previous) / high20_previous) * 100, 2) if latest_close and high20_previous else 0.0
+        distance_high60 = round(((latest_close - high60_previous) / high60_previous) * 100, 2) if latest_close and high60_previous else 0.0
         distance_low20 = round(((latest_close - low20) / low20) * 100, 2) if latest_close and low20 else 0.0
+        distance_low60 = round(((latest_close - low60) / low60) * 100, 2) if latest_close and low60 else 0.0
         day_change_percent = round(((latest_close - previous_close) / previous_close) * 100, 2) if latest_close and previous_close else 0.0
-        atr = cls._safe_float(snapshot.get('atr'))
+        computed_atr14 = cls._atr(highs, lows, closes, 14)
+        atr = cls._safe_float(snapshot.get('atr'), computed_atr14) or computed_atr14
         atr_percent = round((atr / latest_close) * 100, 2) if atr and latest_close else 0.0
         support_price = cls._safe_float(snapshot.get('supportPrice'))
-        boll_lower = cls._safe_float(snapshot.get('bollLower'))
+        boll_mid = cls._moving_average(closes, 20)
+        boll_std = cls._stddev(closes[-20:])
+        boll_upper = cls._safe_float(snapshot.get('bollUpper'), boll_mid + boll_std * 2 if boll_mid else 0.0)
+        boll_lower = cls._safe_float(snapshot.get('bollLower'), boll_mid - boll_std * 2 if boll_mid else 0.0)
         support_distance = cls._distance_percent(latest_close, support_price or boll_lower)
+        boll_bandwidth = round(((boll_upper - boll_lower) / boll_mid) * 100, 2) if boll_mid else 0.0
+        boll_percent_b = round(((latest_close - boll_lower) / (boll_upper - boll_lower)) * 100, 2) if boll_upper != boll_lower else 50.0
+        true_range = max(latest_high - latest_low, abs(latest_high - previous_close), abs(latest_low - previous_close)) if previous_close else latest_high - latest_low
+        k_len = round((latest_high - latest_low) / latest_close * 100, 2) if latest_close else 0.0
+        k_mid = round((latest_close - latest_open) / latest_open * 100, 2) if latest_open else 0.0
+        upper_shadow = round((latest_high - max(latest_open, latest_close)) / latest_close * 100, 2) if latest_close else 0.0
+        lower_shadow = round((min(latest_open, latest_close) - latest_low) / latest_close * 100, 2) if latest_close else 0.0
+        price_position20 = cls._price_position(latest_close, high20_previous, low20)
+        price_position60 = cls._price_position(latest_close, high60_previous, low60)
+        vwap20 = cls._vwap(highs, lows, closes, volumes, 20)
+        vwap_distance20 = round(((latest_close - vwap20) / vwap20) * 100, 2) if latest_close and vwap20 else 0.0
+        avg_dollar_volume20 = round(cls._moving_average([closes[index] * volumes[index] for index in range(len(closes))], 20), 2) if closes and volumes else 0.0
+        ma_slope20 = cls._moving_average_slope(closes, 20)
+        ma_spread20_60 = round(((ma20 - ma60) / ma60) * 100, 2) if ma20 and ma60 else 0.0
+        obv_series = cls._obv_series(closes, volumes)
+        obv_value = round(obv_series[-1], 2) if obv_series else 0.0
+        obv_slope20 = cls._series_slope_percent(obv_series, 20)
+        mfi14 = cls._money_flow_index(highs, lows, closes, volumes, 14)
+        cmf20 = cls._chaikin_money_flow(highs, lows, closes, volumes, 20)
+        stoch_k14 = cls._stochastic_k(closes, highs, lows, 14)
+        williams_r14 = cls._williams_r(closes, highs, lows, 14)
+        cci20 = cls._cci(highs, lows, closes, 20)
+        adx14 = cls._adx(highs, lows, closes, 14)
+        max_drawdown20 = cls._max_drawdown(closes, 20)
+        max_drawdown60 = cls._max_drawdown(closes, 60)
+        downside_vol20 = cls._downside_volatility(closes, 20)
+        close_volume_corr20 = cls._rolling_correlation(closes, volumes, 20)
+        return_volatility_ratio20 = round(return20 / volatility20, 2) if volatility20 else 0.0
         trend_strength = cls._safe_float((trend_scan or {}).get('trendStrength'))
         technical_score = cls._safe_float((trend_scan or {}).get('technicalScore'))
+        factor_set = cls._build_alpha_factor_set(
+            opens=opens,
+            highs=highs,
+            lows=lows,
+            closes=closes,
+            volumes=volumes,
+        )
 
         return {
             "tradeDate": latest.get('date') or snapshot.get('tradeDate'),
             "historyCount": len(series),
+            "factorSetVersion": factor_set["version"],
+            "factorCount": factor_set["count"],
+            "factorFamilies": factor_set["families"],
+            "factorSet": factor_set,
             "latestClose": round(latest_close, 4),
+            "latestOpen": round(latest_open, 4),
+            "latestHigh": round(latest_high, 4),
+            "latestLow": round(latest_low, 4),
+            "latestVolume": round(latest_volume, 2),
             "dayChangePercent": day_change_percent,
+            "ma5": ma5,
+            "ma10": ma10,
             "ma20": ma20,
+            "ma30": ma30,
             "ma60": ma60,
             "ma120": ma120,
+            "ema12": ema12,
+            "ema26": ema26,
+            "return5": return5,
+            "return10": return10,
             "return20": return20,
+            "return30": return30,
             "return60": return60,
             "return120": return120,
+            "returnVolatilityRatio20": return_volatility_ratio20,
+            "rsi6": round(rsi6, 2),
             "rsi14": round(rsi14, 2),
-            "macdHist": cls._safe_float(snapshot.get('macdHist')),
-            "roc": cls._safe_float(snapshot.get('roc')),
+            "rsi28": round(rsi28, 2),
+            "macdHist": macd_hist,
+            "roc": roc12,
+            "roc12": roc12,
             "momentumScore": cls._safe_float(snapshot.get('momentumScore')),
+            "stochK14": stoch_k14,
+            "williamsR14": williams_r14,
+            "cci20": cci20,
+            "adx14": adx14,
+            "volatility5": volatility5,
+            "volatility10": volatility10,
             "volatility20": volatility20,
+            "volatility60": volatility60,
+            "atr14": round(atr, 4),
             "atrPercent": atr_percent,
+            "atr14Percent": atr_percent,
+            "bollMid20": round(boll_mid, 4),
+            "bollUpper20": round(boll_upper, 4),
+            "bollLower20": round(boll_lower, 4),
+            "bollBandwidth20": boll_bandwidth,
+            "bollPercentB20": boll_percent_b,
+            "trueRangePercent": round((true_range / latest_close) * 100, 2) if true_range and latest_close else 0.0,
+            "avgVolume5": round(avg_volume5, 2),
             "volumeRatio20": volume_ratio20,
+            "avgVolume20": round(avg_volume20, 2),
+            "avgVolume60": round(avg_volume60, 2),
+            "volumeRatio5": volume_ratio5,
+            "volumeRatio60": volume_ratio60,
+            "volumeTrend20": volume_trend20,
+            "avgDollarVolume20": avg_dollar_volume20,
+            "obv": obv_value,
+            "obvSlope20": obv_slope20,
+            "mfi14": mfi14,
+            "cmf20": cmf20,
+            "closeVolumeCorr20": close_volume_corr20,
             "distanceHigh20": distance_high20,
+            "distanceHigh60": distance_high60,
             "distanceLow20": distance_low20,
+            "distanceLow60": distance_low60,
             "supportDistance": support_distance,
+            "pricePosition20": price_position20,
+            "pricePosition60": price_position60,
+            "vwap20": vwap20,
+            "vwapDistance20": vwap_distance20,
+            "kMid": k_mid,
+            "kLen": k_len,
+            "upperShadow": upper_shadow,
+            "lowerShadow": lower_shadow,
+            "maSlope20": ma_slope20,
+            "maSpread20_60": ma_spread20_60,
+            "maxDrawdown20": max_drawdown20,
+            "maxDrawdown60": max_drawdown60,
+            "downsideVol20": downside_vol20,
             "trendStrength": trend_strength,
             "technicalScore": technical_score,
             "trendScanRisk": str((trend_scan or {}).get('riskLevel') or '').lower(),
@@ -1620,76 +1801,222 @@ class QuantTradingService:
 
     @classmethod
     def _score_watchlist_quant_metrics(cls, *, metrics: Dict[str, Any], strategy_profile: str) -> Dict[str, Any]:
-        latest_close = metrics["latestClose"]
-        ma20 = metrics["ma20"]
-        ma60 = metrics["ma60"]
-        ma120 = metrics["ma120"]
-        rsi14 = metrics["rsi14"]
+        latest_close = cls._safe_float(metrics.get("latestClose"))
+        ma5 = cls._safe_float(metrics.get("ma5"))
+        ma10 = cls._safe_float(metrics.get("ma10"))
+        ma20 = cls._safe_float(metrics.get("ma20"))
+        ma30 = cls._safe_float(metrics.get("ma30"))
+        ma60 = cls._safe_float(metrics.get("ma60"))
+        ma120 = cls._safe_float(metrics.get("ma120"))
+        ema12 = cls._safe_float(metrics.get("ema12"))
+        ema26 = cls._safe_float(metrics.get("ema26"))
+        rsi6 = cls._safe_float(metrics.get("rsi6"), 50.0)
+        rsi14 = cls._safe_float(metrics.get("rsi14"), 50.0)
+        rsi28 = cls._safe_float(metrics.get("rsi28"), 50.0)
         tags: List[str] = []
 
         trend_score = 0.0
         if latest_close and ma20 and latest_close >= ma20:
-            trend_score += 14
+            trend_score += 11
             tags.append("站上20日线")
+        if ma5 and ma10 and ma5 >= ma10:
+            trend_score += 4
         if ma20 and ma60 and ma20 >= ma60:
-            trend_score += 14
+            trend_score += 10
             tags.append("20/60多头")
         if ma60 and ma120 and ma60 >= ma120:
-            trend_score += 8
+            trend_score += 6
             tags.append("中期趋势顺")
-        trend_score += max(-8, min(12, metrics["return20"] / 1.5))
-        trend_score += max(-6, min(10, metrics["return60"] / 3.0))
-        if metrics["macdHist"] > 0:
+        if ma20 and ma30 and ma20 >= ma30:
+            trend_score += 3
+        if ema12 and ema26 and ema12 >= ema26:
             trend_score += 5
+        trend_score += max(-8, min(10, cls._safe_float(metrics.get("return20")) / 1.8))
+        trend_score += max(-6, min(8, cls._safe_float(metrics.get("return60")) / 3.5))
+        trend_score += max(-5, min(6, cls._safe_float(metrics.get("maSlope20")) / 1.8))
+        trend_score += max(-4, min(6, cls._safe_float(metrics.get("maSpread20_60")) / 2.2))
+        if cls._safe_float(metrics.get("adx14")) >= 25:
+            trend_score += 5
+            tags.append("ADX趋势确认")
+        if cls._safe_float(metrics.get("macdHist")) > 0:
+            trend_score += 4
             tags.append("MACD偏多")
-        trend_score += max(-6, min(8, (metrics["momentumScore"] - 50) / 6)) if metrics["momentumScore"] else 0
+        trend_score += max(-5, min(6, (cls._safe_float(metrics.get("technicalScore")) - 55) / 8)) if metrics.get("technicalScore") else 0
+
+        price_action_score = 0.0
+        price_position20 = cls._safe_float(metrics.get("pricePosition20"), 50.0)
+        price_position60 = cls._safe_float(metrics.get("pricePosition60"), 50.0)
+        k_mid = cls._safe_float(metrics.get("kMid"))
+        if 55 <= price_position20 <= 92:
+            price_action_score += 7
+        elif price_position20 >= 92:
+            price_action_score += 3
+        elif price_position20 <= 18:
+            price_action_score -= 5
+        if 50 <= price_position60 <= 90:
+            price_action_score += 5
+        if k_mid > 0:
+            price_action_score += min(5, k_mid * 1.2)
+        if cls._safe_float(metrics.get("lowerShadow")) >= cls._safe_float(metrics.get("upperShadow")) * 1.4 and k_mid >= -1.0:
+            price_action_score += 4
+            tags.append("下影承接")
+        if cls._safe_float(metrics.get("upperShadow")) >= 3.0 and k_mid < 0:
+            price_action_score -= 5
+        boll_percent_b = cls._safe_float(metrics.get("bollPercentB20"), 50.0)
+        if 45 <= boll_percent_b <= 88:
+            price_action_score += 4
+        elif boll_percent_b > 115:
+            price_action_score -= 4
+        price_action_score += max(-4, min(4, cls._safe_float(metrics.get("vwapDistance20")) / 2.5))
+
+        momentum_score = 0.0
+        momentum_score += max(-7, min(8, cls._safe_float(metrics.get("roc12")) / 2.0))
+        momentum_score += max(-6, min(8, cls._safe_float(metrics.get("returnVolatilityRatio20")) * 2.0))
+        if 52 <= rsi14 <= 72:
+            momentum_score += 7
+            tags.append("RSI强势区")
+        elif rsi14 > 78:
+            momentum_score -= 6
+        elif rsi14 < 35:
+            momentum_score -= 4
+        if rsi6 >= rsi14 >= rsi28 and rsi14 >= 50:
+            momentum_score += 5
+        stoch_k14 = cls._safe_float(metrics.get("stochK14"), 50.0)
+        if 45 <= stoch_k14 <= 82:
+            momentum_score += 4
+        elif stoch_k14 > 92:
+            momentum_score -= 4
+        williams_r14 = cls._safe_float(metrics.get("williamsR14"), -50.0)
+        if -65 <= williams_r14 <= -20:
+            momentum_score += 3
+        elif williams_r14 > -10:
+            momentum_score -= 3
+        cci20 = cls._safe_float(metrics.get("cci20"))
+        if 0 <= cci20 <= 180:
+            momentum_score += 4
+        elif cci20 > 240 or cci20 < -180:
+            momentum_score -= 4
+        momentum_score += max(-5, min(6, (cls._safe_float(metrics.get("momentumScore")) - 50) / 7)) if metrics.get("momentumScore") else 0
 
         breakout_score = 0.0
-        if metrics["distanceHigh20"] >= 0:
-            breakout_score += 14
+        distance_high20 = cls._safe_float(metrics.get("distanceHigh20"))
+        distance_high60 = cls._safe_float(metrics.get("distanceHigh60"))
+        volume_ratio20 = cls._safe_float(metrics.get("volumeRatio20"))
+        if distance_high20 >= 0:
+            breakout_score += 11
             tags.append("20日突破")
-        elif metrics["distanceHigh20"] >= -2.0:
-            breakout_score += 9
+        elif distance_high20 >= -2.0:
+            breakout_score += 7
             tags.append("接近20日高点")
-        if metrics["volumeRatio20"] >= 1.5:
+        if distance_high60 >= 0:
             breakout_score += 8
-            tags.append("明显放量")
-        elif metrics["volumeRatio20"] >= 1.15:
-            breakout_score += 5
-            tags.append("温和放量")
-        if metrics["return20"] > 0 and metrics["dayChangePercent"] > 0:
+            tags.append("60日突破")
+        elif distance_high60 >= -3.5:
             breakout_score += 4
+        if volume_ratio20 >= 1.5:
+            breakout_score += 7
+            tags.append("明显放量")
+        elif volume_ratio20 >= 1.15:
+            breakout_score += 4
+            tags.append("温和放量")
+        if cls._safe_float(metrics.get("volumeRatio60")) >= 1.2:
+            breakout_score += 3
+        if cls._safe_float(metrics.get("return20")) > 0 and cls._safe_float(metrics.get("dayChangePercent")) > 0:
+            breakout_score += 4
+        if cls._safe_float(metrics.get("bollBandwidth20")) <= 8 and distance_high20 >= -4:
+            breakout_score += 3
+
+        volume_flow_score = 0.0
+        if cls._safe_float(metrics.get("volumeRatio5")) >= 1.1 and cls._safe_float(metrics.get("dayChangePercent")) > 0:
+            volume_flow_score += 5
+        if cls._safe_float(metrics.get("obvSlope20")) > 0:
+            volume_flow_score += min(7, cls._safe_float(metrics.get("obvSlope20")) / 4)
+            tags.append("OBV走强")
+        mfi14 = cls._safe_float(metrics.get("mfi14"), 50.0)
+        if 45 <= mfi14 <= 75:
+            volume_flow_score += 5
+        elif mfi14 > 85:
+            volume_flow_score -= 4
+        elif mfi14 < 25:
+            volume_flow_score -= 3
+        cmf20 = cls._safe_float(metrics.get("cmf20"))
+        if cmf20 > 0.05:
+            volume_flow_score += 5
+            tags.append("资金流入")
+        elif cmf20 < -0.08:
+            volume_flow_score -= 5
+        volume_flow_score += max(-4, min(4, cls._safe_float(metrics.get("closeVolumeCorr20")) * 5))
 
         reversion_score = 0.0
-        if 28 <= rsi14 <= 45 and metrics["supportDistance"] <= 4.0:
-            reversion_score += 12
+        support_distance = cls._safe_float(metrics.get("supportDistance"), 100.0)
+        if 28 <= rsi14 <= 45 and support_distance <= 4.0:
+            reversion_score += 10
             tags.append("支撑回升")
-        if rsi14 < 35 and metrics["dayChangePercent"] > 0:
-            reversion_score += 8
+        if rsi14 < 35 and cls._safe_float(metrics.get("dayChangePercent")) > 0:
+            reversion_score += 7
             tags.append("RSI低位反弹")
-        if latest_close and ma20 and latest_close < ma20 and metrics["return20"] > -8:
+        if latest_close and ma20 and latest_close < ma20 and cls._safe_float(metrics.get("return20")) > -8:
+            reversion_score += 4
+        if cls._safe_float(metrics.get("bollPercentB20"), 50.0) <= 18 and cls._safe_float(metrics.get("dayChangePercent")) > 0:
+            reversion_score += 6
+            tags.append("布林下轨反弹")
+        if cls._safe_float(metrics.get("distanceLow20")) <= 4 and cls._safe_float(metrics.get("return5")) > 0:
             reversion_score += 4
 
+        volatility_score = 0.0
+        volatility20 = cls._safe_float(metrics.get("volatility20"))
+        atr_percent = cls._safe_float(metrics.get("atr14Percent"), cls._safe_float(metrics.get("atrPercent")))
+        boll_bandwidth = cls._safe_float(metrics.get("bollBandwidth20"))
+        if 0.8 <= volatility20 <= 3.4:
+            volatility_score += 7
+        elif volatility20 < 0.8 and cls._safe_float(metrics.get("return20")) > 0:
+            volatility_score += 2
+        elif volatility20 >= 5.2:
+            volatility_score -= 8
+        if 0.4 <= atr_percent <= 4.0:
+            volatility_score += 5
+        elif atr_percent > 6.0:
+            volatility_score -= 7
+        if 4 <= boll_bandwidth <= 18:
+            volatility_score += 4
+        elif boll_bandwidth > 30:
+            volatility_score -= 4
+        volatility_score -= max(0, min(6, (cls._safe_float(metrics.get("downsideVol20")) - 2.5) * 1.5))
+
+        liquidity_score = 0.0
+        avg_dollar_volume20 = cls._safe_float(metrics.get("avgDollarVolume20"))
+        avg_volume20 = cls._safe_float(metrics.get("avgVolume20"))
+        if avg_dollar_volume20 >= 50_000_000:
+            liquidity_score += 8
+        elif avg_dollar_volume20 >= 5_000_000:
+            liquidity_score += 5
+        elif avg_volume20 > 0:
+            liquidity_score += 2
+        if cls._safe_float(metrics.get("volumeTrend20")) > 0:
+            liquidity_score += min(4, cls._safe_float(metrics.get("volumeTrend20")) / 12)
+        if abs(cls._safe_float(metrics.get("vwapDistance20"))) <= 5:
+            liquidity_score += 3
+
         ai_score = 0.0
-        if metrics["trendScanDirection"] == "up":
+        if str(metrics.get("trendScanDirection") or "").lower() == "up":
             ai_score += 6
-        if metrics["trendStrength"]:
-            ai_score += max(-4, min(6, (metrics["trendStrength"] - 50) / 8))
-        if metrics["technicalScore"]:
-            ai_score += max(-4, min(6, (metrics["technicalScore"] - 55) / 8))
+        if metrics.get("trendStrength"):
+            ai_score += max(-4, min(6, (cls._safe_float(metrics.get("trendStrength")) - 50) / 8))
+        if metrics.get("technicalScore"):
+            ai_score += max(-4, min(6, (cls._safe_float(metrics.get("technicalScore")) - 55) / 8))
 
         risk_penalty = 0.0
         risk_level = 'low'
-        if metrics["trendScanRisk"] == 'high':
+        if str(metrics.get("trendScanRisk") or "").lower() == 'high':
             risk_penalty += 16
             risk_level = 'high'
-        elif metrics["trendScanRisk"] == 'medium':
+        elif str(metrics.get("trendScanRisk") or "").lower() == 'medium':
             risk_penalty += 5
             risk_level = 'medium'
-        if metrics["volatility20"] >= 5.2 or metrics["atrPercent"] >= 6.0:
+        if volatility20 >= 5.2 or atr_percent >= 6.0:
             risk_penalty += 14
             risk_level = 'high'
-        elif metrics["volatility20"] >= 3.4 or metrics["atrPercent"] >= 4.0:
+        elif volatility20 >= 3.4 or atr_percent >= 4.0:
             risk_penalty += 6
             if risk_level == 'low':
                 risk_level = 'medium'
@@ -1697,32 +2024,96 @@ class QuantTradingService:
             risk_penalty += 9
             if risk_level == 'low':
                 risk_level = 'medium'
-        if metrics["return20"] <= -12 or metrics["distanceHigh20"] <= -18:
+        if cls._safe_float(metrics.get("return20")) <= -12 or distance_high20 <= -18:
             risk_penalty += 12
             risk_level = 'high'
+        if cls._safe_float(metrics.get("maxDrawdown20")) <= -14 or cls._safe_float(metrics.get("maxDrawdown60")) <= -22:
+            risk_penalty += 9
+            risk_level = 'high'
+        if cls._safe_float(metrics.get("downsideVol20")) >= 4.5:
+            risk_penalty += 6
+            if risk_level == 'low':
+                risk_level = 'medium'
 
         weights = {
-            "balanced": (0.58, 0.30, 0.22),
-            "momentum": (0.72, 0.32, 0.05),
-            "breakout": (0.48, 0.52, 0.04),
-            "reversion": (0.28, 0.08, 0.78),
-        }.get(strategy_profile, (0.58, 0.30, 0.22))
+            "balanced": {
+                "trend": 0.30,
+                "priceAction": 0.14,
+                "momentum": 0.18,
+                "breakout": 0.16,
+                "volumeFlow": 0.12,
+                "reversion": 0.08,
+                "volatility": 0.10,
+                "liquidity": 0.06,
+            },
+            "momentum": {
+                "trend": 0.38,
+                "priceAction": 0.12,
+                "momentum": 0.28,
+                "breakout": 0.15,
+                "volumeFlow": 0.12,
+                "reversion": 0.02,
+                "volatility": 0.08,
+                "liquidity": 0.05,
+            },
+            "breakout": {
+                "trend": 0.26,
+                "priceAction": 0.16,
+                "momentum": 0.14,
+                "breakout": 0.34,
+                "volumeFlow": 0.18,
+                "reversion": 0.02,
+                "volatility": 0.08,
+                "liquidity": 0.06,
+            },
+            "reversion": {
+                "trend": 0.16,
+                "priceAction": 0.16,
+                "momentum": 0.10,
+                "breakout": 0.04,
+                "volumeFlow": 0.08,
+                "reversion": 0.46,
+                "volatility": 0.12,
+                "liquidity": 0.05,
+            },
+        }.get(strategy_profile, {})
+        weights = weights or {
+            "trend": 0.30,
+            "priceAction": 0.14,
+            "momentum": 0.18,
+            "breakout": 0.16,
+            "volumeFlow": 0.12,
+            "reversion": 0.08,
+            "volatility": 0.10,
+            "liquidity": 0.06,
+        }
         raw_total = (
-            46
-            + trend_score * weights[0]
-            + breakout_score * weights[1]
-            + reversion_score * weights[2]
+            42
+            + trend_score * weights["trend"]
+            + price_action_score * weights["priceAction"]
+            + momentum_score * weights["momentum"]
+            + breakout_score * weights["breakout"]
+            + volume_flow_score * weights["volumeFlow"]
+            + reversion_score * weights["reversion"]
+            + volatility_score * weights["volatility"]
+            + liquidity_score * weights["liquidity"]
             + ai_score
             - risk_penalty
         )
         total = round(max(0.0, min(100.0, raw_total)), 2)
-        trend_direction = 'up' if trend_score >= 24 else 'down' if trend_score <= -4 else 'sideways'
+        trend_direction = 'up' if trend_score + momentum_score * 0.35 >= 22 else 'down' if trend_score <= -5 else 'sideways'
 
         return {
+            "factorVersion": "watchlist-factor-v2",
             "total": total,
             "trend": round(trend_score, 2),
+            "priceAction": round(price_action_score, 2),
+            "momentum": round(momentum_score, 2),
             "breakout": round(breakout_score, 2),
+            "volumeFlow": round(volume_flow_score, 2),
             "reversion": round(reversion_score, 2),
+            "volatility": round(volatility_score, 2),
+            "liquidity": round(liquidity_score, 2),
             "aiTrend": round(ai_score, 2),
             "riskPenalty": round(risk_penalty, 2),
             "riskLevel": risk_level,
@@ -1813,10 +2204,347 @@ class QuantTradingService:
             except Exception:
                 return None
 
+    @classmethod
+    def _build_alpha_factor_set(
+        cls,
+        *,
+        opens: List[float],
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+        volumes: List[float],
+    ) -> Dict[str, Any]:
+        count = min(len(opens), len(highs), len(lows), len(closes), len(volumes))
+        if count <= 0:
+            return {"version": "watchlist-alpha-factor-v1", "count": 0, "families": {}, "values": {}}
+
+        opens = [float(item or 0.0) for item in opens[-count:]]
+        highs = [float(item or 0.0) for item in highs[-count:]]
+        lows = [float(item or 0.0) for item in lows[-count:]]
+        closes = [float(item or 0.0) for item in closes[-count:]]
+        volumes = [float(item or 0.0) for item in volumes[-count:]]
+        typical = [(highs[index] + lows[index] + closes[index]) / 3 for index in range(count)]
+        hl2 = [(highs[index] + lows[index]) / 2 for index in range(count)]
+        oc2 = [(opens[index] + closes[index]) / 2 for index in range(count)]
+        dollar_volume = [closes[index] * volumes[index] for index in range(count)]
+        range_percent = [cls._safe_factor_ratio(highs[index] - lows[index], closes[index]) * 100 for index in range(count)]
+        body_percent = [cls._safe_factor_ratio(closes[index] - opens[index], opens[index]) * 100 for index in range(count)]
+        absolute_body_percent = [abs(item) for item in body_percent]
+        upper_shadow_percent = [
+            cls._safe_factor_ratio(highs[index] - max(opens[index], closes[index]), closes[index]) * 100
+            for index in range(count)
+        ]
+        lower_shadow_percent = [
+            cls._safe_factor_ratio(min(opens[index], closes[index]) - lows[index], closes[index]) * 100
+            for index in range(count)
+        ]
+        close_location = [
+            cls._safe_factor_ratio(closes[index] - lows[index], highs[index] - lows[index]) * 100
+            if highs[index] != lows[index] else 50.0
+            for index in range(count)
+        ]
+        intraday_strength = [
+            cls._safe_factor_ratio((closes[index] - lows[index]) - (highs[index] - closes[index]), highs[index] - lows[index])
+            if highs[index] != lows[index] else 0.0
+            for index in range(count)
+        ]
+        signed_volume = [
+            volumes[index] if index > 0 and closes[index] > closes[index - 1]
+            else -volumes[index] if index > 0 and closes[index] < closes[index - 1]
+            else 0.0
+            for index in range(count)
+        ]
+        money_flow_proxy = [intraday_strength[index] * volumes[index] for index in range(count)]
+
+        def returns(values: List[float]) -> List[float]:
+            output: List[float] = [0.0]
+            for index in range(1, len(values)):
+                output.append(cls._safe_factor_ratio(values[index] - values[index - 1], values[index - 1]) * 100)
+            return output
+
+        close_returns = returns(closes)
+        typical_returns = returns(typical)
+        hl2_returns = returns(hl2)
+        volume_returns = returns(volumes)
+        dollar_volume_returns = returns(dollar_volume)
+        obv = cls._obv_series(closes, volumes)
+        if len(obv) < count:
+            obv = ([0.0] * (count - len(obv))) + obv
+
+        values: Dict[str, float] = {}
+        families: Dict[str, int] = {}
+
+        def add(family: str, name: str, value: Any) -> None:
+            key = f"{family}.{name}"
+            if key in values:
+                return
+            values[key] = cls._finite_factor_value(value)
+            families[family] = families.get(family, 0) + 1
+
+        def last(values_: List[float], lag: int = 0) -> float:
+            index = len(values_) - 1 - max(0, int(lag or 0))
+            return float(values_[index] or 0.0) if 0 <= index < len(values_) else 0.0
+
+        def window(values_: List[float], size: int, lag: int = 0) -> List[float]:
+            end = len(values_) - max(0, int(lag or 0))
+            if end <= 0:
+                return []
+            start = max(0, end - max(1, int(size or 1)))
+            return [float(item or 0.0) for item in values_[start:end]]
+
+        def mean(sample: List[float]) -> float:
+            return sum(sample) / len(sample) if sample else 0.0
+
+        def std(sample: List[float]) -> float:
+            if not sample:
+                return 0.0
+            average = mean(sample)
+            return (sum((item - average) ** 2 for item in sample) / len(sample)) ** 0.5
+
+        def rank_percent(sample: List[float], value: float) -> float:
+            if not sample:
+                return 50.0
+            below_or_equal = len([item for item in sample if item <= value])
+            return (below_or_equal / len(sample)) * 100
+
+        def period_return(values_: List[float], period: int, lag: int = 0) -> float:
+            end = len(values_) - max(0, int(lag or 0))
+            latest_index = end - 1
+            base_index = latest_index - max(1, int(period or 1))
+            if latest_index < 0 or base_index < 0:
+                return 0.0
+            return cls._safe_factor_ratio(values_[latest_index] - values_[base_index], values_[base_index]) * 100
+
+        def correlation(left: List[float], right: List[float], size: int, lag: int = 0) -> float:
+            left_sample = window(left, size, lag)
+            right_sample = window(right, size, lag)
+            sample_count = min(len(left_sample), len(right_sample))
+            if sample_count < 2:
+                return 0.0
+            left_sample = left_sample[-sample_count:]
+            right_sample = right_sample[-sample_count:]
+            left_mean = mean(left_sample)
+            right_mean = mean(right_sample)
+            numerator = sum((left_sample[index] - left_mean) * (right_sample[index] - right_mean) for index in range(sample_count))
+            left_var = sum((item - left_mean) ** 2 for item in left_sample)
+            right_var = sum((item - right_mean) ** 2 for item in right_sample)
+            denominator = (left_var * right_var) ** 0.5
+            return numerator / denominator if denominator else 0.0
+
+        windows = [3, 5, 7, 10, 14, 20, 30, 40, 60, 90]
+        long_windows = [5, 10, 14, 20, 30, 40, 60, 90, 120]
+        periods = [1, 2, 3, 5, 7, 10, 14, 20, 30, 40, 60, 90]
+        lag_range = range(0, 3)
+        raw_lag_range = range(0, 12)
+
+        raw_fields = {
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": volumes,
+            "typical": typical,
+            "hl2": hl2,
+            "oc2": oc2,
+            "range_pct": range_percent,
+            "body_pct": body_percent,
+            "upper_shadow": upper_shadow_percent,
+            "lower_shadow": lower_shadow_percent,
+            "dollar_volume": dollar_volume,
+        }
+        for field_name, field_values in raw_fields.items():
+            for lag in raw_lag_range:
+                add("lag", f"{field_name}_l{lag}", last(field_values, lag))
+
+        trend_fields = {"close": closes, "typical": typical, "hl2": hl2, "oc2": oc2}
+        for field_name, field_values in trend_fields.items():
+            for size in windows:
+                for lag in lag_range:
+                    sample = window(field_values, size, lag)
+                    current = last(field_values, lag)
+                    average = mean(sample)
+                    previous_average = mean(window(field_values, size, lag + 5))
+                    add("trend", f"{field_name}_ma_ratio_w{size}_l{lag}", cls._safe_factor_ratio(current - average, average) * 100)
+                    add("trend", f"{field_name}_ma_slope_w{size}_l{lag}", cls._safe_factor_ratio(average - previous_average, previous_average) * 100)
+        for short_index, short_window in enumerate(windows[:-1]):
+            for long_window in windows[short_index + 1:]:
+                short_average = mean(window(closes, short_window, 0))
+                long_average = mean(window(closes, long_window, 0))
+                add("trend", f"close_ma_spread_w{short_window}_{long_window}", cls._safe_factor_ratio(short_average - long_average, long_average) * 100)
+                add("trend", f"close_ma_spread_rank_w{short_window}_{long_window}", rank_percent(window(closes, long_window, 0), short_average))
+
+        momentum_fields = {"close": closes, "open": opens, "high": highs, "low": lows, "typical": typical}
+        for field_name, field_values in momentum_fields.items():
+            for period in periods:
+                for lag in lag_range:
+                    ret = period_return(field_values, period, lag)
+                    return_sample = window(returns(field_values), max(period, 5), lag)
+                    ret_std = std(return_sample)
+                    add("momentum", f"{field_name}_ret_p{period}_l{lag}", ret)
+                    add("momentum", f"{field_name}_ret_vol_adj_p{period}_l{lag}", cls._safe_factor_ratio(ret, ret_std))
+        for size in windows:
+            for lag in range(0, 3):
+                sample = window(close_returns, size, lag)
+                positive_ratio = len([item for item in sample if item > 0]) / len(sample) if sample else 0.0
+                negative_ratio = len([item for item in sample if item < 0]) / len(sample) if sample else 0.0
+                add("momentum", f"close_positive_ratio_w{size}_l{lag}", positive_ratio * 100)
+                add("momentum", f"close_negative_ratio_w{size}_l{lag}", negative_ratio * 100)
+
+        volatility_return_fields = {"close": close_returns, "typical": typical_returns, "hl2": hl2_returns}
+        for field_name, field_values in volatility_return_fields.items():
+            for size in windows:
+                for lag in lag_range:
+                    sample = window(field_values, size, lag)
+                    downside_sample = [item for item in sample if item < 0]
+                    current = last(field_values, lag)
+                    average = mean(sample)
+                    dispersion = std(sample)
+                    add("volatility", f"{field_name}_ret_std_w{size}_l{lag}", dispersion)
+                    add("volatility", f"{field_name}_ret_downside_std_w{size}_l{lag}", std(downside_sample))
+                    add("volatility", f"{field_name}_ret_z_w{size}_l{lag}", cls._safe_factor_ratio(current - average, dispersion))
+        for size in windows:
+            for lag in lag_range:
+                range_sample = window(range_percent, size, lag)
+                body_sample = window(absolute_body_percent, size, lag)
+                add("volatility", f"range_mean_w{size}_l{lag}", mean(range_sample))
+                add("volatility", f"range_std_w{size}_l{lag}", std(range_sample))
+                add("volatility", f"body_std_w{size}_l{lag}", std(body_sample))
+
+        flow_fields = {
+            "volume": volumes,
+            "dollar_volume": dollar_volume,
+            "signed_volume": signed_volume,
+            "money_flow": money_flow_proxy,
+            "obv": obv,
+        }
+        for field_name, field_values in flow_fields.items():
+            for size in windows:
+                for lag in lag_range:
+                    sample = window(field_values, size, lag)
+                    current = last(field_values, lag)
+                    average = mean(sample)
+                    dispersion = std(sample)
+                    previous_average = mean(window(field_values, size, lag + 5))
+                    add("volume_flow", f"{field_name}_avg_ratio_w{size}_l{lag}", cls._safe_factor_ratio(current - average, average) * 100)
+                    add("volume_flow", f"{field_name}_z_w{size}_l{lag}", cls._safe_factor_ratio(current - average, dispersion))
+                    add("volume_flow", f"{field_name}_trend_w{size}_l{lag}", cls._safe_factor_ratio(average - previous_average, previous_average) * 100)
+
+        candle_fields = {
+            "range_pct": range_percent,
+            "body_pct": body_percent,
+            "abs_body_pct": absolute_body_percent,
+            "upper_shadow": upper_shadow_percent,
+            "lower_shadow": lower_shadow_percent,
+            "close_location": close_location,
+            "intraday_strength": intraday_strength,
+        }
+        for field_name, field_values in candle_fields.items():
+            for lag in raw_lag_range:
+                add("price_action", f"{field_name}_l{lag}", last(field_values, lag))
+            for size in windows:
+                for lag in range(0, 2):
+                    sample = window(field_values, size, lag)
+                    current = last(field_values, lag)
+                    dispersion = std(sample)
+                    add("price_action", f"{field_name}_mean_w{size}_l{lag}", mean(sample))
+                    add("price_action", f"{field_name}_z_w{size}_l{lag}", cls._safe_factor_ratio(current - mean(sample), dispersion))
+                    add("price_action", f"{field_name}_rank_w{size}_l{lag}", rank_percent(sample, current))
+
+        range_fields = {"close": closes, "high": highs, "low": lows, "typical": typical}
+        for field_name, field_values in range_fields.items():
+            for size in long_windows:
+                for lag in range(0, 3):
+                    sample = window(field_values, size, lag)
+                    current = last(field_values, lag)
+                    high = max(sample) if sample else 0.0
+                    low = min(sample) if sample else 0.0
+                    peak = high
+                    add("range_drawdown", f"{field_name}_pos_w{size}_l{lag}", cls._safe_factor_ratio(current - low, high - low) * 100 if high != low else 50.0)
+                    add("range_drawdown", f"{field_name}_dist_high_w{size}_l{lag}", cls._safe_factor_ratio(current - high, high) * 100)
+                    add("range_drawdown", f"{field_name}_dist_low_w{size}_l{lag}", cls._safe_factor_ratio(current - low, low) * 100)
+                    add("range_drawdown", f"{field_name}_drawdown_w{size}_l{lag}", cls._safe_factor_ratio(current - peak, peak) * 100)
+
+        liquidity_fields = {"volume": volumes, "dollar_volume": dollar_volume}
+        for field_name, field_values in liquidity_fields.items():
+            for size in windows:
+                for lag in lag_range:
+                    sample = window(field_values, size, lag)
+                    current = last(field_values, lag)
+                    average = mean(sample)
+                    dispersion = std(sample)
+                    zero_rate = len([item for item in sample if item <= 0]) / len(sample) if sample else 0.0
+                    add("liquidity", f"{field_name}_avg_w{size}_l{lag}", average)
+                    add("liquidity", f"{field_name}_latest_to_avg_w{size}_l{lag}", cls._safe_factor_ratio(current, average))
+                    add("liquidity", f"{field_name}_cv_w{size}_l{lag}", cls._safe_factor_ratio(dispersion, average))
+                    add("liquidity", f"{field_name}_zero_rate_w{size}_l{lag}", zero_rate * 100)
+
+        correlation_pairs = {
+            "close_ret_volume_ret": (close_returns, volume_returns),
+            "close_ret_dollar_ret": (close_returns, dollar_volume_returns),
+            "close_ret_range": (close_returns, range_percent),
+            "close_ret_body": (close_returns, body_percent),
+            "volume_body": (volume_returns, body_percent),
+            "volume_range": (volume_returns, range_percent),
+            "obv_close": (obv, closes),
+            "money_flow_close": (money_flow_proxy, closes),
+        }
+        for pair_name, (left, right) in correlation_pairs.items():
+            for size in [5, 10, 14, 20, 30, 60, 90]:
+                for lag in lag_range:
+                    add("correlation", f"{pair_name}_corr_w{size}_l{lag}", correlation(left, right, size, lag))
+
+        return {
+            "version": "watchlist-alpha-factor-v1",
+            "count": len(values),
+            "families": families,
+            "values": values,
+        }
+
     @staticmethod
     def _moving_average(values: List[float], window: int) -> float:
         sample = values[-window:] if len(values) >= window else values
         return round(sum(sample) / len(sample), 4) if sample else 0.0
+
+    @staticmethod
+    def _stddev(values: List[float]) -> float:
+        sample = [float(item or 0.0) for item in values if item is not None]
+        if not sample:
+            return 0.0
+        mean = sum(sample) / len(sample)
+        variance = sum((item - mean) ** 2 for item in sample) / len(sample)
+        return round(variance ** 0.5, 4)
+
+    @staticmethod
+    def _ema(values: List[float], window: int) -> float:
+        sample = [float(item or 0.0) for item in values if item is not None]
+        if not sample:
+            return 0.0
+        span = max(1, int(window or 1))
+        alpha = 2 / (span + 1)
+        ema = sample[0]
+        for value in sample[1:]:
+            ema = value * alpha + ema * (1 - alpha)
+        return round(ema, 4)
+
+    @classmethod
+    def _macd_hist(cls, values: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> float:
+        sample = [float(item or 0.0) for item in values if item is not None]
+        if len(sample) < slow:
+            return 0.0
+        alpha_fast = 2 / (fast + 1)
+        alpha_slow = 2 / (slow + 1)
+        alpha_signal = 2 / (signal + 1)
+        ema_fast = sample[0]
+        ema_slow = sample[0]
+        signal_line = 0.0
+        for index, value in enumerate(sample):
+            if index == 0:
+                continue
+            ema_fast = value * alpha_fast + ema_fast * (1 - alpha_fast)
+            ema_slow = value * alpha_slow + ema_slow * (1 - alpha_slow)
+            dif = ema_fast - ema_slow
+            signal_line = dif if index == 1 else dif * alpha_signal + signal_line * (1 - alpha_signal)
+        return round((ema_fast - ema_slow) - signal_line, 4)
 
     @staticmethod
     def _period_return(values: List[float], periods: int) -> float:
@@ -1859,17 +2587,259 @@ class QuantTradingService:
         return round(variance ** 0.5, 2)
 
     @staticmethod
+    def _downside_volatility(values: List[float], periods: int = 20) -> float:
+        if len(values) <= periods:
+            return 0.0
+        sample = values[-periods - 1:]
+        downside_returns = []
+        for index in range(1, len(sample)):
+            base = float(sample[index - 1] or 0)
+            current = float(sample[index] or 0)
+            if base:
+                value = ((current - base) / base) * 100
+                if value < 0:
+                    downside_returns.append(value)
+        if not downside_returns:
+            return 0.0
+        mean = sum(downside_returns) / len(downside_returns)
+        variance = sum((item - mean) ** 2 for item in downside_returns) / len(downside_returns)
+        return round(variance ** 0.5, 2)
+
+    @staticmethod
+    def _atr(highs: List[float], lows: List[float], closes: List[float], periods: int = 14) -> float:
+        if not highs or not lows or not closes:
+            return 0.0
+        start = max(1, len(closes) - max(1, periods))
+        true_ranges: List[float] = []
+        for index in range(start, len(closes)):
+            high = float(highs[index] or 0.0)
+            low = float(lows[index] or 0.0)
+            previous_close = float(closes[index - 1] or 0.0)
+            true_ranges.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+        return round(sum(true_ranges) / len(true_ranges), 4) if true_ranges else 0.0
+
+    @staticmethod
+    def _price_position(value: float, high: float, low: float) -> float:
+        if not value or not high or not low or high == low:
+            return 50.0
+        return round(((value - low) / (high - low)) * 100, 2)
+
+    @staticmethod
+    def _vwap(highs: List[float], lows: List[float], closes: List[float], volumes: List[float], periods: int = 20) -> float:
+        if not closes or not volumes:
+            return 0.0
+        start = max(0, len(closes) - max(1, periods))
+        weighted = 0.0
+        volume_total = 0.0
+        for index in range(start, len(closes)):
+            typical = (float(highs[index] or 0.0) + float(lows[index] or 0.0) + float(closes[index] or 0.0)) / 3
+            volume = float(volumes[index] or 0.0)
+            weighted += typical * volume
+            volume_total += volume
+        return round(weighted / volume_total, 4) if volume_total else 0.0
+
+    @classmethod
+    def _moving_average_slope(cls, values: List[float], window: int = 20) -> float:
+        span = max(2, int(window or 2))
+        if len(values) < span + 5:
+            return 0.0
+        current = cls._moving_average(values, span)
+        previous = cls._moving_average(values[:-5], span)
+        return round(((current - previous) / previous) * 100, 2) if previous else 0.0
+
+    @staticmethod
+    def _obv_series(closes: List[float], volumes: List[float]) -> List[float]:
+        if not closes or not volumes:
+            return []
+        values = [0.0]
+        for index in range(1, min(len(closes), len(volumes))):
+            previous = float(closes[index - 1] or 0.0)
+            current = float(closes[index] or 0.0)
+            volume = float(volumes[index] or 0.0)
+            if current > previous:
+                values.append(values[-1] + volume)
+            elif current < previous:
+                values.append(values[-1] - volume)
+            else:
+                values.append(values[-1])
+        return values
+
+    @staticmethod
+    def _series_slope_percent(values: List[float], window: int = 20) -> float:
+        if len(values) <= window:
+            return 0.0
+        current = float(values[-1] or 0.0)
+        previous = float(values[-window - 1] or 0.0)
+        scale = max(abs(previous), 1.0)
+        return round(((current - previous) / scale) * 100, 2)
+
+    @staticmethod
+    def _money_flow_index(highs: List[float], lows: List[float], closes: List[float], volumes: List[float], periods: int = 14) -> float:
+        if len(closes) <= periods or not volumes:
+            return 50.0
+        positive = 0.0
+        negative = 0.0
+        start = len(closes) - periods
+        for index in range(start, len(closes)):
+            typical = (float(highs[index] or 0.0) + float(lows[index] or 0.0) + float(closes[index] or 0.0)) / 3
+            previous_typical = (float(highs[index - 1] or 0.0) + float(lows[index - 1] or 0.0) + float(closes[index - 1] or 0.0)) / 3
+            money_flow = typical * float(volumes[index] or 0.0)
+            if typical > previous_typical:
+                positive += money_flow
+            elif typical < previous_typical:
+                negative += money_flow
+        if negative == 0:
+            return 100.0 if positive > 0 else 50.0
+        ratio = positive / negative
+        return round(100 - (100 / (1 + ratio)), 2)
+
+    @staticmethod
+    def _chaikin_money_flow(highs: List[float], lows: List[float], closes: List[float], volumes: List[float], periods: int = 20) -> float:
+        if not closes or not volumes:
+            return 0.0
+        start = max(0, len(closes) - max(1, periods))
+        flow_volume = 0.0
+        volume_total = 0.0
+        for index in range(start, len(closes)):
+            high = float(highs[index] or 0.0)
+            low = float(lows[index] or 0.0)
+            close = float(closes[index] or 0.0)
+            volume = float(volumes[index] or 0.0)
+            multiplier = ((close - low) - (high - close)) / (high - low) if high != low else 0.0
+            flow_volume += multiplier * volume
+            volume_total += volume
+        return round(flow_volume / volume_total, 4) if volume_total else 0.0
+
+    @staticmethod
+    def _stochastic_k(closes: List[float], highs: List[float], lows: List[float], periods: int = 14) -> float:
+        if not closes:
+            return 50.0
+        sample_highs = highs[-periods:] if len(highs) >= periods else highs
+        sample_lows = lows[-periods:] if len(lows) >= periods else lows
+        highest = max(sample_highs or [0.0])
+        lowest = min(sample_lows or [0.0])
+        latest = float(closes[-1] or 0.0)
+        return round(((latest - lowest) / (highest - lowest)) * 100, 2) if highest != lowest else 50.0
+
+    @staticmethod
+    def _williams_r(closes: List[float], highs: List[float], lows: List[float], periods: int = 14) -> float:
+        if not closes:
+            return -50.0
+        sample_highs = highs[-periods:] if len(highs) >= periods else highs
+        sample_lows = lows[-periods:] if len(lows) >= periods else lows
+        highest = max(sample_highs or [0.0])
+        lowest = min(sample_lows or [0.0])
+        latest = float(closes[-1] or 0.0)
+        return round(-100 * ((highest - latest) / (highest - lowest)), 2) if highest != lowest else -50.0
+
+    @staticmethod
+    def _cci(highs: List[float], lows: List[float], closes: List[float], periods: int = 20) -> float:
+        if not closes:
+            return 0.0
+        start = max(0, len(closes) - max(1, periods))
+        typical_prices = [
+            (float(highs[index] or 0.0) + float(lows[index] or 0.0) + float(closes[index] or 0.0)) / 3
+            for index in range(start, len(closes))
+        ]
+        if not typical_prices:
+            return 0.0
+        average = sum(typical_prices) / len(typical_prices)
+        mean_deviation = sum(abs(item - average) for item in typical_prices) / len(typical_prices)
+        if mean_deviation == 0:
+            return 0.0
+        return round((typical_prices[-1] - average) / (0.015 * mean_deviation), 2)
+
+    @staticmethod
+    def _adx(highs: List[float], lows: List[float], closes: List[float], periods: int = 14) -> float:
+        if len(closes) <= periods or len(highs) <= periods or len(lows) <= periods:
+            return 0.0
+        true_ranges: List[float] = []
+        plus_dm: List[float] = []
+        minus_dm: List[float] = []
+        start = max(1, len(closes) - periods)
+        for index in range(start, len(closes)):
+            high = float(highs[index] or 0.0)
+            low = float(lows[index] or 0.0)
+            previous_high = float(highs[index - 1] or 0.0)
+            previous_low = float(lows[index - 1] or 0.0)
+            previous_close = float(closes[index - 1] or 0.0)
+            up_move = high - previous_high
+            down_move = previous_low - low
+            plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0.0)
+            minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0.0)
+            true_ranges.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+        tr_sum = sum(true_ranges)
+        if tr_sum == 0:
+            return 0.0
+        plus_di = 100 * sum(plus_dm) / tr_sum
+        minus_di = 100 * sum(minus_dm) / tr_sum
+        denominator = plus_di + minus_di
+        return round(100 * abs(plus_di - minus_di) / denominator, 2) if denominator else 0.0
+
+    @staticmethod
+    def _max_drawdown(values: List[float], periods: int = 20) -> float:
+        sample = [float(item or 0.0) for item in (values[-periods:] if len(values) >= periods else values) if item is not None]
+        peak = 0.0
+        max_drawdown = 0.0
+        for value in sample:
+            peak = max(peak, value)
+            if peak:
+                max_drawdown = min(max_drawdown, ((value - peak) / peak) * 100)
+        return round(max_drawdown, 2)
+
+    @staticmethod
+    def _rolling_correlation(left: List[float], right: List[float], periods: int = 20) -> float:
+        if not left or not right:
+            return 0.0
+        count = min(len(left), len(right), max(2, periods))
+        x_values = [float(item or 0.0) for item in left[-count:]]
+        y_values = [float(item or 0.0) for item in right[-count:]]
+        if len(x_values) < 2 or len(y_values) < 2:
+            return 0.0
+        x_mean = sum(x_values) / len(x_values)
+        y_mean = sum(y_values) / len(y_values)
+        numerator = sum((x_values[index] - x_mean) * (y_values[index] - y_mean) for index in range(len(x_values)))
+        x_var = sum((item - x_mean) ** 2 for item in x_values)
+        y_var = sum((item - y_mean) ** 2 for item in y_values)
+        denominator = (x_var * y_var) ** 0.5
+        return round(numerator / denominator, 4) if denominator else 0.0
+
+    @staticmethod
     def _distance_percent(value: float, anchor: float) -> float:
         if not value or not anchor:
             return 100.0
         return round(abs((value - anchor) / anchor) * 100, 2)
 
     @staticmethod
+    def _safe_factor_ratio(numerator: Any, denominator: Any) -> float:
+        try:
+            denominator_value = float(denominator or 0.0)
+            if denominator_value == 0:
+                return 0.0
+            return float(numerator or 0.0) / denominator_value
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+    @staticmethod
+    def _finite_factor_value(value: Any) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        if number != number or number in (float("inf"), float("-inf")):
+            return 0.0
+        number = max(-1_000_000_000.0, min(1_000_000_000.0, number))
+        return round(number, 6)
+
+    @staticmethod
     def _safe_float(value: Any, default: float = 0.0) -> float:
         try:
-            return float(value)
-        except (TypeError, ValueError):
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
             return default
+        if number != number or number in (float("inf"), float("-inf")):
+            return default
+        return number
 
     @classmethod
     def _save_decision(
@@ -2057,6 +3027,23 @@ class QuantTradingService:
             raise RuntimeError(f"trade-service 调用失败: {exc}") from exc
 
     @classmethod
+    def _order_factor_inputs(cls, factor_inputs: Any) -> Dict[str, Any]:
+        if not isinstance(factor_inputs, dict):
+            return {}
+        compact = {key: value for key, value in factor_inputs.items() if key != "factorSet"}
+        factor_set = factor_inputs.get("factorSet")
+        if isinstance(factor_set, dict):
+            compact["factorSetVersion"] = factor_set.get("version") or factor_inputs.get("factorSetVersion")
+            compact["factorCount"] = int(factor_set.get("count") or factor_inputs.get("factorCount") or 0)
+            compact["factorFamilies"] = (
+                factor_set.get("families")
+                if isinstance(factor_set.get("families"), dict)
+                else factor_inputs.get("factorFamilies") if isinstance(factor_inputs.get("factorFamilies"), dict)
+                else {}
+            )
+        return compact
+
+    @classmethod
     def _submit_order_via_trade_service(cls, account_id: int, decision: Dict[str, Any], user_id: int = 1) -> Dict[str, Any]:
         payload = {
             "account_id": int(account_id),
@@ -2072,7 +3059,7 @@ class QuantTradingService:
                 "reason": decision.get("reason") or "",
                 "budget": decision.get("budget") or {},
                 "scoreBreakdown": decision.get("scoreBreakdown") or {},
-                "factorInputs": decision.get("factorInputs") or {},
+                "factorInputs": cls._order_factor_inputs(decision.get("factorInputs") or {}),
                 "priceSource": decision.get("priceSource") or "unknown",
                 "quoteUpdatedAt": decision.get("quoteUpdatedAt"),
             },
@@ -2347,6 +3334,7 @@ class QuantTradingService:
 
     @classmethod
     def _format_history_item(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+        metrics = cls._compact_history_metrics(cls._parse_json(row.get('metrics_json'), {}))
         return {
             "symbol": row.get('symbol'),
             "name": row.get('name'),
@@ -2359,10 +3347,27 @@ class QuantTradingService:
             "riskLevel": row.get('risk_level') or 'medium',
             "reason": row.get('reason') or '',
             "strategyTags": cls._parse_json(row.get('tags_json'), []),
-            "metrics": cls._parse_json(row.get('metrics_json'), {}),
+            "metrics": metrics,
             "scoreBreakdown": cls._parse_json(row.get('score_json'), {}),
             "createdAt": cls._format_datetime(row.get('created_at')),
         }
+
+    @classmethod
+    def _compact_history_metrics(cls, metrics: Any) -> Dict[str, Any]:
+        if not isinstance(metrics, dict):
+            return {}
+        compact = dict(metrics)
+        factor_set = compact.pop("factorSet", None)
+        if isinstance(factor_set, dict):
+            compact["factorSetVersion"] = factor_set.get("version") or compact.get("factorSetVersion")
+            compact["factorCount"] = int(cls._safe_float(factor_set.get("count") or compact.get("factorCount"), 0))
+            compact["factorFamilies"] = (
+                factor_set.get("families")
+                if isinstance(factor_set.get("families"), dict)
+                else compact.get("factorFamilies") if isinstance(compact.get("factorFamilies"), dict)
+                else {}
+            )
+        return compact
 
     @classmethod
     def _format_us_open_ai_trade_run(cls, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -2437,14 +3442,26 @@ class QuantTradingService:
                 "side": "BUY、SELL 或 HOLD",
                 "confidence": "0-100 多因子评分",
                 "riskLevel": "low / medium / high",
-                "scoreBreakdown": "trend / breakout / reversion / aiTrend / riskPenalty",
-                "metrics": "Qlib 风格因子输入快照",
+                "scoreBreakdown": "trend / priceAction / momentum / breakout / volumeFlow / reversion / volatility / liquidity / aiTrend / riskPenalty",
+                "metrics": "Qlib Alpha158/Alpha360 + TA-Lib/pandas-ta 风格因子输入快照；包含 1500+ OHLCV factorSet，候选保留完整值，历史列表和下单 factorInputs 仅透传摘要",
             },
         }
 
+    @classmethod
+    def _json_safe_value(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): cls._json_safe_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._json_safe_value(item) for item in value]
+        if isinstance(value, float):
+            if value != value or value in (float("inf"), float("-inf")):
+                return 0.0
+        return value
+
     @staticmethod
     def _to_json(value: Any) -> str:
-        return json.dumps(value if value is not None else {}, ensure_ascii=False, default=str)
+        safe_value = QuantTradingService._json_safe_value(value if value is not None else {})
+        return json.dumps(safe_value, ensure_ascii=False, default=str, allow_nan=False)
 
     @staticmethod
     def _parse_json(value: Any, default: Any) -> Any:

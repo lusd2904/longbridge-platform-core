@@ -11,6 +11,9 @@ from utils.MonitorLink import MonitorLink
 class AIAnalyst:
     _nvidia_rate_lock = threading.Lock()
     _nvidia_call_times: List[float] = []
+    _provider_cooldown_lock = threading.Lock()
+    _provider_failures: Dict[str, Dict[str, object]] = {}
+    _provider_inflight: Dict[str, float] = {}
     _ollama_models_cache: Dict[str, object] = {"at": 0.0, "models": []}
     OFFICIAL_CLOUD_MODEL_IDS: List[str] = [
         "gpt-5.5",
@@ -242,6 +245,7 @@ class AIAnalyst:
 
     SCAN_TASKS = {"scan_pulse", "scan_fast", "scan_risk", "scan_final"}
     SCAN_QUALITY_TASKS = SCAN_TASKS | {"trend_batch"}
+    RECOMMENDATION_TASKS = {"recommend_brief", "recommend_summary"}
     REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
     @staticmethod
@@ -251,9 +255,17 @@ class AIAnalyst:
             'gateway timeout',
             'timed out',
             'read timed out',
+            'connection refused',
+            'connection aborted',
+            'connection reset',
+            'max retries exceeded',
+            'failed to establish a new connection',
+            'service unavailable',
             '504',
+            '503',
             'sub2api',
-            '超时'
+            '超时',
+            '拒绝连接'
         ])
 
     @classmethod
@@ -262,6 +274,107 @@ class AIAnalyst:
         if cls._is_timeout_error_message(detail_text):
             return "AI研判服务超时，请稍后重试"
         return detail_text or "AI研判服务暂时不可用，请稍后重试"
+
+    @classmethod
+    def _provider_cooldown_seconds(cls, user_id: int = 1) -> int:
+        raw_value = AppConfig.get('AI_PROVIDER_COOLDOWN_SECONDS', user_id=user_id, default=90)
+        try:
+            return max(0, int(raw_value or 0))
+        except (TypeError, ValueError):
+            return 90
+
+    @classmethod
+    def _provider_failure_threshold(cls, user_id: int = 1) -> int:
+        raw_value = AppConfig.get('AI_PROVIDER_COOLDOWN_FAILURES', user_id=user_id, default=1)
+        try:
+            return max(1, int(raw_value or 1))
+        except (TypeError, ValueError):
+            return 1
+
+    @staticmethod
+    def _provider_cooldown_key(provider_name: str, task: str, user_id: int) -> str:
+        return f"{int(user_id)}:{provider_name}:{task}"
+
+    @classmethod
+    def _uses_provider_cooldown(cls, task: str) -> bool:
+        return task in cls.RECOMMENDATION_TASKS
+
+    @classmethod
+    def _provider_inflight_ttl_seconds(cls, user_id: int = 1) -> int:
+        raw_value = AppConfig.get('AI_PROVIDER_INFLIGHT_TTL_SECONDS', user_id=user_id, default=150)
+        try:
+            return max(15, int(raw_value or 150))
+        except (TypeError, ValueError):
+            return 150
+
+    @classmethod
+    def _try_begin_provider_request(cls, provider_name: str, task: str, user_id: int = 1) -> bool:
+        if not cls._uses_provider_cooldown(task):
+            return True
+
+        key = cls._provider_cooldown_key(provider_name, task, user_id)
+        now = time.time()
+        with cls._provider_cooldown_lock:
+            expires_at = float(cls._provider_inflight.get(key) or 0)
+            if expires_at > now:
+                return False
+            cls._provider_inflight[key] = now + cls._provider_inflight_ttl_seconds(user_id=user_id)
+            return True
+
+    @classmethod
+    def _end_provider_request(cls, provider_name: str, task: str, user_id: int = 1) -> None:
+        if not cls._uses_provider_cooldown(task):
+            return
+        key = cls._provider_cooldown_key(provider_name, task, user_id)
+        with cls._provider_cooldown_lock:
+            cls._provider_inflight.pop(key, None)
+
+    @classmethod
+    def _provider_cooldown_remaining(cls, provider_name: str, task: str, user_id: int = 1) -> float:
+        if not cls._uses_provider_cooldown(task):
+            return 0.0
+        key = cls._provider_cooldown_key(provider_name, task, user_id)
+        with cls._provider_cooldown_lock:
+            state = cls._provider_failures.get(key) or {}
+            cooldown_until = float(state.get("cooldown_until") or 0)
+        return max(0.0, cooldown_until - time.time())
+
+    @classmethod
+    def _record_provider_success(cls, provider_name: str, task: str, user_id: int = 1) -> None:
+        if not cls._uses_provider_cooldown(task):
+            return
+        key = cls._provider_cooldown_key(provider_name, task, user_id)
+        with cls._provider_cooldown_lock:
+            cls._provider_failures.pop(key, None)
+
+    @classmethod
+    def _record_provider_failure(cls, provider_name: str, task: str, detail: str, user_id: int = 1) -> None:
+        if not cls._uses_provider_cooldown(task) or not cls._is_timeout_error_message(detail):
+            return
+        cooldown_seconds = cls._provider_cooldown_seconds(user_id=user_id)
+        if cooldown_seconds <= 0:
+            return
+
+        threshold = cls._provider_failure_threshold(user_id=user_id)
+        key = cls._provider_cooldown_key(provider_name, task, user_id)
+        with cls._provider_cooldown_lock:
+            current = dict(cls._provider_failures.get(key) or {})
+            failure_count = int(current.get("failure_count") or 0) + 1
+            cooldown_until = float(current.get("cooldown_until") or 0)
+            if failure_count >= threshold:
+                cooldown_until = time.time() + cooldown_seconds
+            cls._provider_failures[key] = {
+                "failure_count": failure_count,
+                "cooldown_until": cooldown_until,
+                "last_error": str(detail or "")[:240],
+                "last_failure_at": time.time(),
+            }
+
+        if failure_count >= threshold:
+            MonitorLink.log(
+                f"⚠️ [AI] {provider_name} provider cooldown activated for {task}: "
+                f"{cooldown_seconds}s after {failure_count} failures"
+            )
 
     @classmethod
     def _safe_scan_fallback(cls, task: str) -> Optional[str]:
@@ -508,7 +621,10 @@ class AIAnalyst:
 
     @staticmethod
     def _timeout(user_id: int = 1) -> int:
-        return int(AppConfig.get('AI_TIMEOUT', user_id=user_id, default=120) or 120)
+        try:
+            return max(1, int(AppConfig.get('AI_TIMEOUT', user_id=user_id, default=8) or 8))
+        except (TypeError, ValueError):
+            return 8
 
     @staticmethod
     def _temperature(user_id: int = 1) -> float:
@@ -559,12 +675,12 @@ class AIAnalyst:
         target_provider = cls._normalize_provider(provider) or cls._provider(user_id=user_id)
         if target_provider == 'nvidia':
             if task in {'scan_pulse', 'scan_fast', 'scan_risk', 'recommend_brief'}:
-                return min(max(base_timeout, 20), 90)
+                return min(base_timeout, 8)
             if task == 'trend_batch':
-                return min(max(base_timeout, 28), 120)
+                return min(max(base_timeout, 6), 12)
             if task in {'scan_final', 'recommend_summary', 'vision', 'general'}:
-                return min(max(base_timeout, 24), 120)
-            return min(max(base_timeout, 20), 90)
+                return min(max(base_timeout, 6), 12)
+            return min(base_timeout, 8)
         if task in {'scan_pulse', 'scan_fast', 'scan_risk', 'recommend_brief'}:
             return min(base_timeout, 8)
         if task == 'trend_batch':
@@ -1061,9 +1177,13 @@ class AIAnalyst:
                             break
                     except Exception as exc:
                         last_status = 408
-                        MonitorLink.log(f"⚠️ [AI] OpenAI-compatible 调用异常: {exc}")
                         if cls._is_timeout_error_message(str(exc)):
+                            MonitorLink.log(
+                                f"⚠️ [AI] OpenAI-compatible provider timeout handled: "
+                                f"model={target_model} task={task}"
+                            )
                             return f"ERROR: {cls._build_business_error(str(exc))}"
+                        MonitorLink.log(f"⚠️ [AI] OpenAI-compatible 调用异常: {exc}")
                         time.sleep(0.5)
 
                 if last_status not in {404, 405, 408, 429}:
@@ -1120,14 +1240,33 @@ class AIAnalyst:
         """统一 AI 调用接口，支持按任务路由模型。"""
         last_error = "ERROR"
         for provider_name in cls._provider_order(task=task, user_id=user_id):
-            if provider_name == 'nvidia':
-                result = cls._request_nvidia(prompt, model, task=task, user_id=user_id)
-            else:
-                result = cls._request_ollama(prompt, model, task=task, user_id=user_id)
+            cooldown_remaining = cls._provider_cooldown_remaining(provider_name, task=task, user_id=user_id)
+            if cooldown_remaining > 0:
+                last_error = f"ERROR: {provider_name} provider cooling down for {cooldown_remaining:.0f}s"
+                MonitorLink.log(
+                    f"⚠️ [AI] 跳过 {provider_name} provider: task={task} "
+                    f"cooldown_remaining={cooldown_remaining:.0f}s"
+                )
+                continue
+
+            if not cls._try_begin_provider_request(provider_name, task=task, user_id=user_id):
+                last_error = f"ERROR: {provider_name} provider request already in flight"
+                MonitorLink.log(f"⚠️ [AI] 跳过 {provider_name} provider: task={task} request_inflight=true")
+                continue
+
+            try:
+                if provider_name == 'nvidia':
+                    result = cls._request_nvidia(prompt, model, task=task, user_id=user_id)
+                else:
+                    result = cls._request_ollama(prompt, model, task=task, user_id=user_id)
+            finally:
+                cls._end_provider_request(provider_name, task=task, user_id=user_id)
 
             if result and not str(result).startswith("ERROR"):
+                cls._record_provider_success(provider_name, task=task, user_id=user_id)
                 return result
             last_error = result or last_error
+            cls._record_provider_failure(provider_name, task=task, detail=last_error, user_id=user_id)
 
         if task in cls.SCAN_TASKS and cls._is_timeout_error_message(last_error):
             fallback = cls._safe_scan_fallback(task)

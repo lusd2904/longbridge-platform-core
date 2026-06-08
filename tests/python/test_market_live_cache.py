@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 import time
 from datetime import date, datetime
@@ -108,6 +109,527 @@ def test_live_snapshot_reuses_component_cache(monkeypatch) -> None:
         ("depth", "AAPL.US"),
         ("trades", "AAPL.US", 18),
     ])
+
+
+def test_longbridge_quote_failure_degrades_to_empty_payload(monkeypatch) -> None:
+    class FailingContext:
+        def quote(self, symbols):
+            raise RuntimeError(f"paper account required: {symbols}")
+
+    monkeypatch.setattr(market_service, "_with_quote_context", lambda user_id: FailingContext())
+    with market_service._LIVE_MARKET_CACHE_LOCK:
+        market_service._LIVE_MARKET_CACHE.clear()
+
+    payload = market_service.asyncio.run(
+        market_service._load_longbridge_quotes(user_id=1, symbols=["AAPL.US"])
+    )
+
+    assert payload["success"] is True
+    assert payload["data"]["dataSource"] == "longbridge-live-unavailable"
+    assert payload["data"]["fallback"] is True
+    assert payload["data"]["payload"] == []
+
+
+def test_longbridge_quote_pull_fallback_log_is_rate_limited(monkeypatch, caplog) -> None:
+    class FailingContext:
+        def quote(self, symbols):
+            raise RuntimeError(f"paper account required: {symbols}")
+
+    monkeypatch.setattr(market_service, "_with_quote_context", lambda user_id: FailingContext())
+    monkeypatch.setattr(market_service, "_LIVE_FALLBACK_LOG_INTERVAL_SECONDS", 60.0)
+    with market_service._LIVE_FALLBACK_LOG_LOCK:
+        market_service._LIVE_FALLBACK_LAST_LOGS.clear()
+    with market_service._LIVE_MARKET_CACHE_LOCK:
+        market_service._LIVE_MARKET_CACHE.clear()
+
+    with caplog.at_level(logging.WARNING, logger=market_service.LOGGER.name):
+        market_service.asyncio.run(
+            market_service._load_longbridge_quotes(user_id=1, symbols=["AAPL.US"], allow_stale=False)
+        )
+        market_service.asyncio.run(
+            market_service._load_longbridge_quotes(user_id=1, symbols=["MSFT.US"], allow_stale=False)
+        )
+
+    warnings = [
+        record
+        for record in caplog.records
+        if "Longbridge quote pull degraded" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+
+
+def test_trading_session_fallback_uses_rate_limited_logger(monkeypatch, caplog) -> None:
+    class FailingContext:
+        def trading_session(self):
+            raise RuntimeError("paper account required")
+
+    monkeypatch.setattr(market_service, "_with_quote_context", lambda user_id: FailingContext())
+    monkeypatch.setattr(market_service, "_LIVE_FALLBACK_LOG_INTERVAL_SECONDS", 60.0)
+    with market_service._LIVE_FALLBACK_LOG_LOCK:
+        market_service._LIVE_FALLBACK_LAST_LOGS.clear()
+    market_service._TRADING_SESSION_CACHE.update({"expires_at": 0.0, "payload": None})
+
+    session = {"user_id": 1}
+    with caplog.at_level(logging.WARNING, logger=market_service.LOGGER.name):
+        first = market_service.asyncio.run(market_service.longbridge_trading_session(session=session))
+        market_service._TRADING_SESSION_CACHE.update({"expires_at": 0.0, "payload": None})
+        second = market_service.asyncio.run(market_service.longbridge_trading_session(session=session))
+
+    assert first["success"] is True
+    assert second["success"] is True
+    assert first["data"]["payload"]["US"]["trade_sessions"] == []
+    warnings = [
+        record
+        for record in caplog.records
+        if "Longbridge trading-session degraded" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+
+
+def test_cli_push_poll_failure_enters_cooldown_without_log_spam(monkeypatch, caplog) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class CliQuoteContext:
+        def set_on_quote(self, *_args, **_kwargs):
+            pass
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+        def subscriptions(self):
+            return {}
+
+        def realtime_quote(self, symbols):
+            raise RuntimeError(f"paper account required: {symbols}")
+
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: CliQuoteContext())
+    monkeypatch.setattr(push_hub_module, "_cli_push_polling_enabled", lambda: True)
+    monkeypatch.setattr(push_hub_module, "CLI_FAILURE_COOLDOWN_SECONDS", 60.0)
+    monkeypatch.setattr(push_hub_module, "CLI_FAILURE_LOG_INTERVAL_SECONDS", 60.0)
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        with caplog.at_level(logging.WARNING, logger=push_hub_module.LOGGER.name):
+            session._poll_cli_event_type("quote", ["AAPL.US"])  # noqa: SLF001
+            session._poll_cli_event_type("quote", ["AAPL.US"])  # noqa: SLF001
+
+        warnings = [
+            record
+            for record in caplog.records
+            if "Longbridge CLI polling degraded" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert session._cli_polling_in_cooldown("quote") is True  # noqa: SLF001
+
+        runtime = session.runtime()
+        assert runtime["cliPolling"]["cooldowns"]["quote"] > 0
+        assert runtime["cliPolling"]["lastFailure"]["eventType"] == "quote"
+        assert runtime["cliPolling"]["lastFailure"]["symbolCount"] == 1
+    finally:
+        loop.close()
+
+
+def test_cli_push_poll_rate_limit_is_logged_explicitly(monkeypatch, caplog) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class CliQuoteContext:
+        def set_on_quote(self, *_args, **_kwargs):
+            pass
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+        def subscriptions(self):
+            return {}
+
+        def realtime_quote(self, symbols):
+            raise RuntimeError("API error (code 429002): api request is limited")
+
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: CliQuoteContext())
+    monkeypatch.setattr(push_hub_module, "_cli_push_polling_enabled", lambda: True)
+    monkeypatch.setattr(push_hub_module, "CLI_FAILURE_COOLDOWN_SECONDS", 60.0)
+    monkeypatch.setattr(push_hub_module, "CLI_FAILURE_LOG_INTERVAL_SECONDS", 60.0)
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        with caplog.at_level(logging.WARNING, logger=push_hub_module.LOGGER.name):
+            session._poll_cli_event_type("quote", ["AAPL.US"])  # noqa: SLF001
+
+        runtime = session.runtime()
+        assert runtime["cliPolling"]["lastFailure"]["rateLimited"] is True
+        assert any("Longbridge CLI polling rate limited" in record.getMessage() for record in caplog.records)
+    finally:
+        loop.close()
+
+
+def test_cli_push_snapshot_failure_log_is_rate_limited(monkeypatch, caplog) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class CliQuoteContext:
+        def set_on_quote(self, *_args, **_kwargs):
+            pass
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+        def subscriptions(self):
+            return {}
+
+        def realtime_quote(self, symbols):
+            raise RuntimeError(f"paper account required: {symbols}")
+
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: CliQuoteContext())
+    monkeypatch.setattr(push_hub_module, "_cli_push_polling_enabled", lambda: True)
+    monkeypatch.setattr(push_hub_module, "CLI_FAILURE_LOG_INTERVAL_SECONDS", 60.0)
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        with caplog.at_level(logging.WARNING, logger=push_hub_module.LOGGER.name):
+            session._build_snapshots(["AAPL.US"], [push_hub_module.SubType.Quote], trade_count=1)  # noqa: SLF001
+            session._build_snapshots(["MSFT.US"], [push_hub_module.SubType.Quote], trade_count=1)  # noqa: SLF001
+
+        warnings = [
+            record
+            for record in caplog.records
+            if "Longbridge CLI snapshot degraded" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+    finally:
+        loop.close()
+
+
+def test_cli_push_polling_disabled_by_default_skips_snapshot_and_poller(monkeypatch, caplog) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class CliQuoteContext:
+        def set_on_quote(self, *_args, **_kwargs):
+            pass
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+        def subscribe(self, *_args, **_kwargs):
+            pass
+
+        def subscriptions(self):
+            return {}
+
+        def realtime_quote(self, symbols):
+            raise RuntimeError(f"would call external CLI: {symbols}")
+
+    monkeypatch.delenv("LONGBRIDGE_CLI_PUSH_POLLING_ENABLED", raising=False)
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: CliQuoteContext())
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        with caplog.at_level(logging.WARNING, logger=push_hub_module.LOGGER.name):
+            result = session.subscribe(["AAPL.US"], [push_hub_module.SubType.Quote])
+
+        assert result["snapshots"] == {}
+        assert session._cli_poller_thread is None  # noqa: SLF001
+        assert result["runtime"]["cliPolling"]["available"] is True
+        assert result["runtime"]["cliPolling"]["enabled"] is False
+        assert result["runtime"]["cliPolling"]["disabledReason"] == "disabled-by-default"
+        assert not any("Longbridge CLI" in record.getMessage() for record in caplog.records)
+    finally:
+        loop.close()
+
+
+def test_push_broadcast_skips_stale_websocket_connections(monkeypatch, caplog) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class QuoteContext:
+        def set_on_quote(self, *_args, **_kwargs):
+            pass
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+    class FakeWebSocket:
+        def __init__(self, *, connected=True, fail=False):
+            state = push_hub_module.WebSocketState.CONNECTED if connected else push_hub_module.WebSocketState.DISCONNECTED
+            self.application_state = state
+            self.client_state = state
+            self.fail = fail
+            self.sent = []
+
+        async def send_json(self, payload):
+            if self.fail:
+                raise RuntimeError("socket closed")
+            self.sent.append(payload)
+
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: QuoteContext())
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        healthy = FakeWebSocket()
+        already_closed = FakeWebSocket(connected=False)
+        fails_on_send = FakeWebSocket(fail=True)
+        session._connections.update({healthy, already_closed, fails_on_send})  # noqa: SLF001
+
+        with caplog.at_level(logging.WARNING, logger=push_hub_module.LOGGER.name):
+            loop.run_until_complete(session._broadcast({"type": "quote"}))  # noqa: SLF001
+
+        assert healthy.sent == [{"type": "quote"}]
+        assert already_closed.sent == []
+        assert session._connections == {healthy}  # noqa: SLF001
+        assert any("Longbridge push WebSocket send failed" in record.getMessage() for record in caplog.records)
+    finally:
+        loop.close()
+
+
+def test_push_broadcast_prunes_empty_disconnect_without_warning(monkeypatch, caplog) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class QuoteContext:
+        def set_on_quote(self, *_args, **_kwargs):
+            pass
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+    class ClosingWebSocket:
+        application_state = push_hub_module.WebSocketState.CONNECTED
+        client_state = push_hub_module.WebSocketState.CONNECTED
+
+        async def send_json(self, _payload):
+            raise RuntimeError("")
+
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: QuoteContext())
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        closing = ClosingWebSocket()
+        session._connections.add(closing)  # noqa: SLF001
+
+        with caplog.at_level(logging.WARNING, logger=push_hub_module.LOGGER.name):
+            loop.run_until_complete(session._broadcast({"type": "quote"}))  # noqa: SLF001
+
+        assert session._connections == set()  # noqa: SLF001
+        assert not any("Longbridge push WebSocket send failed" in record.getMessage() for record in caplog.records)
+    finally:
+        loop.close()
+
+
+def test_cli_subscribe_snapshots_are_not_broadcast_to_websockets(monkeypatch) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class CliQuoteContext:
+        def set_on_quote(self, *_args, **_kwargs):
+            pass
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+        def subscribe(self, *_args, **_kwargs):
+            pass
+
+        def subscriptions(self):
+            return {}
+
+        def realtime_quote(self, symbols):
+            return [{"symbol": symbol, "last": "10", "prev_close": "9"} for symbol in symbols]
+
+    class FakeWebSocket:
+        application_state = push_hub_module.WebSocketState.CONNECTED
+        client_state = push_hub_module.WebSocketState.CONNECTED
+
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: CliQuoteContext())
+    monkeypatch.setattr(push_hub_module, "_cli_push_polling_enabled", lambda: True)
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        websocket = FakeWebSocket()
+        session._connections.add(websocket)  # noqa: SLF001
+
+        result = session.subscribe(["AAPL.US", "MSFT.US"], [push_hub_module.SubType.Quote])
+
+        assert [row["symbol"] for row in result["snapshots"]["quote"]] == ["AAPL.US", "MSFT.US"]
+        assert websocket.sent == []
+        assert [event["symbol"] for event in session.runtime()["latestEvents"][:2]] == ["MSFT.US", "AAPL.US"]
+    finally:
+        session._stop_cli_poller()  # noqa: SLF001
+        loop.close()
+
+
+def test_cli_poller_delays_first_poll_until_interval() -> None:
+    push_hub_module = sys.modules["push_hub"]
+    last_run = {}
+
+    assert push_hub_module._event_poll_due(last_run, "quote", 100.0, 4.0) is False  # noqa: SLF001
+    assert last_run == {"quote": 100.0}
+    assert push_hub_module._event_poll_due(last_run, "quote", 103.9, 4.0) is False  # noqa: SLF001
+    assert push_hub_module._event_poll_due(last_run, "quote", 104.0, 4.0) is True  # noqa: SLF001
+
+
+def test_initial_subscription_pushes_are_recorded_without_broadcast(monkeypatch) -> None:
+    push_hub_module = sys.modules["push_hub"]
+
+    class QuoteContext:
+        def __init__(self):
+            self.quote_callback = None
+
+        def set_on_quote(self, callback):
+            self.quote_callback = callback
+
+        def set_on_depth(self, *_args, **_kwargs):
+            pass
+
+        def set_on_brokers(self, *_args, **_kwargs):
+            pass
+
+        def set_on_trades(self, *_args, **_kwargs):
+            pass
+
+        def set_on_candlestick(self, *_args, **_kwargs):
+            pass
+
+        def subscribe(self, symbols, *_args, **_kwargs):
+            self.quote_callback(symbols[0], {"symbol": symbols[0], "last": "10", "prev_close": "9"})
+
+        def subscriptions(self):
+            return {}
+
+        def quote(self, symbols):
+            return [{"symbol": symbol, "last": "10", "prev_close": "9"} for symbol in symbols]
+
+    class FakeWebSocket:
+        application_state = push_hub_module.WebSocketState.CONNECTED
+        client_state = push_hub_module.WebSocketState.CONNECTED
+
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    monotonic = {"value": 100.0}
+    monkeypatch.setattr(push_hub_module, "build_quote_context", lambda **_kwargs: QuoteContext())
+    monkeypatch.setattr(push_hub_module.time, "monotonic", lambda: monotonic["value"])
+
+    loop = market_service.asyncio.new_event_loop()
+    try:
+        session = push_hub_module.LongbridgePushSession(user_id=1, loop=loop)
+        websocket = FakeWebSocket()
+        session._connections.add(websocket)  # noqa: SLF001
+
+        session.subscribe(["AAPL.US"], [push_hub_module.SubType.Quote])
+        assert websocket.sent == []
+        assert session.runtime()["latestEvents"][0]["symbol"] == "AAPL.US"
+
+        monotonic["value"] = 103.0
+        session._handle_push("quote", "AAPL.US", {"symbol": "AAPL.US"})  # noqa: SLF001
+        loop.run_until_complete(market_service.asyncio.sleep(0))
+        assert [item["symbol"] for item in websocket.sent] == ["AAPL.US"]
+    finally:
+        loop.close()
+
+
+def test_live_snapshot_degrades_when_longbridge_pull_fails(monkeypatch) -> None:
+    class FailingContext:
+        def quote(self, symbols):
+            raise RuntimeError(f"paper account required: {symbols}")
+
+        def depth(self, symbol):
+            raise RuntimeError(f"paper account required: {symbol}")
+
+        def trades(self, symbol, count):
+            raise RuntimeError(f"paper account required: {symbol}:{count}")
+
+    monkeypatch.setattr(market_service, "_with_quote_context", lambda user_id: FailingContext())
+    with market_service._LIVE_MARKET_CACHE_LOCK:
+        market_service._LIVE_MARKET_CACHE.clear()
+
+    payload = market_service.asyncio.run(
+        market_service.longbridge_snapshot(symbol="AAPL.US", count=18, session={"user_id": 1})
+    )
+
+    snapshot = payload["data"]["payload"]
+    assert snapshot["symbol"] == "AAPL.US"
+    assert snapshot["quote"] == []
+    assert snapshot["depth"] == {}
+    assert snapshot["trades"] == []
+    assert snapshot["sources"] == {
+        "quote": "longbridge-live-unavailable",
+        "depth": "longbridge-live-unavailable",
+        "trades": "longbridge-live-unavailable",
+    }
 
 
 def test_symbol_overview_core_mode_defers_heavy_sections(monkeypatch) -> None:

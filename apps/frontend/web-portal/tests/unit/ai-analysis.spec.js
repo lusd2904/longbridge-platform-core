@@ -151,7 +151,7 @@ describe('AIAnalysis scan status', () => {
     mocks.getStockPool.mockResolvedValue({ data: [] })
     mocks.getWatchlist.mockResolvedValue({
       data: [
-        { symbol: 'NVDA.US', name: 'NVIDIA Corporation', market: 'US', currentPrice: 901.25 }
+        { symbol: 'NVDA.US', name: 'NVIDIA Corporation', market: 'US', currentPrice: 901.25, marketValue: 1802.5 }
       ]
     })
     mocks.getPositionsSnapshot.mockResolvedValue({ data: [] })
@@ -173,6 +173,14 @@ describe('AIAnalysis scan status', () => {
     await scanButton.trigger('click')
     await flushPromises()
 
+    expect(mocks.analyzePositions).toHaveBeenCalledWith(expect.objectContaining({
+      positions: [expect.objectContaining({
+        symbol: 'NVDA.US',
+        current_price: 901.25,
+        market_value: 1802.5
+      })]
+    }))
+
     const runningStatus = wrapper.find('.analysis-scan-status')
     expect(runningStatus.exists()).toBe(true)
     expect(runningStatus.classes()).toContain('is-running')
@@ -192,6 +200,63 @@ describe('AIAnalysis scan status', () => {
     expect(completedStatus.text()).toContain('已收录 1 个扫描结果')
   })
 
+  it('loads the AIAnalysis page API surface before scanning', async () => {
+    const wrapper = shallowMount(AIAnalysis, mountOptions)
+    await flushPromises()
+
+    expect(mocks.getBrokerAccounts).toHaveBeenCalled()
+    expect(mocks.getDefaultBrokerAccount).toHaveBeenCalled()
+    expect(mocks.getAIModels).toHaveBeenCalled()
+    expect(mocks.getWatchlist).toHaveBeenCalled()
+    expect(mocks.getLatestTrendScans).toHaveBeenCalledWith(expect.objectContaining({
+      symbols: ['NVDA.US'],
+      limit: 1
+    }))
+    expect(mocks.getPlatformMarketScans).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('NVDA.US')
+    expect(wrapper.text()).toContain('扫描当前列表')
+  })
+
+  it('shows queued status for deferred AI analysis responses', async () => {
+    mocks.analyzePositions.mockResolvedValue({
+      data: [
+        {
+          symbol: 'NVDA.US',
+          name: 'NVIDIA Corporation',
+          queued: true,
+          deferred: true,
+          reason: '批量分析超过同步上限 1，已降级为异步/延后处理',
+          finalSignal: 'warning',
+          finalDecision: '排队中',
+          scanLayers: []
+        }
+      ],
+      stats: {
+        total: 1,
+        accepted: 0,
+        deferred: 1
+      },
+      syncLimit: 1,
+      meta: {
+        status: 'accepted',
+        executionMode: 'deferred'
+      }
+    })
+
+    const wrapper = shallowMount(AIAnalysis, mountOptions)
+    await flushPromises()
+
+    const scanButton = findButtonByText(wrapper, '扫描当前列表')
+    await scanButton.trigger('click')
+    await flushPromises()
+
+    const completedStatus = wrapper.find('.analysis-scan-status')
+    expect(completedStatus.classes()).toContain('is-complete')
+    expect(completedStatus.text()).toContain('已接受 1 个延后分析任务')
+    expect(wrapper.text()).toContain('排队中')
+    expect(mocks.message.warning).toHaveBeenCalledWith(expect.stringContaining('已自动降级'))
+  })
+
   it('keeps recoverable scan network failures out of error console noise', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -209,6 +274,47 @@ describe('AIAnalysis scan status', () => {
     expect(failedStatus.text()).toContain('最近一次扫描失败')
     expect(consoleErrorSpy).not.toHaveBeenCalledWith(expect.stringContaining('AI 研判失败'), expect.anything())
     expect(consoleWarnSpy).toHaveBeenCalledWith('AI 研判请求未完成:', 'Failed to fetch')
+
+    consoleErrorSpy.mockRestore()
+    consoleWarnSpy.mockRestore()
+  })
+
+  it('offers a direct retry action after an expired deferred analysis response', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const expiredError = new Error('分析任务已失效或不存在，请重新发起扫描')
+    expiredError.businessMessage = '分析任务已失效或不存在，请重新发起扫描'
+    expiredError.data = {
+      status: 'expired',
+      retryable: false
+    }
+    mocks.analyzePositions
+      .mockRejectedValueOnce(expiredError)
+      .mockResolvedValueOnce({
+        data: [createAnalysisResult()],
+        marketSummary: createAnalysisResult().marketSummary,
+        modelPlan: createAnalysisResult().modelPlan
+      })
+
+    const wrapper = shallowMount(AIAnalysis, mountOptions)
+    await flushPromises()
+
+    const scanButton = findButtonByText(wrapper, '扫描当前列表')
+    await scanButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.analysis-scan-status').classes()).toContain('is-error')
+    expect(wrapper.text()).toContain('分析任务已失效或不存在，请重新发起扫描')
+
+    const retryButton = findButtonByText(wrapper, '重新分析')
+    expect(retryButton).toBeTruthy()
+    await retryButton.trigger('click')
+    await flushPromises()
+
+    expect(mocks.analyzePositions).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('.analysis-scan-status').classes()).toContain('is-complete')
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    expect(consoleWarnSpy).toHaveBeenCalledWith('AI 研判请求未完成:', '分析任务已失效或不存在，请重新发起扫描')
 
     consoleErrorSpy.mockRestore()
     consoleWarnSpy.mockRestore()

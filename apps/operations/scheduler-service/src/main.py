@@ -283,7 +283,12 @@ def _us_open_ai_trade_settings() -> Dict[str, Any]:
 
 
 def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
-    flag_column = "scan_before_open" if session_name == "pre_open" else "scan_after_close"
+    if session_name == "pre_open":
+        watchlist_filter = "w.scan_before_open = 1"
+    elif session_name == "post_close":
+        watchlist_filter = "w.scan_after_close = 1"
+    else:
+        watchlist_filter = "(w.scan_before_open = 1 OR w.scan_after_close = 1)"
     max_users = max(1, min(int(os.getenv("REF_WATCHLIST_REVIEW_MAX_USERS", "50")), 200))
     try:
         DbUtil.execute_sql(
@@ -319,7 +324,7 @@ def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
         FROM users u
         JOIN user_watchlist_stocks w
           ON w.user_id = u.id
-         AND w.{flag_column} = 1
+         AND {watchlist_filter}
         WHERE COALESCE(u.status, 'active') NOT IN ('disabled', 'locked')
         GROUP BY u.id, u.username, u.role
         ORDER BY target_count DESC, u.id ASC
@@ -684,6 +689,12 @@ watchlist_pre_open_review_scheduler = ManagedDailyTaskRunner(
     45,
     lambda: _run_watchlist_review("pre_open"),
 )
+watchlist_midday_review_scheduler = ManagedDailyTaskRunner(
+    "watchlist_midday_review",
+    12,
+    30,
+    lambda: _run_watchlist_review("midday"),
+)
 watchlist_post_close_review_scheduler = ManagedDailyTaskRunner(
     "watchlist_post_close_review",
     16,
@@ -729,6 +740,11 @@ class SchedulerRuntime:
                 "title": "自选股盘前复核",
                 "scope": "system",
                 "scheduler": watchlist_pre_open_review_scheduler,
+            },
+            "watchlist_midday_review": {
+                "title": "自选股盘中复核",
+                "scope": "system",
+                "scheduler": watchlist_midday_review_scheduler,
             },
             "watchlist_post_close_review": {
                 "title": "自选股盘后复核",
@@ -1328,6 +1344,7 @@ TASK_RUNNERS: Dict[str, Callable[[int], Dict[str, Any]]] = {
     "symbol_indicator_daily_refresh": lambda user_id: _run_indicator_refresh(),
     "daily_market_ai_scan": lambda user_id: _run_market_scan(user_id),
     "watchlist_pre_open_review": lambda user_id: watchlist_pre_open_review_scheduler.run_once(),
+    "watchlist_midday_review": lambda user_id: watchlist_midday_review_scheduler.run_once(),
     "watchlist_post_close_review": lambda user_id: watchlist_post_close_review_scheduler.run_once(),
     "watchlist_us_open_ai_trade": lambda user_id: watchlist_us_open_ai_trade_scheduler.run_once(),
     "daily_symbol_trend_ai_scan": lambda user_id: daily_symbol_trend_scan_scheduler.run_once(),

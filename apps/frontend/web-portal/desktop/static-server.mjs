@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename)
 const require = createRequire(import.meta.url)
 const { buildServiceTargets } = require('./config.cjs')
 const projectRoot = path.resolve(__dirname, '..')
-const distDir = path.resolve(projectRoot, 'dist')
+const defaultDistDir = path.resolve(projectRoot, 'dist')
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:3100'
 
 const MIME_TYPES = {
@@ -45,6 +45,10 @@ function normalizeBaseUrl(rawValue = '') {
 
 function resolveMimeType(filePath = '') {
   return MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
+}
+
+function resolveDesktopDistDir(options = {}) {
+  return options.distDir ? path.resolve(String(options.distDir)) : defaultDistDir
 }
 
 function resolveServiceTarget(requestPath = '', options = {}) {
@@ -202,7 +206,8 @@ function installDesktopMetaSocket(server) {
   })
 }
 
-async function readFileWithFallback(requestPath = '/') {
+async function readFileWithFallback(requestPath = '/', options = {}) {
+  const distDir = resolveDesktopDistDir(options)
   const normalizedPath = decodeURIComponent(String(requestPath || '/').split('?')[0]).replace(/^\/+/, '')
   const targetPath = normalizedPath ? path.join(distDir, normalizedPath) : path.join(distDir, 'index.html')
 
@@ -238,7 +243,7 @@ export async function startDesktopServer(port = 4168, options = {}) {
         return
       }
 
-      const { filePath, content } = await readFileWithFallback(request.url || '/')
+      const { filePath, content } = await readFileWithFallback(request.url || '/', options)
       response.writeHead(200, {
         'Content-Type': resolveMimeType(filePath),
         'Cache-Control': filePath.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable'
@@ -283,6 +288,7 @@ export async function startDesktopServer(port = 4168, options = {}) {
 
 export const desktopServerInternals = {
   normalizeBaseUrl,
+  resolveDesktopDistDir,
   resolveMimeType,
   resolveServiceTarget
 }

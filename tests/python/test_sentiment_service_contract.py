@@ -20,8 +20,8 @@ def _load_module():
 
 
 def test_sentiment_config_reuses_sub2api_models(monkeypatch) -> None:
-    monkeypatch.setenv("LONGBRIDGE_AI_BASE_URL", "http://sub2api:8080/v1")
-    monkeypatch.setenv("LONGBRIDGE_AI_URL", "http://sub2api:8080/v1/chat/completions")
+    monkeypatch.setenv("LONGBRIDGE_AI_BASE_URL", "https://lucen.cc/v1")
+    monkeypatch.setenv("LONGBRIDGE_AI_URL", "https://lucen.cc/v1/chat/completions")
     monkeypatch.setenv("LONGBRIDGE_AI_MODEL", "gpt-5.5")
     monkeypatch.setenv("LONGBRIDGE_AI_MODEL_SCAN_PULSE", "gpt-5.4")
     monkeypatch.setenv("LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY", "gpt-5.5")
@@ -31,17 +31,32 @@ def test_sentiment_config_reuses_sub2api_models(monkeypatch) -> None:
     payload = asyncio.run(module.get_config())
     assert payload["enabled"] is True
     assert payload["mode"] == "read-only-aggregator"
-    assert payload["aiConfig"]["baseUrl"] == "http://sub2api:8080/v1"
-    assert payload["aiConfig"]["chatCompletionsUrl"] == "http://sub2api:8080/v1/chat/completions"
+    assert payload["aiConfig"]["baseUrl"] == "https://lucen.cc/v1"
+    assert payload["aiConfig"]["chatCompletionsUrl"] == "https://lucen.cc/v1/chat/completions"
     assert payload["aiConfig"]["models"]["default"] == "gpt-5.5"
     assert payload["aiConfig"]["models"]["scanPulse"] == "gpt-5.4"
     assert payload["aiConfig"]["source"] == "LONGBRIDGE_AI_*"
 
 
 def test_sentiment_bootstrap_exposes_github_adoption_contract(monkeypatch) -> None:
-    monkeypatch.setenv("LONGBRIDGE_AI_BASE_URL", "http://sub2api:8080/v1")
+    monkeypatch.setenv("LONGBRIDGE_AI_BASE_URL", "https://lucen.cc/v1")
     monkeypatch.setenv("LONGBRIDGE_AI_MODEL", "gpt-5.5")
     module = _load_module()
+    monkeypatch.setattr(module, "_build_recommendation_map", lambda user_id: {})
+    monkeypatch.setattr(
+        module,
+        "_build_market_summary",
+        lambda market, user_id, recommendation_map=None: {
+            "market": market,
+            "sentimentScore": 0,
+            "sentimentLabel": "neutral",
+            "positiveCount": 0,
+            "negativeCount": 0,
+            "heat": 0,
+            "topRiskKeywords": [],
+            "leaders": [],
+        },
+    )
 
     contract = module._build_page_contract(user_id=1)["githubAdoption"]
 

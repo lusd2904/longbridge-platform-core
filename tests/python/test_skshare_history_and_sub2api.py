@@ -283,8 +283,8 @@ def test_ai_defaults_route_to_sub2api_models(monkeypatch) -> None:
     values = {
         "AI_PROVIDER": "nvidia",
         "AI_FALLBACK_PROVIDER": "",
-        "AI_BASE_URL": "http://sub2api:8080/v1",
-        "AI_URL": "http://sub2api:8080/v1/chat/completions",
+        "AI_BASE_URL": "https://lucen.cc/v1",
+        "AI_URL": "https://lucen.cc/v1/chat/completions",
         "AI_API_STYLE": "openai-chat-completions",
     }
 
@@ -295,11 +295,11 @@ def test_ai_defaults_route_to_sub2api_models(monkeypatch) -> None:
 
     assert AIAnalyst._provider(user_id=1) == "nvidia"
     assert AIAnalyst._provider_order(task="scan_final", user_id=1) == ["nvidia"]
-    assert AIAnalyst._nvidia_endpoints(user_id=1)[0] == "http://sub2api:8080/v1/chat/completions"
+    assert AIAnalyst._nvidia_endpoints(user_id=1)[0] == "https://lucen.cc/v1/chat/completions"
     assert AIAnalyst._resolve_model(task="scan_final", user_id=1, provider="nvidia") == "gpt-5.5"
     assert AIAnalyst._resolve_model(task="scan_pulse", user_id=1, provider="nvidia") == "gpt-5.4"
     assert AIAnalyst._build_nvidia_payload(
-        "http://sub2api:8080/v1/chat/completions",
+        "https://lucen.cc/v1/chat/completions",
         "test",
         "gpt-5.4",
         task="scan_pulse",

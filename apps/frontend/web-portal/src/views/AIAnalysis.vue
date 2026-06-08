@@ -106,6 +106,19 @@
         class="analysis-status-alert"
       />
 
+      <div v-if="analysisErrorMessage" class="analysis-error-actions">
+        <el-button
+          type="primary"
+          plain
+          size="small"
+          :icon="Refresh"
+          :disabled="analyzing || !scanCandidateTargets.length"
+          @click="scanVisibleTargets"
+        >
+          重新分析
+        </el-button>
+      </div>
+
       <div
         v-if="scanStatusVisible"
         class="analysis-scan-status"
@@ -629,6 +642,11 @@ const scanStatusDetail = computed(() => {
   if (analyzing.value) return scanProgressText.value
   if (analysisErrorMessage.value) return analysisErrorMessage.value
 
+  const queuedCount = Object.values(analysisMap.value).filter((item) => item?.queued || item?.deferred).length
+  if (queuedCount) {
+    return `已接受 ${queuedCount} 个延后分析任务，等待后台扫描补齐结果`
+  }
+
   const finishedAt = formatDate(lastScanAt.value)
   const summary = analyzedCount.value
     ? `已收录 ${analyzedCount.value} 个扫描结果`
@@ -1076,7 +1094,8 @@ const scanTargets = async (targetList) => {
       symbol: target.symbol,
       name: target.name,
       quantity: target.quantity,
-      current_price: target.currentPrice
+      current_price: target.currentPrice,
+      market_value: target.marketValue
     }))
 
     const res = await analyzePositions({
@@ -1091,7 +1110,7 @@ const scanTargets = async (targetList) => {
     }
 
     const failedCount = (res?.data || []).filter((item) => item?.error && !item?.degraded).length
-    const degradedCount = (res?.data || []).filter((item) => item?.degraded).length
+    const degradedCount = (res?.data || []).filter((item) => item?.degraded || item?.queued).length
     const successCount = Math.max(payload.length - failedCount, 0)
 
     if (failedCount === payload.length) {
@@ -1105,10 +1124,11 @@ const scanTargets = async (targetList) => {
   } catch (error) {
     const message = error?.businessMessage || error?.data?.error || error.message || 'AI 研判失败'
     const recoverableNetworkFailure = /abort|cancel|failed to fetch/i.test(message)
+    const expiredDeferredJob = error?.data?.status === 'expired' || /任务已失效|expired/i.test(message)
     if (pageUnmounted.value && recoverableNetworkFailure) {
       return
     }
-    if (recoverableNetworkFailure) {
+    if (recoverableNetworkFailure || expiredDeferredJob) {
       console.warn('AI 研判请求未完成:', message)
     } else {
       console.error('AI 研判失败:', error)
@@ -1377,6 +1397,16 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--surface-soft) 82%, transparent) !important;
   color: var(--text-muted) !important;
   opacity: 1;
+}
+
+.analysis-error-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.analysis-error-actions :deep(.el-button) {
+  min-width: 108px;
 }
 
 .analysis-scan-status {

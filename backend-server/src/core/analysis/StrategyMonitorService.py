@@ -554,8 +554,32 @@ class StrategyMonitorService:
     @classmethod
     def delete_strategy(cls, user_id: int, strategy_id: int):
         cls.ensure_schema(user_id=user_id)
+        cls._unlink_risk_orders_for_deleted_strategy(user_id=user_id, strategy_id=strategy_id)
         DbUtil.execute_sql("DELETE FROM strategy_alerts WHERE strategy_id = %s AND user_id = %s", (strategy_id, user_id))
         DbUtil.execute_sql("DELETE FROM strategies WHERE id = %s AND user_id = %s", (strategy_id, user_id))
+
+    @classmethod
+    def _unlink_risk_orders_for_deleted_strategy(cls, user_id: int, strategy_id: int) -> None:
+        if not strategy_id:
+            return
+        note = f"Strategy {int(strategy_id)} deleted; protection order retained as global."
+        try:
+            DbUtil.execute_sql(
+                """
+                UPDATE user_risk_orders
+                SET strategy_id = 0,
+                    note = CASE
+                        WHEN note IS NULL OR note = '' THEN %s
+                        WHEN note LIKE %s THEN note
+                        ELSE CONCAT(note, ' | ', %s)
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s AND strategy_id = %s
+                """,
+                (note, f"%Strategy {int(strategy_id)} deleted%", note, user_id, strategy_id),
+            )
+        except Exception as exc:
+            print(f"⚠️ [StrategyMonitor] 解除已删除策略的保护单归属失败: {exc}")
 
     @classmethod
     def list_backtests(cls, user_id: int = 1) -> List[Dict[str, Any]]:
@@ -693,14 +717,7 @@ class StrategyMonitorService:
         auto_active_rules = [item for item in active_rules if item.get('executionMode') == cls.EXECUTION_MODE_AUTO]
         manual_active_rules = [item for item in active_rules if item.get('executionMode') == cls.EXECUTION_MODE_MANUAL]
 
-        position_count = 0
-        try:
-            manager = get_broker_manager()
-            broker = manager.get_broker(account_id, user_id=user_id)
-            if broker and (broker.is_connected or broker.connect()):
-                position_count = len(broker.get_positions() or [])
-        except Exception:
-            position_count = 0
+        position_count = cls._load_trade_service_position_count(account_id=account_id, user_id=user_id)
 
         job = DbUtil.fetch_one(
             """
@@ -729,6 +746,25 @@ class StrategyMonitorService:
             "rules": strategies,
             "alerts": alerts
         }
+
+    @classmethod
+    def _load_trade_service_position_count(cls, account_id: Optional[int], user_id: int) -> int:
+        """Read-only monitor summaries must not open broker sessions."""
+        try:
+            account = cls._load_trade_service_account(account_id=account_id, user_id=user_id)
+            resolved_account_id = int(cls._read_order_attr(account, "id", account_id or 0) or account_id or 0)
+            if resolved_account_id <= 0:
+                return 0
+            response = cls._request_trade_service(
+                method="GET",
+                path=f"/api/v1/trade/accounts/{resolved_account_id}/positions",
+                user_id=user_id,
+                timeout=12,
+            )
+            positions = response.get("data") if isinstance(response.get("data"), list) else []
+            return len(positions)
+        except Exception:
+            return 0
 
     @classmethod
     def get_alerts(cls, user_id: int = 1, limit: int = 20) -> List[Dict[str, Any]]:

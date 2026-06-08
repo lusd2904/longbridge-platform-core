@@ -92,6 +92,7 @@
             <h4>止损订单</h4>
             <el-table :data="displayStopLossOrders" style="width: 100%">
               <el-table-column prop="symbol" label="股票" width="100" />
+              <el-table-column prop="strategyScopeLabel" label="归属" width="110" />
               <el-table-column prop="stopPrice" label="止损价" width="100">
                 <template #default="{ row }">
                   {{ formatCurrency(row.stopPrice) }}
@@ -124,6 +125,7 @@
             <h4>止盈订单</h4>
             <el-table :data="displayTakeProfitOrders" style="width: 100%">
               <el-table-column prop="symbol" label="股票" width="100" />
+              <el-table-column prop="strategyScopeLabel" label="归属" width="110" />
               <el-table-column prop="profitPrice" label="止盈价" width="100">
                 <template #default="{ row }">
                   {{ formatCurrency(row.profitPrice) }}
@@ -413,9 +415,16 @@ const filteredEvents = computed(() => {
 
 const normalizeRiskOrder = (row = {}, type = 'stop_loss') => {
   const triggerField = type === 'take_profit' ? 'profitPrice' : 'stopPrice'
+  const rawStrategyId = row.strategyId ?? row.strategy_id
+  const normalizedStrategyId = Number(rawStrategyId || 0)
+  const strategyId = Number.isFinite(normalizedStrategyId) && normalizedStrategyId > 0
+    ? normalizedStrategyId
+    : null
   return {
     ...row,
     symbol: String(row.symbol || '').toUpperCase(),
+    strategyId,
+    strategyScopeLabel: strategyId ? `策略 #${strategyId}` : '全局保护',
     [triggerField]: Number(row[triggerField] ?? row[type === 'take_profit' ? 'profit_price' : 'stop_price'] ?? row.price ?? 0),
     currentPrice: Number(row.currentPrice ?? row.current_price ?? 0),
     distance: Number(row.distance ?? 0)

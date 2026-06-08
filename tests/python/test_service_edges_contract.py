@@ -26,6 +26,11 @@ EXTERNAL_TARGETS = {
     "skshare",
     "longbridge-quote",
 }
+LONGBRIDGE_CREDENTIAL_SERVICES = {
+    "market-service",
+    "scheduler-service",
+    "trade-service",
+}
 
 
 def _load_module(module_name: str, path: Path):
@@ -124,3 +129,31 @@ def test_compose_service_dependencies_match_service_edges() -> None:
         block = _service_block(compose_source, service_name)
         for target in expected_targets:
             assert f"      {target}:" in block, f"{service_name} compose depends_on missing {target}"
+
+
+def test_longbridge_credentials_are_mounted_only_on_direct_cli_callers() -> None:
+    compose_source = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    backend_template = re.search(
+        r"\nx-backend-service: &backend-service\n(?P<body>.*?)(?=\n\nx-|\n\nservices:|\Z)",
+        compose_source,
+        flags=re.S,
+    )
+    assert backend_template, "x-backend-service compose template missing"
+    assert "/root/.longbridge" not in backend_template.group("body")
+    assert "x-longbridge-cli-volumes: &longbridge-cli-volumes" in compose_source
+
+    mounted_services = set()
+    for service_name in INTERNAL_SERVICES - {"web-portal"}:
+        block = _service_block(compose_source, service_name)
+        if "*longbridge-cli-volumes" in block or "/root/.longbridge" in block:
+            mounted_services.add(service_name)
+
+    assert mounted_services == LONGBRIDGE_CREDENTIAL_SERVICES
+
+    service_map = _load_service_map()
+    direct_longbridge_callers = {
+        edge["from"]
+        for edge in service_map["service_edges"]
+        if edge["to"] in {"longbridge-cli", "longbridge-quote"}
+    }
+    assert direct_longbridge_callers == LONGBRIDGE_CREDENTIAL_SERVICES

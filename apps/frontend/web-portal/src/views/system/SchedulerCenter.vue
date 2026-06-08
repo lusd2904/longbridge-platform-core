@@ -462,11 +462,13 @@ const reviewActionForm = ref(createReviewActionForm())
 
 const AGENT_REVIEW_TASK_SCENES = {
   watchlist_pre_open_review: 'watchlist_pre_open_review',
+  watchlist_midday_review: 'watchlist_midday_review',
   watchlist_post_close_review: 'watchlist_post_close_review'
 }
 const US_OPEN_AI_TRADE_TASK_KEY = 'watchlist_us_open_ai_trade'
 const AGENT_REVIEW_SCENE_LABELS = {
   watchlist_pre_open_review: '自选股盘前复核',
+  watchlist_midday_review: '自选股盘中复核',
   watchlist_post_close_review: '自选股盘后复核'
 }
 const AGENT_REVIEW_ACTIONS = [

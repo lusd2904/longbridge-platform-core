@@ -66,8 +66,8 @@ const mountOptions = {
 const bootstrapPayload = {
   aiConfig: {
     provider: 'nvidia',
-    baseUrl: 'http://sub2api:8080/v1',
-    chatCompletionsUrl: 'http://sub2api:8080/v1/chat/completions',
+    baseUrl: 'https://lucen.cc/v1',
+    chatCompletionsUrl: 'https://lucen.cc/v1/chat/completions',
     models: {
       default: 'gpt-5.5',
       scanPulse: 'gpt-5.4',
@@ -148,8 +148,8 @@ const overviewPayload = {
   ],
   aiConfig: {
     provider: 'nvidia',
-    baseUrl: 'http://sub2api:8080/v1',
-    chatCompletionsUrl: 'http://sub2api:8080/v1/chat/completions',
+    baseUrl: 'https://lucen.cc/v1',
+    chatCompletionsUrl: 'https://lucen.cc/v1/chat/completions',
     models: {
       default: 'gpt-5.5',
       scanPulse: 'gpt-5.4',
@@ -181,7 +181,7 @@ describe('MarketSentiment page', () => {
     expect(getSentimentBootstrapMock).toHaveBeenCalledTimes(1)
     expect(getSentimentOverviewMock).toHaveBeenCalledTimes(1)
     expect(getSentimentOverviewMock).toHaveBeenLastCalledWith({})
-    expect(wrapper.vm.aiConfig.baseUrl).toBe('http://sub2api:8080/v1')
+    expect(wrapper.vm.aiConfig.baseUrl).toBe('https://lucen.cc/v1')
     expect(wrapper.vm.githubAdoption.decision).toBe('native-contract-first')
     expect(wrapper.vm.githubCandidates).toHaveLength(2)
     expect(wrapper.vm.localizedRecommendedStackText).toContain('FinNLP 采集器')

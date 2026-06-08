@@ -878,15 +878,39 @@ def _ensure_risk_control_tables() -> None:
             order_type VARCHAR(16) NOT NULL,
             trigger_price DECIMAL(18, 4) DEFAULT 0,
             quantity DECIMAL(18, 4) DEFAULT NULL,
+            strategy_id INT NOT NULL DEFAULT 0,
             status VARCHAR(20) DEFAULT 'active',
             note VARCHAR(255) DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uniq_user_symbol_type (user_id, symbol, order_type),
-            INDEX idx_user_type_status (user_id, order_type, status)
+            UNIQUE KEY uniq_user_strategy_symbol_type (user_id, strategy_id, symbol, order_type),
+            INDEX idx_user_type_status (user_id, order_type, status),
+            INDEX idx_user_strategy_type_status (user_id, strategy_id, order_type, status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
     )
+    try:
+        column = DbUtil.fetch_one("SHOW COLUMNS FROM user_risk_orders LIKE 'strategy_id'")
+        if not column:
+            DbUtil.execute_sql("ALTER TABLE user_risk_orders ADD COLUMN strategy_id INT NOT NULL DEFAULT 0 AFTER quantity")
+        else:
+            DbUtil.execute_sql("UPDATE user_risk_orders SET strategy_id = 0 WHERE strategy_id IS NULL")
+            DbUtil.execute_sql("ALTER TABLE user_risk_orders MODIFY COLUMN strategy_id INT NOT NULL DEFAULT 0")
+        old_unique = DbUtil.fetch_one("SHOW INDEX FROM user_risk_orders WHERE Key_name = 'uniq_user_symbol_type'")
+        if old_unique:
+            DbUtil.execute_sql("ALTER TABLE user_risk_orders DROP INDEX uniq_user_symbol_type")
+        strategy_unique = DbUtil.fetch_one("SHOW INDEX FROM user_risk_orders WHERE Key_name = 'uniq_user_strategy_symbol_type'")
+        if not strategy_unique:
+            DbUtil.execute_sql(
+                "ALTER TABLE user_risk_orders ADD UNIQUE KEY uniq_user_strategy_symbol_type (user_id, strategy_id, symbol, order_type)"
+            )
+        index_row = DbUtil.fetch_one("SHOW INDEX FROM user_risk_orders WHERE Key_name = 'idx_user_strategy_type_status'")
+        if not index_row:
+            DbUtil.execute_sql(
+                "ALTER TABLE user_risk_orders ADD INDEX idx_user_strategy_type_status (user_id, strategy_id, order_type, status)"
+            )
+    except Exception as exc:
+        print(f"⚠️ [API] 确认保护单 strategy_id 字段失败: {exc}")
 
 
 def _default_risk_limits() -> Dict[str, float]:
@@ -966,7 +990,7 @@ def _load_risk_orders(user_id: int, order_type: str, account_id: Optional[int] =
     _ensure_risk_control_tables()
     rows = DbUtil.fetch_all(
         """
-        SELECT id, account_id, symbol, trigger_price, quantity, status, note, created_at, updated_at
+        SELECT id, account_id, strategy_id, symbol, trigger_price, quantity, status, note, created_at, updated_at
         FROM user_risk_orders
         WHERE user_id = %s AND order_type = %s AND status = 'active'
         ORDER BY updated_at DESC, id DESC
@@ -993,6 +1017,7 @@ def _load_risk_orders(user_id: int, order_type: str, account_id: Optional[int] =
         results.append({
             "id": int(row.get("id") or 0),
             "accountId": row.get("account_id"),
+            "strategyId": int(row.get("strategy_id") or 0) or None,
             "symbol": symbol,
             "price": trigger_price,
             "stopPrice": trigger_price if order_type == 'stop_loss' else None,
@@ -2876,19 +2901,21 @@ def set_stoploss():
 
         quantity = data.get('quantity')
         account_id = data.get('account_id')
+        strategy_id = int(data.get('strategy_id') or data.get('strategyId') or 0)
         DbUtil.execute_sql(
             """
-            INSERT INTO user_risk_orders (user_id, account_id, symbol, order_type, trigger_price, quantity, status, note)
-            VALUES (%s, %s, %s, 'stop_loss', %s, %s, 'active', %s)
+            INSERT INTO user_risk_orders (user_id, account_id, strategy_id, symbol, order_type, trigger_price, quantity, status, note)
+            VALUES (%s, %s, %s, %s, 'stop_loss', %s, %s, 'active', %s)
             ON DUPLICATE KEY UPDATE
                 account_id = VALUES(account_id),
+                strategy_id = VALUES(strategy_id),
                 trigger_price = VALUES(trigger_price),
                 quantity = VALUES(quantity),
                 status = 'active',
                 note = VALUES(note),
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (request.user_id, account_id, symbol, trigger_price, quantity, data.get('note'))
+            (request.user_id, account_id, strategy_id, symbol, trigger_price, quantity, data.get('note'))
         )
         return jsonify({"success": True, "message": "止损规则已保存"})
     except Exception as e:
@@ -2945,19 +2972,21 @@ def set_takeprofit():
 
         quantity = data.get('quantity')
         account_id = data.get('account_id')
+        strategy_id = int(data.get('strategy_id') or data.get('strategyId') or 0)
         DbUtil.execute_sql(
             """
-            INSERT INTO user_risk_orders (user_id, account_id, symbol, order_type, trigger_price, quantity, status, note)
-            VALUES (%s, %s, %s, 'take_profit', %s, %s, 'active', %s)
+            INSERT INTO user_risk_orders (user_id, account_id, strategy_id, symbol, order_type, trigger_price, quantity, status, note)
+            VALUES (%s, %s, %s, %s, 'take_profit', %s, %s, 'active', %s)
             ON DUPLICATE KEY UPDATE
                 account_id = VALUES(account_id),
+                strategy_id = VALUES(strategy_id),
                 trigger_price = VALUES(trigger_price),
                 quantity = VALUES(quantity),
                 status = 'active',
                 note = VALUES(note),
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (request.user_id, account_id, symbol, trigger_price, quantity, data.get('note'))
+            (request.user_id, account_id, strategy_id, symbol, trigger_price, quantity, data.get('note'))
         )
         return jsonify({"success": True, "message": "止盈规则已保存"})
     except Exception as e:

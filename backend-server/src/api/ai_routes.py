@@ -22,12 +22,24 @@ from utils.rate_limiter import rate_limit
 from core.account.DataPersistence import get_persistence_manager, AIAnalysisHistory
 import traceback
 import time
+import os
 from datetime import datetime
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 
 ai_bp = Blueprint('ai', __name__)
-SYNC_BATCH_ANALYZE_LIMIT = 12
+
+
+def _env_int(name, default, minimum=1):
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+SYNC_BATCH_ANALYZE_LIMIT = _env_int("REF_ANALYSIS_SYNC_POSITIONS_LIMIT", 12)
 
 BENCHMARKS = {
     'US': [
@@ -339,7 +351,7 @@ def _normalize_position_batch_payload(raw_positions, sync_limit=SYNC_BATCH_ANALY
     }
 
 
-def _build_deferred_batch_placeholders(raw_positions):
+def _build_deferred_batch_placeholders(raw_positions, sync_limit=SYNC_BATCH_ANALYZE_LIMIT):
     positions = raw_positions if isinstance(raw_positions, list) else []
     placeholders = []
     for item in positions:
@@ -355,7 +367,7 @@ def _build_deferred_batch_placeholders(raw_positions):
                 "name": item.get("name") or item.get("symbol_name") or symbol,
                 "queued": True,
                 "deferred": True,
-                "reason": f"批量分析超过同步上限 {SYNC_BATCH_ANALYZE_LIMIT}，已快速接受并延后处理",
+                "reason": f"批量分析超过同步上限 {sync_limit}，已快速接受并延后处理",
                 "finalSignal": "warning",
                 "finalDecision": "排队中",
                 "scanLayers": [],
@@ -425,15 +437,45 @@ def _build_real_indicator_context(symbol, current_price, volume, user_id=1):
 
 
 def _extract_position_quote_fallback(position):
-    current_price = float(
-        position.get('current_price')
-        or position.get('currentPrice')
-        or position.get('price')
-        or 0
+    def coerce_float(*values, default=0.0):
+        for value in values:
+            if value in (None, ""):
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return default
+
+    current_price = coerce_float(
+        position.get('current_price'),
+        position.get('currentPrice'),
+        position.get('market_price'),
+        position.get('marketPrice'),
+        position.get('latest_price'),
+        position.get('latestPrice'),
+        position.get('last_price'),
+        position.get('lastPrice'),
+        position.get('price'),
     )
-    volume = int(position.get('volume') or 0)
-    change_percent = float(position.get('change_percent') or position.get('changePercent') or 0)
-    prev_close = float(position.get('prev_close') or position.get('prevClose') or 0)
+    quantity = coerce_float(
+        position.get('quantity'),
+        position.get('qty'),
+        position.get('availableQuantity'),
+        position.get('available_quantity'),
+    )
+    market_value = coerce_float(
+        position.get('market_value'),
+        position.get('marketValue'),
+        position.get('market_val'),
+        position.get('marketVal'),
+    )
+    if current_price <= 0 and quantity > 0 and market_value > 0:
+        current_price = market_value / quantity
+
+    volume = int(coerce_float(position.get('volume'), position.get('turnoverVolume')))
+    change_percent = coerce_float(position.get('change_percent'), position.get('changePercent'))
+    prev_close = coerce_float(position.get('prev_close'), position.get('prevClose'))
 
     if prev_close <= 0 and current_price > 0 and change_percent:
         denominator = 1 + (change_percent / 100)
@@ -1444,7 +1486,10 @@ def batch_analyze_positions():
             duration = time.time() - start_time
             response_payload = {
                 "success": True,
-                "data": _build_deferred_batch_placeholders(original_positions),
+                "data": _build_deferred_batch_placeholders(
+                    original_positions,
+                    sync_limit=batch_meta["syncLimit"],
+                ),
                 "message": f"批量分析请求共 {batch_meta['requested']} 只股票，超过同步上限 {batch_meta['syncLimit']}，已快速接受并延后处理",
                 "duration": duration,
                 "accepted": True,

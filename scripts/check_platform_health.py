@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -20,11 +21,27 @@ SERVICE_PORTS = {
 }
 
 REQUIRED_FIELDS = {"service", "version", "status", "status_text", "port", "checked_at", "deps", "brokerConnectivity"}
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("REF_HEALTH_CHECK_TIMEOUT_SECONDS", "2.0"))
+REQUEST_RETRIES = max(1, int(os.getenv("REF_HEALTH_CHECK_RETRIES", "3")))
+RETRY_DELAY_SECONDS = max(0.0, float(os.getenv("REF_HEALTH_CHECK_RETRY_DELAY_SECONDS", "0.25")))
 
 
-def fetch_json(url: str) -> dict:
-    with urlopen(url, timeout=2.0) as response:
+def fetch_json(url: str, *, timeout_seconds: float = REQUEST_TIMEOUT_SECONDS) -> dict:
+    with urlopen(url, timeout=timeout_seconds) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_json_with_retries(url: str) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(REQUEST_RETRIES):
+        try:
+            return fetch_json(url)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt < REQUEST_RETRIES - 1 and RETRY_DELAY_SECONDS > 0:
+                time.sleep(RETRY_DELAY_SECONDS)
+    assert last_error is not None
+    raise last_error
 
 
 def main() -> int:
@@ -32,7 +49,7 @@ def main() -> int:
     for service, port in SERVICE_PORTS.items():
         url = f"http://127.0.0.1:{port}/health"
         try:
-            payload = fetch_json(url)
+            payload = fetch_json_with_retries(url)
         except URLError as exc:
             failures.append(f"{service}: unreachable ({exc})")
             continue
