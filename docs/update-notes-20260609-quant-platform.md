@@ -15,6 +15,7 @@
 - 顶层量化指标和 JSON 序列化增加 `NaN` / `Infinity` 防护，避免写出非标准 JSON。
 - Docker Compose 默认使用本地 Redis 服务，并把 AI 网关默认地址调整为 `https://lucen.cc/v1`；API key 仍只通过环境变量注入，示例文件不包含密钥。
 - 增加 Docker/API/UI/日志验证脚本，覆盖真实登录、纸账户状态、异步任务健康、历史 410 行为、页面 smoke 和对比度扫描。
+- 优化 `.dockerignore` 和增量 Web Dockerfile：排除本地虚拟环境、桌面/移动构建产物和运行证据目录；Web 增量镜像会同步 nginx 配置并清空旧静态资源后再复制新 `dist`。
 
 ## 验证结果
 
