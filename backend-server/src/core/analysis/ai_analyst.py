@@ -227,6 +227,7 @@ class AIAnalyst:
         "recommend_brief": "AI_MODEL_RECOMMEND_BRIEF",
         "recommend_summary": "AI_MODEL_RECOMMEND_SUMMARY",
         "vision": "AI_MODEL_VISION",
+        "assistant": ("AI_MODEL_ASSISTANT", "AI_MODEL"),
         "general": "AI_MODEL"
     }
 
@@ -240,6 +241,7 @@ class AIAnalyst:
         "recommend_brief": "gpt-5.4",
         "recommend_summary": "gpt-5.5",
         "vision": "gpt-5.4",
+        "assistant": "gpt-5.5",
         "general": "gpt-5.5"
     }
 
@@ -446,6 +448,10 @@ class AIAnalyst:
         "vision": [
             "gpt-5.4",
             "gpt-5.5"
+        ],
+        "assistant": [
+            "gpt-5.5",
+            "gpt-5.4"
         ],
         "general": [
             "gpt-5.5",
@@ -662,6 +668,8 @@ class AIAnalyst:
             return min(base_tokens, 320)
         if task == 'vision':
             return min(base_tokens, 300)
+        if task == 'assistant':
+            return min(max(base_tokens, 900), 1400)
         return base_tokens
 
     @classmethod
@@ -680,6 +688,8 @@ class AIAnalyst:
                 return min(max(base_timeout, 6), 12)
             if task in {'scan_final', 'recommend_summary', 'vision', 'general'}:
                 return min(max(base_timeout, 6), 12)
+            if task == 'assistant':
+                return min(max(base_timeout, 24), 45)
             return min(base_timeout, 8)
         if task in {'scan_pulse', 'scan_fast', 'scan_risk', 'recommend_brief'}:
             return min(base_timeout, 8)
@@ -689,6 +699,8 @@ class AIAnalyst:
             return min(base_timeout, 12)
         if task == 'vision':
             return min(base_timeout, 12)
+        if task == 'assistant':
+            return min(max(base_timeout, 24), 45)
         return base_timeout
 
     @staticmethod

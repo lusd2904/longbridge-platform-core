@@ -14,6 +14,8 @@
 - 历史列表接口默认压缩高维因子载荷，避免列表响应返回数十 MB 级 JSON。
 - 顶层量化指标和 JSON 序列化增加 `NaN` / `Infinity` 防护，避免写出非标准 JSON。
 - Docker Compose 默认使用本地 Redis 服务，并把 AI 网关默认地址调整为 `https://lucen.cc/v1`；API key 仍只通过环境变量注入，示例文件不包含密钥。
+- 新增系统框架级 AI 咨询悬浮窗：登录后的全局布局任意页面可唤起，弹窗会带当前路由上下文和最近对话调用平台已配置 AI 接口。
+- 新增 `/api/v1/analysis/assistant/consult` 只读咨询接口，统一复用平台 AI 配置和用户会话，不在代码中写入密钥，并限制助手不得声称替用户下单、撤单、改单或修改配置。
 - 增加 Docker/API/UI/日志验证脚本，覆盖真实登录、纸账户状态、异步任务健康、历史 410 行为、页面 smoke 和对比度扫描。
 - 优化 `.dockerignore` 和增量 Web Dockerfile：排除本地虚拟环境、桌面/移动构建产物和运行证据目录；Web 增量镜像会同步 nginx 配置并清空旧静态资源后再复制新 `dist`。
 
@@ -26,6 +28,8 @@
 - 真实策略 API：`execute=false`，`factorCount=3060`，候选保留完整因子值。
 - 真实历史 API：`historyHasFactorSet=false`，`historyFactorCount=3060`，单条 history metrics 约 `1806` bytes。
 - `npm --prefix apps/frontend/web-portal run smoke:web:mobile`：桌面+移动 `60` 页，`errors=0`。
+- AI 悬浮窗真实 Docker 验证：页面内点击浮窗、输入问题、点击发送，请求 `/svc/analysis/api/v1/analysis/assistant/consult` 返回 `200`，模型显示 `gpt-5.5`，弹窗展示中文回答且无 console error。
+- AI 悬浮窗新增测试：`tests/python/test_ai_assistant_consult.py` 与 `apps/frontend/web-portal/tests/unit/ai-assistant-float.spec.js` 通过；前端生产构建通过。
 - `npm --prefix apps/frontend/web-portal run scan:contrast`：`30` 页，`contrastIssues=0`。
 - Docker 日志稳定窗口复扫：`ERROR=0`，`Traceback=0`，`server_5xx=0`。
 - NotebookLM 交叉检查结论：`GO`，无 must-fix blocker。

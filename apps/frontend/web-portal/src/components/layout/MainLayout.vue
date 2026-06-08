@@ -39,6 +39,7 @@
         </router-view>
       </main>
     </div>
+    <AiAssistantFloat />
   </div>
 </template>
 
@@ -46,6 +47,7 @@
 import { computed, Suspense } from 'vue'
 import { Bell, Menu } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
+import AiAssistantFloat from './AiAssistantFloat.vue'
 import Header from './Header.vue'
 import RouteTabs from './RouteTabs.vue'
 import Sidebar from './Sidebar.vue'

@@ -1,6 +1,7 @@
 export {
   analyzePositions,
   analyzeStock,
+  consultAssistant,
   createStrategy,
   deleteStrategy,
   getAgentRun,

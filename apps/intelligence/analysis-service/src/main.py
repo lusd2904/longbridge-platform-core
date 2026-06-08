@@ -105,10 +105,89 @@ _DEFERRED_ANALYSIS_JOB_MAX_JOBS = _env_int("REF_ANALYSIS_DEFERRED_JOB_MAX_JOBS",
 _DEFERRED_ANALYSIS_JOB_STRANDED_SECONDS = _env_int("REF_ANALYSIS_DEFERRED_JOB_STRANDED_SECONDS", 1800, minimum=60)
 _DEFERRED_ANALYSIS_JOB_REDIS_PREFIX = "analysis:deferred-job:"
 _DEFERRED_ANALYSIS_JOB_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+_ASSISTANT_QUESTION_MAX_CHARS = 2400
+_ASSISTANT_CONTEXT_MAX_CHARS = 900
+_ASSISTANT_HISTORY_MAX_ITEMS = 6
+_ASSISTANT_HISTORY_MAX_CHARS = 900
 
 
 def _utc_iso() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _clip_assistant_text(value: object, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _count_cjk_chars(value: str) -> int:
+    return sum(1 for char in str(value or "") if "\u4e00" <= char <= "\u9fff")
+
+
+def _repair_assistant_mojibake(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        repaired = text.encode("latin1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+    if _count_cjk_chars(repaired) > max(_count_cjk_chars(text), 0) + 2:
+        return repaired.strip()
+    return text
+
+
+def _normalize_assistant_context(raw_context: object) -> Dict[str, str]:
+    context = raw_context if isinstance(raw_context, dict) else {}
+    safe_query = context.get("query") if isinstance(context.get("query"), dict) else {}
+    return {
+        "path": _clip_assistant_text(context.get("path"), 180),
+        "name": _clip_assistant_text(context.get("name"), 120),
+        "title": _clip_assistant_text(context.get("title"), 120),
+        "subsystem": _clip_assistant_text(context.get("subsystem"), 80),
+        "query": _clip_assistant_text(json.dumps(safe_query, ensure_ascii=False, default=str), 240),
+    }
+
+
+def _normalize_assistant_messages(raw_messages: object) -> List[Dict[str, str]]:
+    messages = raw_messages if isinstance(raw_messages, list) else []
+    normalized: List[Dict[str, str]] = []
+    for item in messages[-_ASSISTANT_HISTORY_MAX_ITEMS:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = _clip_assistant_text(item.get("content"), _ASSISTANT_HISTORY_MAX_CHARS)
+        if not content:
+            continue
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def _build_assistant_consult_prompt(
+    *,
+    question: str,
+    page_context: Dict[str, str],
+    messages: List[Dict[str, str]],
+) -> str:
+    history_text = "\n".join(
+        f"{'用户' if item['role'] == 'user' else '助手'}: {item['content']}"
+        for item in messages
+    ) or "无"
+    context_text = json.dumps(page_context, ensure_ascii=False, sort_keys=True)
+    return (
+        "你是量化交易平台的系统级 AI 咨询助手。"
+        "请基于当前页面上下文和最近对话，用中文给出简洁、可执行、可复核的回答。\n"
+        "边界要求：只做只读咨询、解释、排查和分析建议；不得声称已经下单、撤单、改单或修改平台配置；"
+        "涉及交易时必须提示用户自行复核风险和账户状态。\n"
+        f"当前页面上下文: {_clip_assistant_text(context_text, _ASSISTANT_CONTEXT_MAX_CHARS)}\n"
+        f"最近对话:\n{history_text}\n"
+        f"用户问题:\n{question}\n"
+        "回答格式：先直接回答，再给必要的检查点。"
+    )
 
 
 def _utc_iso_from_epoch(epoch_seconds: float) -> str:
@@ -2057,6 +2136,50 @@ async def analysis_models(session: dict = Depends(get_current_session)):
             "defaultPlan": AIAnalyst.get_task_model_plan(user_id=user_id),
             "providerPlan": AIAnalyst.get_task_provider_plan(user_id=user_id),
             "provider": AIAnalyst._provider(user_id=user_id),
+        },
+    }
+
+
+@app.post("/api/v1/analysis/assistant/consult")
+async def assistant_consult(
+    payload: dict = Body(default={}),
+    session: dict = Depends(get_current_session),
+):
+    user_id = int(session["user_id"])
+    question = _clip_assistant_text(
+        payload.get("question") or payload.get("message") or payload.get("prompt"),
+        _ASSISTANT_QUESTION_MAX_CHARS,
+    )
+    if not question:
+        raise HTTPException(status_code=400, detail="咨询内容不能为空")
+
+    page_context = _normalize_assistant_context(payload.get("pageContext") or payload.get("page_context"))
+    messages = _normalize_assistant_messages(payload.get("messages"))
+    prompt = _build_assistant_consult_prompt(
+        question=question,
+        page_context=page_context,
+        messages=messages,
+    )
+    answer = await asyncio.to_thread(
+        AIAnalyst.get_decision,
+        None,
+        prompt,
+        task="assistant",
+        user_id=user_id,
+    )
+    answer_text = _repair_assistant_mojibake(answer)
+    if not answer_text or answer_text.startswith("ERROR"):
+        raise HTTPException(status_code=502, detail=AIAnalyst._build_business_error(answer_text))
+
+    model_plan = AIAnalyst.get_task_model_plan(user_id=user_id)
+    general_model = model_plan.get("general") if isinstance(model_plan, dict) else {}
+    return {
+        "success": True,
+        "data": {
+            "answer": answer_text,
+            "createdAt": _utc_iso(),
+            "model": general_model or {},
+            "pageContext": page_context,
         },
     }
 
