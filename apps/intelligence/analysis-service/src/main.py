@@ -109,6 +109,28 @@ _ASSISTANT_QUESTION_MAX_CHARS = 2400
 _ASSISTANT_CONTEXT_MAX_CHARS = 900
 _ASSISTANT_HISTORY_MAX_ITEMS = 6
 _ASSISTANT_HISTORY_MAX_CHARS = 900
+_ASSISTANT_QUERY_MAX_ITEMS = 20
+_ASSISTANT_QUERY_KEY_MAX_CHARS = 80
+_ASSISTANT_QUERY_VALUE_MAX_CHARS = 160
+_ASSISTANT_RATE_LIMIT_PER_WINDOW = _env_int("REF_ASSISTANT_CONSULT_RATE_LIMIT_PER_WINDOW", 12, minimum=1)
+_ASSISTANT_RATE_LIMIT_WINDOW_SECONDS = _env_int("REF_ASSISTANT_CONSULT_RATE_LIMIT_WINDOW_SECONDS", 60, minimum=1)
+_ASSISTANT_RATE_LIMIT_LOCK = threading.Lock()
+_ASSISTANT_RATE_LIMIT_BUCKETS: Dict[int, List[float]] = {}
+_ASSISTANT_SENSITIVE_CONTEXT_KEYS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "auth",
+    "session",
+    "cookie",
+    "jwt",
+    "credential",
+    "signature",
+    "api_key",
+    "apikey",
+    "key",
+)
 
 
 def _utc_iso() -> str:
@@ -139,11 +161,44 @@ def _repair_assistant_mojibake(value: object) -> str:
     return text
 
 
+def _is_sensitive_assistant_context_key(value: object) -> bool:
+    key = str(value or "").strip().lower()
+    return any(marker in key for marker in _ASSISTANT_SENSITIVE_CONTEXT_KEYS)
+
+
+def _sanitize_assistant_context_path(value: object) -> str:
+    text = _clip_assistant_text(value, 180)
+    for separator in ("?", "#"):
+        if separator in text:
+            text = text.split(separator, 1)[0].strip()
+    return text
+
+
+def _sanitize_assistant_query(raw_query: object) -> Dict[str, object]:
+    query = raw_query if isinstance(raw_query, dict) else {}
+    sanitized: Dict[str, object] = {}
+    for raw_key, raw_value in list(query.items())[:_ASSISTANT_QUERY_MAX_ITEMS]:
+        key = _clip_assistant_text(raw_key, _ASSISTANT_QUERY_KEY_MAX_CHARS)
+        if not key:
+            continue
+        if _is_sensitive_assistant_context_key(key):
+            sanitized[key] = "[redacted]"
+            continue
+        if isinstance(raw_value, list):
+            sanitized[key] = [
+                _clip_assistant_text(item, _ASSISTANT_QUERY_VALUE_MAX_CHARS)
+                for item in raw_value[:6]
+            ]
+            continue
+        sanitized[key] = _clip_assistant_text(raw_value, _ASSISTANT_QUERY_VALUE_MAX_CHARS)
+    return sanitized
+
+
 def _normalize_assistant_context(raw_context: object) -> Dict[str, str]:
     context = raw_context if isinstance(raw_context, dict) else {}
-    safe_query = context.get("query") if isinstance(context.get("query"), dict) else {}
+    safe_query = _sanitize_assistant_query(context.get("query"))
     return {
-        "path": _clip_assistant_text(context.get("path"), 180),
+        "path": _sanitize_assistant_context_path(context.get("path")),
         "name": _clip_assistant_text(context.get("name"), 120),
         "title": _clip_assistant_text(context.get("title"), 120),
         "subsystem": _clip_assistant_text(context.get("subsystem"), 80),
@@ -165,6 +220,27 @@ def _normalize_assistant_messages(raw_messages: object) -> List[Dict[str, str]]:
             continue
         normalized.append({"role": role, "content": content})
     return normalized
+
+
+def _enforce_assistant_rate_limit(user_id: int) -> None:
+    now = time.monotonic()
+    window_start = now - _ASSISTANT_RATE_LIMIT_WINDOW_SECONDS
+    with _ASSISTANT_RATE_LIMIT_LOCK:
+        bucket = [
+            timestamp
+            for timestamp in _ASSISTANT_RATE_LIMIT_BUCKETS.get(user_id, [])
+            if timestamp > window_start
+        ]
+        if len(bucket) >= _ASSISTANT_RATE_LIMIT_PER_WINDOW:
+            retry_after = max(1, int(bucket[0] + _ASSISTANT_RATE_LIMIT_WINDOW_SECONDS - now) + 1)
+            _ASSISTANT_RATE_LIMIT_BUCKETS[user_id] = bucket
+            raise HTTPException(
+                status_code=429,
+                detail=f"AI 咨询请求过于频繁，请 {retry_after} 秒后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
+        _ASSISTANT_RATE_LIMIT_BUCKETS[user_id] = bucket
 
 
 def _build_assistant_consult_prompt(
@@ -2152,6 +2228,8 @@ async def assistant_consult(
     )
     if not question:
         raise HTTPException(status_code=400, detail="咨询内容不能为空")
+
+    _enforce_assistant_rate_limit(user_id)
 
     page_context = _normalize_assistant_context(payload.get("pageContext") or payload.get("page_context"))
     messages = _normalize_assistant_messages(payload.get("messages"))

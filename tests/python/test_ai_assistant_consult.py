@@ -41,11 +41,15 @@ def test_ai_assistant_consult_uses_platform_ai_with_page_context(monkeypatch) ->
             payload={
                 "question": "这个页面先看什么？",
                 "pageContext": {
-                    "path": "/strategy?symbol=AAPL.US",
+                    "path": "/strategy?token=secret-token&symbol=AAPL.US",
                     "name": "Strategy",
                     "title": "策略管理",
                     "subsystem": "analysis",
-                    "query": {"symbol": "AAPL.US"},
+                    "query": {
+                        "symbol": "AAPL.US",
+                        "token": "secret-token",
+                        "api_key": "secret-key",
+                    },
                 },
                 "messages": [
                     {"role": "assistant", "content": "我在。"},
@@ -65,6 +69,10 @@ def test_ai_assistant_consult_uses_platform_ai_with_page_context(monkeypatch) ->
     assert "只读咨询" in captured["prompt"]
     assert "策略管理" in captured["prompt"]
     assert "这个页面先看什么？" in captured["prompt"]
+    assert "AAPL.US" in captured["prompt"]
+    assert "secret-token" not in captured["prompt"]
+    assert "secret-key" not in captured["prompt"]
+    assert response["data"]["pageContext"]["path"] == "/strategy"
 
 
 def test_ai_assistant_consult_rejects_empty_question() -> None:
@@ -75,6 +83,34 @@ def test_ai_assistant_consult_rejects_empty_question() -> None:
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "咨询内容不能为空"
+
+
+def test_ai_assistant_consult_rate_limits_per_user(monkeypatch) -> None:
+    module = _load_module("analysis_service_ai_assistant_rate_limit_test")
+
+    def fake_get_decision(cls, model, prompt, task="general", user_id=1):
+        return "可用回答"
+
+    monkeypatch.setattr(module.AIAnalyst, "get_decision", classmethod(fake_get_decision))
+    monkeypatch.setattr(
+        module.AIAnalyst,
+        "get_task_model_plan",
+        classmethod(lambda cls, user_id=1: {"general": {"id": "gpt-5.5"}}),
+    )
+    monkeypatch.setattr(module, "_ASSISTANT_RATE_LIMIT_PER_WINDOW", 2)
+    monkeypatch.setattr(module, "_ASSISTANT_RATE_LIMIT_WINDOW_SECONDS", 60)
+    module._ASSISTANT_RATE_LIMIT_BUCKETS.clear()
+
+    payload = {"question": "现在应该检查什么？"}
+    assert asyncio.run(module.assistant_consult(payload=payload, session={"user_id": 7}))["success"] is True
+    assert asyncio.run(module.assistant_consult(payload=payload, session={"user_id": 7}))["success"] is True
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(module.assistant_consult(payload=payload, session={"user_id": 7}))
+
+    assert exc_info.value.status_code == 429
+    assert "AI 咨询请求过于频繁" in exc_info.value.detail
+    assert exc_info.value.headers["Retry-After"]
 
 
 def test_ai_assistant_repairs_common_utf8_mojibake() -> None:

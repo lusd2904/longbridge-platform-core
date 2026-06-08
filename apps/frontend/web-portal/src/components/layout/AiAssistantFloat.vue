@@ -139,16 +139,48 @@ const quickPrompts = [
   '给出下一步'
 ]
 
+const SENSITIVE_QUERY_KEY_PATTERN = /(token|secret|password|passwd|auth|session|cookie|jwt|credential|signature|api_?key|key)/i
+
 const pageTitle = computed(() => String(route.meta?.title || route.name || route.path || '当前页面'))
 const modelBadge = computed(() => assistantModel.value || '平台 AI')
 const canSend = computed(() => Boolean(draft.value.trim()) && !sending.value)
 
+const clipContextValue = (value, limit = 160) => {
+  const text = String(value ?? '').trim()
+  return text.length > limit ? `${text.slice(0, limit).trimEnd()}...` : text
+}
+
+const sanitizeRoutePath = () => {
+  const text = String(route.path || route.fullPath || '').trim()
+  return text.split(/[?#]/, 1)[0]
+}
+
+const sanitizeRouteQuery = () => {
+  const entries = Object.entries(route.query || {}).slice(0, 20)
+  return entries.reduce((next, [key, value]) => {
+    const safeKey = clipContextValue(key, 80)
+    if (!safeKey) {
+      return next
+    }
+    if (SENSITIVE_QUERY_KEY_PATTERN.test(safeKey)) {
+      next[safeKey] = '[redacted]'
+      return next
+    }
+    if (Array.isArray(value)) {
+      next[safeKey] = value.slice(0, 6).map((item) => clipContextValue(item))
+      return next
+    }
+    next[safeKey] = clipContextValue(value)
+    return next
+  }, {})
+}
+
 const buildPageContext = () => ({
-  path: route.fullPath || route.path || '',
+  path: sanitizeRoutePath(),
   name: String(route.name || ''),
   title: pageTitle.value,
   subsystem: String(route.meta?.subsystem || ''),
-  query: route.query || {}
+  query: sanitizeRouteQuery()
 })
 
 const scrollToBottom = async () => {

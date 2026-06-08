@@ -8,10 +8,10 @@ import AiAssistantFloat from '@/components/layout/AiAssistantFloat.vue'
 const mocks = vi.hoisted(() => ({
   consultAssistant: vi.fn(),
   routeState: {
-    fullPath: '/strategy?symbol=AAPL.US',
+    fullPath: '/strategy?symbol=AAPL.US&token=secret-token',
     path: '/strategy',
     name: 'Strategy',
-    query: { symbol: 'AAPL.US' },
+    query: { symbol: 'AAPL.US', token: 'secret-token', api_key: 'secret-key' },
     meta: {
       title: '策略管理',
       subsystem: 'analysis'
@@ -96,11 +96,15 @@ describe('AiAssistantFloat', () => {
     expect(mocks.consultAssistant).toHaveBeenCalledWith(expect.objectContaining({
       question: '这个页面现在应该先看什么？',
       pageContext: expect.objectContaining({
-        path: '/strategy?symbol=AAPL.US',
+        path: '/strategy',
         name: 'Strategy',
         title: '策略管理',
         subsystem: 'analysis',
-        query: { symbol: 'AAPL.US' }
+        query: {
+          symbol: 'AAPL.US',
+          token: '[redacted]',
+          api_key: '[redacted]'
+        }
       })
     }))
     expect(wrapper.text()).toContain('当前策略页可先检查风控和回测结果。')
