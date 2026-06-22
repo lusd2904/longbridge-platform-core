@@ -2,8 +2,7 @@ FROM refactor-v2-platform:local
 
 WORKDIR /app
 
-RUN curl -sSL https://open.longbridge.cn/longbridge/longbridge-terminal/install | sh
-
+# The base image already installs the longbridge CLI; no need to re-download it.
 COPY requirements.test.txt ./
 RUN pip install --no-cache-dir -r requirements.test.txt
 

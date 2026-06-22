@@ -30,14 +30,22 @@ x-backend-env: &backend-env
   REF_AGNO_SIDECAR_URL: ${REF_AGNO_SIDECAR_URL:-http://agno-sidecar:3200}
   REF_ANALYSIS_SYNC_POSITIONS_LIMIT: ${REF_ANALYSIS_SYNC_POSITIONS_LIMIT:-12}
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-backend-service: &backend-service
   image: refactor-v2-platform:local
+  restart: unless-stopped
   env_file:
     - .env
   environment:
     <<: *backend-env
   extra_hosts:
     - "host.docker.internal:host-gateway"
+  logging: *default-logging
   networks:
     - refactor-v2
     - sub2api-network
@@ -50,11 +58,13 @@ services:
   redis:
     image: ${DOCKER_REDIS_IMAGE:-redis:8-alpine}
     container_name: refactor-v2-redis
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     networks:
       - refactor-v2
     volumes:
       - redis-data:/data
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -299,6 +309,8 @@ services:
       dockerfile: apps/frontend/web-portal/Dockerfile
     image: refactor-v2-web-portal:local
     container_name: refactor-v2-web
+    restart: unless-stopped
+    logging: *default-logging
     depends_on:
       api-gateway:
         condition: service_started
