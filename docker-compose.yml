@@ -83,7 +83,7 @@ services:
       SERVICE_PORT: "8101"
       REF_USER_CENTER_PORT: "8101"
     ports:
-      - "${REF_USER_CENTER_PORT:-8101}:8101"
+      - "127.0.0.1:${REF_USER_CENTER_PORT:-8101}:8101"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8101/health"]
       interval: 30s
@@ -104,7 +104,7 @@ services:
       SERVICE_PORT: "8102"
       REF_MARKET_SERVICE_PORT: "8102"
     ports:
-      - "${REF_MARKET_SERVICE_PORT:-8102}:8102"
+      - "127.0.0.1:${REF_MARKET_SERVICE_PORT:-8102}:8102"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8102/health"]
       interval: 30s
@@ -126,7 +126,7 @@ services:
       SERVICE_PORT: "8103"
       REF_ANALYSIS_SERVICE_PORT: "8103"
     ports:
-      - "${REF_ANALYSIS_SERVICE_PORT:-8103}:8103"
+      - "127.0.0.1:${REF_ANALYSIS_SERVICE_PORT:-8103}:8103"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8103/health"]
       interval: 30s
@@ -143,7 +143,7 @@ services:
       SERVICE_PORT: "3200"
       REF_AGNO_SIDECAR_PORT: "3200"
     ports:
-      - "${REF_AGNO_SIDECAR_PORT:-3200}:3200"
+      - "127.0.0.1:${REF_AGNO_SIDECAR_PORT:-3200}:3200"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3200/health"]
       interval: 30s
@@ -163,7 +163,7 @@ services:
       SERVICE_PORT: "8104"
       REF_STRATEGY_SERVICE_PORT: "8104"
     ports:
-      - "${REF_STRATEGY_SERVICE_PORT:-8104}:8104"
+      - "127.0.0.1:${REF_STRATEGY_SERVICE_PORT:-8104}:8104"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8104/health"]
       interval: 30s
@@ -186,7 +186,7 @@ services:
       SERVICE_PORT: "8105"
       REF_TRADE_SERVICE_PORT: "8105"
     ports:
-      - "${REF_TRADE_SERVICE_PORT:-8105}:8105"
+      - "127.0.0.1:${REF_TRADE_SERVICE_PORT:-8105}:8105"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8105/health"]
       interval: 30s
@@ -203,7 +203,7 @@ services:
       SERVICE_PORT: "8106"
       REF_SENTIMENT_SERVICE_PORT: "8106"
     ports:
-      - "${REF_SENTIMENT_SERVICE_PORT:-8106}:8106"
+      - "127.0.0.1:${REF_SENTIMENT_SERVICE_PORT:-8106}:8106"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8106/health"]
       interval: 30s
@@ -229,7 +229,7 @@ services:
       REF_SCHEDULER_SERVICE_PORT: "8107"
       REF_ANALYSIS_SERVICE_URL: http://analysis-service:8103
     ports:
-      - "${REF_SCHEDULER_SERVICE_PORT:-8107}:8107"
+      - "127.0.0.1:${REF_SCHEDULER_SERVICE_PORT:-8107}:8107"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8107/health"]
       interval: 30s
@@ -251,7 +251,7 @@ services:
       SERVICE_PORT: "8108"
       REF_RISK_SERVICE_PORT: "8108"
     ports:
-      - "${REF_RISK_SERVICE_PORT:-8108}:8108"
+      - "127.0.0.1:${REF_RISK_SERVICE_PORT:-8108}:8108"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8108/health"]
       interval: 30s
@@ -295,7 +295,7 @@ services:
       REF_SCHEDULER_SERVICE_URL: http://scheduler-service:8107
       REF_RISK_SERVICE_URL: http://risk-service:8108
     ports:
-      - "${REF_GATEWAY_PORT:-5101}:5101"
+      - "127.0.0.1:${REF_GATEWAY_PORT:-5101}:5101"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5101/health"]
       interval: 30s
