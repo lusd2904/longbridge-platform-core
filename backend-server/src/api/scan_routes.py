@@ -8,107 +8,10 @@ from core.broker.TigerBrokerAPI import TigerBrokerAPI
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from api.auth_routes import login_required
 import traceback
+from utils.IndicatorUtil import IndicatorUtil
+from utils.IndicatorUtilEnhanced import IndicatorUtilEnhanced
 
 scan_bp = Blueprint('scan', __name__)
-
-
-def calculate_ma(prices, period):
-    """计算移动平均线"""
-    if len(prices) < period:
-        return prices[-1] if prices else 0
-    return sum(prices[-period:]) / period
-
-
-def calculate_rsi(prices, period=14):
-    """计算RSI指标"""
-    if len(prices) < period + 1:
-        return 50
-    
-    gains = []
-    losses = []
-    
-    for i in range(1, len(prices)):
-        change = prices[i] - prices[i-1]
-        if change > 0:
-            gains.append(change)
-            losses.append(0)
-        else:
-            gains.append(0)
-            losses.append(abs(change))
-    
-    if len(gains) < period:
-        return 50
-    
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-    
-    if avg_loss == 0:
-        return 100
-    
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-
-def calculate_kdj(prices, highs, lows, n=9, m1=3, m2=3):
-    """计算KDJ指标"""
-    if len(prices) < n:
-        return 50, 50, 50
-    
-    # 计算RSV
-    recent_low = min(lows[-n:])
-    recent_high = max(highs[-n:])
-    current_close = prices[-1]
-    
-    if recent_high == recent_low:
-        rsv = 50
-    else:
-        rsv = (current_close - recent_low) / (recent_high - recent_low) * 100
-    
-    # 简化计算，使用模拟值
-    k = rsv
-    d = k
-    j = 3 * k - 2 * d
-    
-    return k, d, j
-
-
-def calculate_bollinger(prices, period=20, std_dev=2):
-    """计算布林带"""
-    if len(prices) < period:
-        middle = sum(prices) / len(prices) if prices else 0
-        return middle, middle + 1, middle - 1
-    
-    middle = sum(prices[-period:]) / period
-    variance = sum((p - middle) ** 2 for p in prices[-period:]) / period
-    std = variance ** 0.5
-    
-    upper = middle + std_dev * std
-    lower = middle - std_dev * std
-    
-    return upper, middle, lower
-
-
-def calculate_macd(prices, fast=12, slow=26, signal=9):
-    """计算MACD指标"""
-    if len(prices) < slow:
-        return 0, 0
-    
-    # 简化计算EMA
-    def ema(data, period):
-        multiplier = 2 / (period + 1)
-        ema_values = [data[0]]
-        for price in data[1:]:
-            ema_values.append((price - ema_values[-1]) * multiplier + ema_values[-1])
-        return ema_values[-1]
-    
-    ema_fast = ema(prices, fast)
-    ema_slow = ema(prices, slow)
-    
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line * 0.9  # 简化计算
-    
-    return macd_line, signal_line
 
 
 def generate_analysis_text(indicator):
@@ -259,10 +162,10 @@ def scan_indicators():
                 lows[-1] = min(lows[-1], current_price)
             
             # 计算各项指标
-            rsi = calculate_rsi(prices)
-            macd, macd_signal = calculate_macd(prices)
-            k, d, j = calculate_kdj(prices, highs, lows)
-            bollinger_upper, bollinger_middle, bollinger_lower = calculate_bollinger(prices)
+            rsi = IndicatorUtil.calculate_rsi(prices)
+            macd, macd_signal, _ = IndicatorUtil.calculate_macd(prices)
+            k, d, j = IndicatorUtilEnhanced.calculate_kdj(prices, highs, lows)
+            bollinger_middle, bollinger_upper, bollinger_lower = IndicatorUtil.calculate_boll(prices)
             
             # 计算布林带位置百分比
             if bollinger_upper != bollinger_lower:
@@ -271,10 +174,10 @@ def scan_indicators():
                 bollinger_percent = 50
             
             # 计算MA
-            ma5 = calculate_ma(prices, 5)
-            ma10 = calculate_ma(prices, 10)
-            ma20 = calculate_ma(prices, 20)
-            ma60 = calculate_ma(prices, 60)
+            ma5 = IndicatorUtilEnhanced.calculate_sma(prices, 5)
+            ma10 = IndicatorUtilEnhanced.calculate_sma(prices, 10)
+            ma20 = IndicatorUtilEnhanced.calculate_sma(prices, 20)
+            ma60 = IndicatorUtilEnhanced.calculate_sma(prices, 60)
             
             # 计算趋势强度
             trend_strength = 0

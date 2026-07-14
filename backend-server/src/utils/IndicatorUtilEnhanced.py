@@ -47,136 +47,74 @@
    - 多模型综合决策
 """
 
-import math
+import pandas as pd
+import pandas_ta_classic as ta
 
 class IndicatorUtilEnhanced:
     @staticmethod
     def calculate_atr(prices, highs, lows, period=14):
-        """计算平均真实波幅（ATR）- 衡量波动性"""
-        if len(prices) <= period:
-            return 0.0
-        
-        true_ranges = []
-        for i in range(1, len(prices)):
-            high = highs[i]
-            low = lows[i]
-            prev_close = prices[i-1]
-            
-            tr1 = high - low
-            tr2 = abs(high - prev_close)
-            tr3 = abs(low - prev_close)
-            true_ranges.append(max(tr1, tr2, tr3))
-        
-        atr = sum(true_ranges[:period]) / period
-        for i in range(period, len(true_ranges)):
-            atr = (atr * (period - 1) + true_ranges[i]) / period
-        
-        return atr
+        """计算平均真实波幅（ATR）- 衡量波动性 (已切换至 pandas-ta)"""
+        if len(prices) <= period: return 0.0
+        h, l, c = pd.Series(highs), pd.Series(lows), pd.Series(prices)
+        atr = ta.atr(high=h, low=l, close=c, length=period)
+        if atr is None or atr.dropna().empty: return 0.0
+        return float(atr.iloc[-1])
 
     @staticmethod
     def calculate_ema(prices, period):
-        """计算指数移动平均线（EMA）"""
-        if len(prices) < period:
-            return prices[-1]
-        
-        ema = sum(prices[:period]) / period
-        multiplier = 2 / (period + 1)
-        
-        for i in range(period, len(prices)):
-            ema = (prices[i] - ema) * multiplier + ema
-        
-        return ema
+        """计算指数移动平均线（EMA） (已切换至 pandas-ta)"""
+        if len(prices) < period: return prices[-1]
+        s = pd.Series(prices)
+        ema = ta.ema(s, length=period)
+        if ema is None or ema.dropna().empty: return prices[-1]
+        return float(ema.iloc[-1])
 
     @staticmethod
     def calculate_sma(prices, period):
-        """计算简单移动平均线（SMA）"""
-        if len(prices) < period:
-            return prices[-1]
-        return sum(prices[-period:]) / period
+        """计算简单移动平均线（SMA） (已切换至 pandas-ta)"""
+        if len(prices) < period: return prices[-1]
+        s = pd.Series(prices)
+        sma = ta.sma(s, length=period)
+        if sma is None or sma.dropna().empty: return prices[-1]
+        return float(sma.iloc[-1])
 
     @staticmethod
     def calculate_kdj(prices, highs, lows, period=9, m1=3, m2=3):
-        """计算KDJ指标（随机指标）"""
-        if len(prices) < period:
-            return 50.0, 50.0, 50.0
-        
-        rsv_list = []
-        for i in range(period, len(prices)):
-            recent_highs = highs[i-period:i]
-            recent_lows = lows[i-period:i]
-            
-            high_n = max(recent_highs)
-            low_n = min(recent_lows)
-            close_n = prices[i]
-            
-            if high_n == low_n:
-                rsv = 50.0
-            else:
-                rsv = (close_n - low_n) / (high_n - low_n) * 100
-            
-            rsv_list.append(rsv)
-        
-        # 计算K、D、J
-        k = 50.0
-        d = 50.0
-        
-        for rsv in rsv_list:
-            k = (2/3) * k + (1/3) * rsv
-            d = (2/3) * d + (1/3) * k
-        
-        j = 3 * k - 2 * d
-        
-        return k, d, j
+        """计算KDJ指标（随机指标） (已切换至 pandas-ta)"""
+        if len(prices) < period: return 50.0, 50.0, 50.0
+        h, l, c = pd.Series(highs), pd.Series(lows), pd.Series(prices)
+        kdj = ta.kdj(high=h, low=l, close=c, length=period, signal=m1)
+        if kdj is None or kdj.dropna().empty: return 50.0, 50.0, 50.0
+        last_row = kdj.iloc[-1]
+        # pandas_ta columns: K, D, J
+        return float(last_row.iloc[0]), float(last_row.iloc[1]), float(last_row.iloc[2])
 
     @staticmethod
     def calculate_obv(prices, volumes):
-        """计算能量潮（OBV）- 资金流向"""
-        if len(prices) != len(volumes) or len(prices) < 2:
-            return 0.0
-        
-        obv = 0.0
-        for i in range(1, len(prices)):
-            if prices[i] > prices[i-1]:
-                obv += volumes[i]
-            elif prices[i] < prices[i-1]:
-                obv -= volumes[i]
-        
-        return obv
+        """计算能量潮（OBV）- 资金流向 (已切换至 pandas-ta)"""
+        if len(prices) != len(volumes) or len(prices) < 2: return 0.0
+        c, v = pd.Series(prices), pd.Series(volumes)
+        obv = ta.obv(close=c, volume=v)
+        if obv is None or obv.dropna().empty: return 0.0
+        return float(obv.iloc[-1])
 
     @staticmethod
     def calculate_roc(prices, period=12):
-        """计算变动率（ROC）- 动量强度"""
-        if len(prices) <= period:
-            return 0.0
-        
-        current_price = prices[-1]
-        past_price = prices[-period-1]
-        
-        if past_price == 0:
-            return 0.0
-        
-        roc = (current_price - past_price) / past_price * 100
-        return roc
+        """计算变动率（ROC）- 动量强度 (已切换至 pandas-ta)"""
+        if len(prices) <= period: return 0.0
+        s = pd.Series(prices)
+        roc = ta.roc(s, length=period)
+        if roc is None or roc.dropna().empty: return 0.0
+        return float(roc.iloc[-1])
 
     @staticmethod
     def calculate_cci(prices, highs, lows, period=20):
-        """计算顺势指标（CCI）- 价格偏离度"""
-        if len(prices) < period:
-            return 0.0
-        
-        typical_prices = [(h + l + c) / 3 for h, l, c in zip(highs, lows, prices)]
-        
-        # 计算移动平均
-        sma_tp = sum(typical_prices[-period:]) / period
-        
-        # 计算平均偏差
-        mean_deviation = sum(abs(tp - sma_tp) for tp in typical_prices[-period:]) / period
-        
-        if mean_deviation == 0:
-            return 0.0
-        
-        cci = (typical_prices[-1] - sma_tp) / (0.015 * mean_deviation)
-        return cci
+        """计算顺势指标（CCI）- 价格偏离度 (已切换至 pandas-ta)"""
+        if len(prices) < period: return 0.0
+        h, l, c = pd.Series(highs), pd.Series(lows), pd.Series(prices)
+        cci = ta.cci(high=h, low=l, close=c, length=period)
+        if cci is None or cci.dropna().empty: return 0.0
+        return float(cci.iloc[-1])
 
     @staticmethod
     def calculate_support_resistance(prices, period=20):
