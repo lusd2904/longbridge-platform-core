@@ -41,6 +41,7 @@ const FinanceNews = () => import('../views/FinanceNews.vue')
 const SchedulerCenter = () => import('../views/system/SchedulerCenter.vue')
 const HistoryCoverage = () => import('../views/system/HistoryCoverage.vue')
 const SymbolDetail = () => import('../views/SymbolDetail.vue')
+const Portal = () => import('../views/Portal.vue')
 
 const routes = [
   {
@@ -50,9 +51,15 @@ const routes = [
     meta: { public: true, title: '登录' }
   },
   {
+    path: '/portal',
+    name: 'Portal',
+    component: Portal,
+    meta: { requiresAuth: true, title: '系统导航门户' }
+  },
+  {
     path: '/',
     component: MainLayout,
-    redirect: '/dashboard',
+    redirect: '/portal',
     meta: { requiresAuth: true },
     children: [
       // 仪表盘
@@ -255,7 +262,7 @@ router.beforeEach((to, from, next) => {
   // 公开页面直接放行
   if (to.meta.public) {
     if (isLoggedIn() && to.path === '/login') {
-      next('/dashboard')
+      next('/portal')
       return
     }
     next()
@@ -273,7 +280,7 @@ router.beforeEach((to, from, next) => {
   const menus = getMenus()
   if (to.meta.capability && menus.length && !hasCapability(to.meta.capability) && !isAdmin()) {
     const firstMenu = menus[0]
-    next(firstMenu?.path || '/dashboard')
+    next(firstMenu?.path || '/portal')
     return
   }
 

@@ -249,31 +249,13 @@ function normalizeAnalysisResult(result = {}) {
       ]
     : [
       normalizeAnalysisLayer({
-        id: 'pulse',
-        name: '市场脉冲层',
-        summary: result?.gemma || '',
-        fullText: result?.gemmaFullText || result?.gemma || '',
-        signal: result?.gemmaSignal || finalSignal,
-        decision: result?.gemmaDecision || finalDecision,
-        highlights: [result?.gemmaTrend, result?.gemmaIndicators, result?.gemmaLevels]
-      }),
-      normalizeAnalysisLayer({
-        id: 'risk',
-        name: '风险筛查层',
-        summary: result?.llama || '',
-        fullText: result?.llamaFullText || result?.llama || '',
-        signal: result?.llamaSignal || finalSignal,
-        decision: result?.llamaDecision || finalDecision,
-        highlights: [result?.llamaSentiment, result?.llamaRisk, result?.llamaMarket]
-      }),
-      normalizeAnalysisLayer({
-        id: 'final',
-        name: '决策终审层',
-        summary: result?.deepseek || '',
-        fullText: result?.deepseekFullText || result?.deepseek || '',
+        id: 'unified',
+        name: 'NVIDIA 极速终审',
+        summary: result?.deepseek || result?.decision || result?.summary || '',
+        fullText: result?.deepseekFullText || result?.deepseek || result?.decision || result?.summary || '',
         signal: result?.deepseekSignal || finalSignal,
         decision: result?.deepseekDecision || finalDecision,
-        highlights: [result?.deepseekStrategy, result?.deepseekTarget, result?.deepseekStopLoss]
+        highlights: [result?.deepseekStrategy, result?.deepseekTarget, result?.deepseekStopLoss].filter(Boolean)
       })
     ]
 

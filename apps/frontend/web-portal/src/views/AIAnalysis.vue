@@ -391,40 +391,20 @@
         <p>{{ verdictSummary }}</p>
       </div>
 
-      <div v-if="!isPhoneLayout || activeMobilePanel === 'layers'" class="analysis-layers-panel">
-        <div class="panel-head compact">
-          <div>
-            <h3>{{ analysisLayersTitle }}</h3>
-          </div>
-          <span class="market-tag">{{ analysisLayerCountLabel }}</span>
+      <div v-if="!isPhoneLayout || activeMobilePanel === 'layers'" class="unified-ai-terminal glass-panel-dark">
+        <div class="terminal-header">
+          <div class="glow-indicator"></div>
+          <h3>NVIDIA ONE-SHOT QUANT ENGINE</h3>
+          <span class="neon-badge" :class="`neon-${activeAnalysis.finalSignal || 'neutral'}`">
+            {{ activeAnalysis.finalDecision || 'N/A' }}
+          </span>
         </div>
-        <div class="layer-grid" :class="{ compact: analysisLayerCount < 3 }">
-          <article
-            v-for="layer in activeAnalysis.scanLayers"
-            :key="layer.id"
-            class="layer-card"
-            :class="layer.signal"
-          >
-            <div class="layer-head">
-              <div>
-                <span class="layer-kicker">{{ layer.id }}</span>
-                <h4>{{ layer.name }}</h4>
-                <div v-if="layer.modelAlias" class="layer-model">
-                  <span>{{ layer.modelAlias }}</span>
-                  <small>{{ layer.modelQuality || '最高质量' }}</small>
-                </div>
-              </div>
-              <span class="layer-decision">{{ layer.decision }}</span>
-            </div>
-            <div class="layer-scroll-body">
-              <p class="layer-summary">{{ layer.summary }}</p>
-              <div class="layer-highlights">
-                <span v-for="highlight in layer.highlights.filter(Boolean)" :key="highlight">
-                  {{ highlight }}
-                </span>
-              </div>
-            </div>
-          </article>
+        <div class="terminal-body">
+          <div class="terminal-text typewriter-effect">{{ unifiedReportText }}</div>
+        </div>
+        <div class="terminal-footer">
+          <span class="cyber-highlight">Model: {{ activeAnalysis.scanLayers?.[0]?.modelAlias || 'NVIDIA Llama/Nemotron' }}</span>
+          <span class="cyber-highlight">Latency: {{ activeAnalysis.scanLayers?.[0]?.modelLatency || 'Fast' }}</span>
         </div>
       </div>
     </section>
@@ -728,6 +708,11 @@ const verdictModelLabel = computed(() => {
   return isScheduledTrendResult.value ? `历史趋势模型 ${alias}` : `终审模型 ${alias}`
 })
 const verdictSummary = computed(() => verdictLayer.value?.summary || activeAnalysis.value?.reason || '等待扫描结果')
+const unifiedReportText = computed(() => {
+  const layers = activeAnalysis.value?.scanLayers || []
+  const targetLayer = layers.find(l => l.id === 'unified') || layers.find(l => l.id === 'final') || layers[0]
+  return targetLayer?.fullText || targetLayer?.summary || activeAnalysis.value?.reason || '等待量化直出结果'
+})
 
 const indicatorChips = computed(() => {
   const indicators = activeAnalysis.value?.indicators || {}
@@ -2348,5 +2333,77 @@ onBeforeUnmount(() => {
   .mobile-benchmark-row {
     grid-template-columns: 1fr;
   }
+}
+
+.glass-panel-dark {
+  background: rgba(15, 23, 42, 0.8) !important;
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  border-radius: 12px;
+  overflow: hidden;
+  color: #e2e8f0;
+}
+.unified-ai-terminal {
+  display: flex;
+  flex-direction: column;
+  margin-top: 16px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+.terminal-header {
+  display: flex;
+  align-items: center;
+  padding: 16px 24px;
+  background: linear-gradient(90deg, rgba(16,185,129,0.1) 0%, rgba(15,23,42,0) 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  gap: 12px;
+}
+.glow-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 10px #10b981, 0 0 20px #10b981;
+  animation: pulse 2s infinite;
+}
+.terminal-header h3 {
+  margin: 0;
+  font-family: monospace;
+  font-size: 1.1rem;
+  letter-spacing: 1px;
+  color: #34d399;
+  flex: 1;
+}
+.neon-badge {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-weight: bold;
+  font-family: monospace;
+  letter-spacing: 1px;
+}
+.neon-warning { border: 1px solid #f59e0b; color: #f59e0b; box-shadow: 0 0 10px rgba(245,158,11,0.2); }
+.neon-success { border: 1px solid #10b981; color: #10b981; box-shadow: 0 0 10px rgba(16,185,129,0.2); }
+.neon-danger { border: 1px solid #ef4444; color: #ef4444; box-shadow: 0 0 10px rgba(239,68,68,0.2); }
+.terminal-body {
+  padding: 24px;
+  font-family: monospace;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #94a3b8;
+  white-space: pre-wrap;
+}
+.terminal-footer {
+  padding: 12px 24px;
+  background: rgba(0,0,0,0.2);
+  display: flex;
+  gap: 16px;
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
 }
 </style>

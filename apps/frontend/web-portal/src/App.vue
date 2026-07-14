@@ -60,7 +60,7 @@ const handleNativeExitHint = () => {
 const normalizeHomePath = (value) => {
   const candidate = String(value || '').trim()
   if (!candidate || candidate === '/workspace') {
-    return '/dashboard'
+    return '/portal'
   }
   return candidate
 }
@@ -78,7 +78,7 @@ const refreshPlatformBootstrap = async () => {
     setSession(res.data)
     const readyPath = router.currentRoute.value.path
     const homePath = normalizeHomePath(res.data?.navigation?.homePath)
-    if (readyPath === '/' || readyPath === '/workspace' || readyPath === '/dashboard') {
+    if (readyPath === '/' || readyPath === '/workspace' || readyPath === '/portal') {
       router.replace(homePath).catch(() => {})
     }
   } catch {
@@ -93,7 +93,7 @@ onMounted(() => {
     const currentPath = router.currentRoute.value.path
     const existingSession = getSession()
 
-    if (existingSession && (currentPath === '/' || currentPath === '/workspace' || currentPath === '/dashboard')) {
+    if (existingSession && (currentPath === '/' || currentPath === '/workspace' || currentPath === '/portal')) {
       const homePath = normalizeHomePath(existingSession?.navigation?.homePath)
       router.replace(homePath).catch(() => {})
     }
