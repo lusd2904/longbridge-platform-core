@@ -249,8 +249,15 @@ class MidLongTermValueStrategy(BaseStrategy):
         
         # 1. 模拟调用基本面过滤（假设在每次月度扫描时执行，此处简化直接从我们建的 Fetcher 取）
         from utils.FundamentalDataFetcher import fundamental_fetcher
+        from utils.MacroRiskManager import macro_risk_manager
+        
         universe = list(data.keys())
         good_stocks = fundamental_fetcher.filter_universe(universe, min_roe=0.08, max_pe=40.0)
+        
+        # 2. 获取当前宏观风控乘数 (如果今晚有重大数据，系统会收紧防线)
+        current_date = timestamp
+        risk_multiplier = macro_risk_manager.get_current_risk_multiplier(current_date)
+        actual_atr_multiplier = self.atr_multiplier * risk_multiplier
         
         for symbol, df in data.items():
             if len(df) < self.sma_period:
@@ -291,8 +298,8 @@ class MidLongTermValueStrategy(BaseStrategy):
                 if current_price > self.highest_prices[symbol]:
                     self.highest_prices[symbol] = current_price
                     
-                # 计算动态止损线：最高价 - N倍ATR
-                trailing_stop_price = self.highest_prices[symbol] - (self.atr_multiplier * current_atr)
+                # 计算动态止损线：最高价 - N倍ATR (N受宏观风险实时控制)
+                trailing_stop_price = self.highest_prices[symbol] - (actual_atr_multiplier * current_atr)
                 
                 # 如果跌破移动止损线，获利了结或止损
                 if current_price < trailing_stop_price:
@@ -304,7 +311,8 @@ class MidLongTermValueStrategy(BaseStrategy):
                         metadata={
                             "reason": "trailing_stop",
                             "highest_price": self.highest_prices[symbol],
-                            "stop_price": trailing_stop_price
+                            "stop_price": trailing_stop_price,
+                            "applied_atr_multiplier": actual_atr_multiplier
                         }
                     )
                     # 重置记录
@@ -338,7 +346,8 @@ class MidLongTermValueStrategy(BaseStrategy):
                     metadata={
                         "reason": "value_pullback_support",
                         "sma200": current_sma,
-                        "rsi": current_rsi
+                        "rsi": current_rsi,
+                        "atr": current_atr
                     }
                 )
                 self.highest_prices[symbol] = current_price
@@ -461,13 +470,27 @@ class BacktestEngine:
         cash: float,
         total_capital: float
     ) -> Optional[Dict]:
-        """执行交易信号"""
+        """执行交易信号 (包含风险平价仓位管理)"""
         symbol = signal.symbol
         price = signal.price * (1 + self.slippage)  # 考虑滑点
         
-        # 计算交易数量（简化：固定使用10%资金）
-        position_size = total_capital * 0.1
-        quantity = int(position_size / price)
+        # 计算交易数量（风险平价仓位模型）
+        target_risk_ratio = 0.01  # 每笔交易最大允许账户总资金 1% 的风险回撤
+        
+        atr = signal.metadata.get("atr")
+        if atr and atr > 0:
+            # 根据真实波动幅度和 3 倍止损线计算该笔交易潜在风险空间
+            risk_per_share = atr * 3.0
+            # 计算能买多少股 (总风险额度 / 单股风险)
+            quantity = int((total_capital * target_risk_ratio) / risk_per_share)
+            
+            # 资金护栏：最高不得超过当前可用资金的 20%
+            max_qty_by_cash = int((cash * 0.20) / price)
+            quantity = min(quantity, max_qty_by_cash)
+        else:
+            # 降级方案：固定使用 10% 资金
+            position_size = total_capital * 0.1
+            quantity = int(position_size / price)
         
         if quantity <= 0:
             return None
