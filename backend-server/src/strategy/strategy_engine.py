@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import pandas_ta_classic as ta
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,9 @@ class StrategyType(Enum):
     MEAN_REVERSION = "mean_reversion"        # 均值回归
     MOMENTUM = "momentum"                    # 动量策略
     BREAKOUT = "breakout"                    # 突破策略
-    PAIRS_TRADING = "pairs_trading"          # 配对交易
+    PAIRS_TRADING = "pairs_trading"          # 配令人交易
     MULTI_FACTOR = "multi_factor"            # 多因子策略
+    MID_LONG_TERM_VALUE = "mid_long_term_value"  # 中长线价值策略
 
 
 @dataclass
@@ -227,6 +229,119 @@ class RSIStrategy(BaseStrategy):
                     confidence=(current_rsi - self.overbought) / (100 - self.overbought),
                     metadata={"rsi": current_rsi, "condition": "overbought"}
                 )
+
+class MidLongTermValueStrategy(BaseStrategy):
+    """中长线价值策略 (好股好价格)"""
+    
+    def __init__(self, config: StrategyConfig):
+        super().__init__(config)
+        self.sma_period = config.parameters.get("sma_period", 200)      # 200日牛熊分界线
+        self.rsi_period = config.parameters.get("rsi_period", 14)       # RSI 周期
+        self.atr_period = config.parameters.get("atr_period", 14)       # ATR 周期
+        self.atr_multiplier = config.parameters.get("atr_multiplier", 3.0) # 移动止损乘数
+        
+        # 记录每只股票的入场价和最高价（用于移动止盈止损）
+        self.entry_prices: Dict[str, float] = {}
+        self.highest_prices: Dict[str, float] = {}
+
+    def on_data(self, timestamp: datetime, data: Dict[str, pd.DataFrame]):
+        """处理数据并生成信号"""
+        
+        # 1. 模拟调用基本面过滤（假设在每次月度扫描时执行，此处简化直接从我们建的 Fetcher 取）
+        from utils.FundamentalDataFetcher import fundamental_fetcher
+        universe = list(data.keys())
+        good_stocks = fundamental_fetcher.filter_universe(universe, min_roe=0.08, max_pe=40.0)
+        
+        for symbol, df in data.items():
+            if len(df) < self.sma_period:
+                continue
+                
+            # 计算长周期指标 (基于 pandas-ta-classic)
+            df.ta.sma(length=self.sma_period, append=True)
+            df.ta.rsi(length=self.rsi_period, append=True)
+            df.ta.atr(length=self.atr_period, append=True)
+            
+            sma_col = f"SMA_{self.sma_period}"
+            rsi_col = f"RSI_{self.rsi_period}"
+            atr_col = f"ATRr_{self.atr_period}"
+            
+            # 确保指标都算出来了
+            if sma_col not in df.columns or rsi_col not in df.columns or atr_col not in df.columns:
+                continue
+                
+            current_price = df['close'].iloc[-1]
+            current_sma = df[sma_col].iloc[-1]
+            current_rsi = df[rsi_col].iloc[-1]
+            current_atr = df[atr_col].iloc[-1]
+            
+            # 检查是否有持仓
+            has_position = False
+            # 这里的 self.positions 由 BacktestEngine 更新
+            if symbol in self.positions and self.positions[symbol].get("quantity", 0) > 0:
+                has_position = True
+            
+            # ===============================
+            # 卖出逻辑 (更好的价格卖出去：移动止损)
+            # ===============================
+            if has_position:
+                if symbol not in self.highest_prices:
+                    self.highest_prices[symbol] = current_price
+                    
+                # 更新自买入以来的最高价
+                if current_price > self.highest_prices[symbol]:
+                    self.highest_prices[symbol] = current_price
+                    
+                # 计算动态止损线：最高价 - N倍ATR
+                trailing_stop_price = self.highest_prices[symbol] - (self.atr_multiplier * current_atr)
+                
+                # 如果跌破移动止损线，获利了结或止损
+                if current_price < trailing_stop_price:
+                    self.generate_signal(
+                        symbol=symbol,
+                        signal_type=SignalType.SELL,
+                        price=current_price,
+                        confidence=1.0,
+                        metadata={
+                            "reason": "trailing_stop",
+                            "highest_price": self.highest_prices[symbol],
+                            "stop_price": trailing_stop_price
+                        }
+                    )
+                    # 重置记录
+                    self.highest_prices.pop(symbol, None)
+                continue # 已持仓的暂时不考虑继续加仓逻辑
+            
+            # ===============================
+            # 买入逻辑 (好价格买好股)
+            # ===============================
+            # 1. 必须是基本面筛选出的“好股”
+            if symbol not in good_stocks:
+                continue
+                
+            # 2. “好价格”条件：价格在200日均线之上（处于长期多头趋势），但出现了短线超卖（回档建仓）
+            # 或者刚好回踩 200 日均线 (价格在 SMA200 的 1.00 ~ 1.05 之间)
+            is_uptrend = current_price > current_sma
+            is_pullback = current_rsi < 40  # 中长线可以放宽到 40 就算逢低买入
+            is_near_support = current_sma * 1.0 <= current_price <= current_sma * 1.05
+            
+            if is_uptrend and (is_pullback or is_near_support):
+                # 产生强烈的买入信号
+                confidence = 0.8
+                if is_pullback and is_near_support:
+                    confidence = 1.0  # 共振：既超卖又踩到支撑线，极佳买点
+                    
+                self.generate_signal(
+                    symbol=symbol,
+                    signal_type=SignalType.BUY,
+                    price=current_price,
+                    confidence=confidence,
+                    metadata={
+                        "reason": "value_pullback_support",
+                        "sma200": current_sma,
+                        "rsi": current_rsi
+                    }
+                )
+                self.highest_prices[symbol] = current_price
 
 
 class BacktestEngine:
@@ -516,6 +631,7 @@ class BacktestEngine:
 STRATEGY_REGISTRY = {
     StrategyType.TREND_FOLLOWING: MovingAverageCrossStrategy,
     StrategyType.MEAN_REVERSION: RSIStrategy,
+    StrategyType.MID_LONG_TERM_VALUE: MidLongTermValueStrategy,
 }
 
 
