@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 import json
-import pandas_ta_classic as ta
+import pandas_ta as ta
+from utils.redis_client import redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -235,73 +236,72 @@ class MidLongTermValueStrategy(BaseStrategy):
     
     def __init__(self, config: StrategyConfig):
         super().__init__(config)
-        self.sma_period = config.parameters.get("sma_period", 200)      # 200日牛熊分界线
-        self.rsi_period = config.parameters.get("rsi_period", 14)       # RSI 周期
-        self.atr_period = config.parameters.get("atr_period", 14)       # ATR 周期
-        self.atr_multiplier = config.parameters.get("atr_multiplier", 3.0) # 移动止损乘数
+        params = config.parameters
+        self.sma_period = int(params.get("sma_period", 200))
+        self.rsi_period = int(params.get("rsi_period", 14))
+        self.atr_period = int(params.get("atr_period", 14))
+        self.rsi_oversold = float(params.get("rsi_oversold", 40.0))
+        self.atr_multiplier = float(params.get("atr_multiplier", 3.0))
         
-        # 记录每只股票的入场价和最高价（用于移动止盈止损）
-        self.entry_prices: Dict[str, float] = {}
-        self.highest_prices: Dict[str, float] = {}
+        self.redis_hash_key = "strategy:midlong:highest_prices"
+        logger.info(f"MidLongTermValueStrategy 挂载持久化内存键: {self.redis_hash_key}")
+
+    def _get_highest_price(self, symbol: str) -> float:
+        val = redis_client.hget(self.redis_hash_key, symbol)
+        return float(val) if val else 0.0
+
+    def _set_highest_price(self, symbol: str, price: float):
+        redis_client.hset(self.redis_hash_key, symbol, price)
+
+    def _clear_highest_price(self, symbol: str):
+        redis_client.hset(self.redis_hash_key, symbol, 0.0)
 
     def on_data(self, timestamp: datetime, data: Dict[str, pd.DataFrame]):
         """处理数据并生成信号"""
-        
-        # 1. 模拟调用基本面过滤（假设在每次月度扫描时执行，此处简化直接从我们建的 Fetcher 取）
         from utils.FundamentalDataFetcher import fundamental_fetcher
         from utils.MacroRiskManager import macro_risk_manager
         
         universe = list(data.keys())
         good_stocks = fundamental_fetcher.filter_universe(universe, min_roe=0.08, max_pe=40.0)
-        
-        # 2. 获取当前宏观风控乘数 (如果今晚有重大数据，系统会收紧防线)
-        current_date = timestamp
-        risk_multiplier = macro_risk_manager.get_current_risk_multiplier(current_date)
+        risk_multiplier = macro_risk_manager.get_current_risk_multiplier(timestamp)
         actual_atr_multiplier = self.atr_multiplier * risk_multiplier
         
         for symbol, df in data.items():
-            if len(df) < self.sma_period:
+            if symbol not in data or timestamp not in df.index:
                 continue
                 
-            # 计算长周期指标 (基于 pandas-ta-classic)
-            df.ta.sma(length=self.sma_period, append=True)
-            df.ta.rsi(length=self.rsi_period, append=True)
-            df.ta.atr(length=self.atr_period, append=True)
+            current_price = df.loc[timestamp, 'close']
             
-            sma_col = f"SMA_{self.sma_period}"
-            rsi_col = f"RSI_{self.rsi_period}"
-            atr_col = f"ATRr_{self.atr_period}"
+            # 严格防范未来函数：计算均线和RSI时，必须用“昨天”的数据（shift(1)）
+            historical_close = df['close'].shift(1)
             
-            # 确保指标都算出来了
-            if sma_col not in df.columns or rsi_col not in df.columns or atr_col not in df.columns:
+            sma200 = ta.sma(historical_close, length=self.sma_period)
+            rsi14 = ta.rsi(historical_close, length=self.rsi_period)
+            atr14 = ta.atr(df['high'].shift(1), df['low'].shift(1), historical_close, length=self.atr_period)
+            
+            if sma200 is None or rsi14 is None or atr14 is None:
                 continue
                 
-            current_price = df['close'].iloc[-1]
-            current_sma = df[sma_col].iloc[-1]
-            current_rsi = df[rsi_col].iloc[-1]
-            current_atr = df[atr_col].iloc[-1]
+            current_sma = sma200.loc[timestamp]
+            current_rsi = rsi14.loc[timestamp]
+            current_atr = atr14.loc[timestamp]
             
-            # 检查是否有持仓
-            has_position = False
-            # 这里的 self.positions 由 BacktestEngine 更新
-            if symbol in self.positions and self.positions[symbol].get("quantity", 0) > 0:
-                has_position = True
+            if pd.isna(current_sma) or pd.isna(current_rsi) or pd.isna(current_atr):
+                continue
             
-            # ===============================
-            # 卖出逻辑 (更好的价格卖出去：移动止损)
-            # ===============================
+            highest_price_memory = self._get_highest_price(symbol)
+            has_position = symbol in self.positions and self.positions[symbol].get("quantity", 0) > 0
+            
             if has_position:
-                if symbol not in self.highest_prices:
-                    self.highest_prices[symbol] = current_price
+                if highest_price_memory == 0.0:
+                    highest_price_memory = current_price
+                    self._set_highest_price(symbol, current_price)
+                if current_price > highest_price_memory:
+                    highest_price_memory = current_price
+                    self._set_highest_price(symbol, current_price)
                     
-                # 更新自买入以来的最高价
-                if current_price > self.highest_prices[symbol]:
-                    self.highest_prices[symbol] = current_price
-                    
-                # 计算动态止损线：最高价 - N倍ATR (N受宏观风险实时控制)
-                trailing_stop_price = self.highest_prices[symbol] - (actual_atr_multiplier * current_atr)
+                trailing_stop_price = highest_price_memory - (actual_atr_multiplier * current_atr)
                 
-                # 如果跌破移动止损线，获利了结或止损
                 if current_price < trailing_stop_price:
                     self.generate_signal(
                         symbol=symbol,
@@ -310,39 +310,20 @@ class MidLongTermValueStrategy(BaseStrategy):
                         confidence=1.0,
                         metadata={
                             "reason": "trailing_stop",
-                            "highest_price": self.highest_prices[symbol],
+                            "highest_price": highest_price_memory,
                             "stop_price": trailing_stop_price,
                             "applied_atr_multiplier": actual_atr_multiplier
                         }
                     )
-                    # 重置记录
-                    self.highest_prices.pop(symbol, None)
-                continue # 已持仓的暂时不考虑继续加仓逻辑
-            
-            # ===============================
-            # 买入逻辑 (好价格买好股)
-            # ===============================
-            # 1. 必须是基本面筛选出的“好股”
-            if symbol not in good_stocks:
+                    self._clear_highest_price(symbol)
                 continue
-                
-            # 2. “好价格”条件：价格在200日均线之上（处于长期多头趋势），但出现了短线超卖（回档建仓）
-            # 或者刚好回踩 200 日均线 (价格在 SMA200 的 1.00 ~ 1.05 之间)
-            is_uptrend = current_price > current_sma
-            is_pullback = current_rsi < 40  # 中长线可以放宽到 40 就算逢低买入
-            is_near_support = current_sma * 1.0 <= current_price <= current_sma * 1.05
             
-            if is_uptrend and (is_pullback or is_near_support):
-                # 产生强烈的买入信号
-                confidence = 0.8
-                if is_pullback and is_near_support:
-                    confidence = 1.0  # 共振：既超卖又踩到支撑线，极佳买点
-                    
+            if symbol in good_stocks and current_price > current_sma and current_rsi < self.rsi_oversold:
                 self.generate_signal(
                     symbol=symbol,
                     signal_type=SignalType.BUY,
                     price=current_price,
-                    confidence=confidence,
+                    confidence=0.8,
                     metadata={
                         "reason": "value_pullback_support",
                         "sma200": current_sma,
@@ -350,7 +331,7 @@ class MidLongTermValueStrategy(BaseStrategy):
                         "atr": current_atr
                     }
                 )
-                self.highest_prices[symbol] = current_price
+                self._set_highest_price(symbol, current_price)
 
 
 class BacktestEngine:
@@ -403,6 +384,7 @@ class BacktestEngine:
                 continue
             
             # 策略处理数据
+            strategy.positions = positions
             strategy.on_data(date, day_data)
             
             # 执行信号

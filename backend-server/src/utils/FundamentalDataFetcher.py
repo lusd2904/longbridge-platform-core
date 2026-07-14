@@ -1,6 +1,9 @@
 import logging
 import yfinance as yf
 from typing import Dict, Optional
+import time
+import json
+from utils.redis_client import redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +18,21 @@ class FundamentalDataFetcher:
         """
         获取指定股票的基本面指标 (实盘数据)
         """
-        if symbol in self._cache:
-            return self._cache[symbol]
-
+        # 1. 尝试从 Redis 读取长效缓存 (7天有效，基本面不需要天天拉)
+        cache_key = f"fundamentals:v1:{symbol}"
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            try:
+                data = json.loads(cached_data)
+                self._cache[symbol] = data
+                logger.info(f"命中 Redis 缓存: 获取 {symbol} 基本面数据")
+                return data
+            except Exception:
+                pass
+                
+        # 2. 如果没命中缓存，强制节流休眠，防反爬封禁
+        time.sleep(1.0)
+        
         default_data = {'pe': 999.0, 'pb': 99.0, 'roe': -9.9, 'market_cap': 0}
         
         try:
@@ -37,12 +52,18 @@ class FundamentalDataFetcher:
                 'market_cap': float(market_cap) if market_cap is not None else 0.0
             }
             
+            
             self._cache[symbol] = real_data
-            logger.info(f"成功拉取 {symbol} 真实财务数据: {real_data}")
+            # 存入 Redis，有效期 7 天 (604800 秒)
+            redis_client.set(cache_key, json.dumps(real_data), expire=604800)
+            
+            logger.info(f"成功拉取 {symbol} 真实财务数据并更新缓存: {real_data}")
             return real_data
             
         except Exception as e:
             logger.error(f"拉取 {symbol} 基本面数据失败: {str(e)}")
+            # 失败时写入短效默认缓存，避免死循环一直拉取
+            redis_client.set(cache_key, json.dumps(default_data), expire=3600)
             return default_data
 
     def filter_universe(self, symbols: list, min_roe: float = 0.05, max_pe: float = 50.0) -> list:
