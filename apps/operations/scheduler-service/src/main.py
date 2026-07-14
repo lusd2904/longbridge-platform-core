@@ -6,15 +6,17 @@ import socket
 import sys
 import threading
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from fastapi import Body, Depends, HTTPException, Query
 
+from apps.governance.risk_shared.boundary import build_risk_overview
 
 REFACTOR_ROOT = Path(__file__).resolve().parents[4]
 if str(REFACTOR_ROOT) not in sys.path:
@@ -27,7 +29,6 @@ from apps.operations.module_shared import (
     MarketUniverseSync,
     PositionSnapshotService,
     QuantTradingService,
-    QuoteSnapshotService,
     RiskOverviewSnapshotService,
     StrategyMonitorService,
     SymbolContentCacheService,
@@ -91,7 +92,7 @@ def _service_url(url_env_var: str, port_env_var: str, default_port: int) -> str:
 ANALYSIS_SERVICE_URL = _service_url("REF_ANALYSIS_SERVICE_URL", "REF_ANALYSIS_SERVICE_PORT", 8103)
 
 
-def _format_datetime(value: Any) -> Optional[str]:
+def _format_datetime(value: Any) -> str | None:
     if not value:
         return None
     if hasattr(value, "strftime"):
@@ -141,17 +142,20 @@ def _ensure_runtime_lease_table() -> None:
     )
 
 
-def _job_status(job_name: str) -> Dict[str, Any]:
+def _job_status(job_name: str) -> dict[str, Any]:
     _ensure_job_table()
-    row = DbUtil.fetch_one(
-        """
+    row = (
+        DbUtil.fetch_one(
+            """
         SELECT job_name, last_run_date, last_run_at, status, message, updated_at
         FROM scheduled_jobs
         WHERE job_name = %s
         LIMIT 1
         """,
-        (job_name,),
-    ) or {}
+            (job_name,),
+        )
+        or {}
+    )
     return {
         "jobName": row.get("job_name") or job_name,
         "lastRunDate": row.get("last_run_date").strftime("%Y-%m-%d") if row.get("last_run_date") else None,
@@ -167,8 +171,8 @@ def _write_job_status(
     status: str,
     message: str,
     *,
-    last_run_date: Optional[date] = None,
-    last_run_at: Optional[datetime] = None,
+    last_run_date: date | None = None,
+    last_run_at: datetime | None = None,
 ) -> None:
     _ensure_job_table()
     DbUtil.execute_sql(
@@ -186,7 +190,7 @@ def _write_job_status(
     )
 
 
-def _coerce_date(value: Any) -> Optional[date]:
+def _coerce_date(value: Any) -> date | None:
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -248,7 +252,7 @@ def _safe_float(value: Any, default: float, minimum: float, maximum: float) -> f
     return max(minimum, min(number, maximum))
 
 
-def _watchlist_auto_buy_settings(session_name: str) -> Dict[str, Any]:
+def _watchlist_auto_buy_settings(session_name: str) -> dict[str, Any]:
     task_key = f"watchlist_{session_name}_review"
     policy = SystemTaskService.get_policy(task_key) or {}
     settings = policy.get("settings") if isinstance(policy.get("settings"), dict) else {}
@@ -261,7 +265,7 @@ def _watchlist_auto_buy_settings(session_name: str) -> Dict[str, Any]:
     }
 
 
-def _us_open_ai_trade_settings() -> Dict[str, Any]:
+def _us_open_ai_trade_settings() -> dict[str, Any]:
     policy = SystemTaskService.get_policy("watchlist_us_open_ai_trade") or {}
     settings = policy.get("settings") if isinstance(policy.get("settings"), dict) else {}
     strategy_profile = str(settings.get("strategyProfile") or "balanced").strip().lower()
@@ -282,7 +286,7 @@ def _us_open_ai_trade_settings() -> Dict[str, Any]:
     }
 
 
-def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
+def _list_watchlist_review_users(session_name: str) -> list[dict[str, Any]]:
     if session_name == "pre_open":
         watchlist_filter = "w.scan_before_open = 1"
     elif session_name == "post_close":
@@ -314,8 +318,9 @@ def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
     except Exception:
         pass
 
-    users = DbUtil.fetch_all(
-        f"""
+    users = (
+        DbUtil.fetch_all(
+            f"""
         SELECT
             u.id,
             u.username,
@@ -330,8 +335,10 @@ def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
         ORDER BY target_count DESC, u.id ASC
         LIMIT %s
         """,
-        (max_users,),
-    ) or []
+            (max_users,),
+        )
+        or []
+    )
     if users:
         return [
             {
@@ -348,18 +355,21 @@ def _list_watchlist_review_users(session_name: str) -> List[Dict[str, Any]]:
     return []
 
 
-def _list_us_open_ai_trade_users() -> List[Dict[str, Any]]:
+def _list_us_open_ai_trade_users() -> list[dict[str, Any]]:
     max_users = max(1, min(int(os.getenv("REF_WATCHLIST_US_OPEN_AI_TRADE_MAX_USERS", "50")), 200))
-    users = DbUtil.fetch_all(
-        """
+    users = (
+        DbUtil.fetch_all(
+            """
         SELECT id, username, role
         FROM users
         WHERE COALESCE(status, 'active') NOT IN ('disabled', 'locked')
         ORDER BY id ASC
         LIMIT %s
         """,
-        (max_users,),
-    ) or []
+            (max_users,),
+        )
+        or []
+    )
     return [
         {
             "userId": int(row.get("id") or 0),
@@ -371,11 +381,13 @@ def _list_us_open_ai_trade_users() -> List[Dict[str, Any]]:
     ]
 
 
-def _request_watchlist_review_for_user(session_name: str, user: Dict[str, Any]) -> Dict[str, Any]:
+def _request_watchlist_review_for_user(session_name: str, user: dict[str, Any]) -> dict[str, Any]:
     user_id = int(user.get("userId") or user.get("id") or 0)
     if user_id <= 0:
         raise RuntimeError("watchlist review 用户无效")
-    service_token = generate_token(user_id, str(user.get("username") or "scheduler-service"), str(user.get("role") or "user"))
+    service_token = generate_token(
+        user_id, str(user.get("username") or "scheduler-service"), str(user.get("role") or "user")
+    )
     auto_buy_settings = _watchlist_auto_buy_settings(session_name)
     payload = {
         "session": session_name,
@@ -414,7 +426,7 @@ def _request_watchlist_review_for_user(session_name: str, user: Dict[str, Any]) 
     return result if isinstance(result, dict) else {"success": True, "data": result}
 
 
-def _is_watchlist_review_failure(result_payload: Dict[str, Any]) -> bool:
+def _is_watchlist_review_failure(result_payload: dict[str, Any]) -> bool:
     result_status = str(result_payload.get("status") or "").strip().lower()
     if bool(result_payload.get("degraded")):
         return True
@@ -423,13 +435,15 @@ def _is_watchlist_review_failure(result_payload: Dict[str, Any]) -> bool:
     return False
 
 
-def _is_watchlist_review_skipped(result_payload: Dict[str, Any]) -> bool:
+def _is_watchlist_review_skipped(result_payload: dict[str, Any]) -> bool:
     result_status = str(result_payload.get("status") or "").strip().lower()
     reason = str(result_payload.get("reason") or "").strip().lower()
-    return bool(result_payload.get("skipped")) or result_status == "skipped" or reason in {"no_targets", "empty-watchlist"}
+    return (
+        bool(result_payload.get("skipped")) or result_status == "skipped" or reason in {"no_targets", "empty-watchlist"}
+    )
 
 
-def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
+def _run_watchlist_review(session_name: str) -> dict[str, Any]:
     now = datetime.now()
     job_name = f"watchlist_{session_name}_review"
     _write_job_status(job_name, "running", f"自选股 {session_name} 复核任务执行中")
@@ -448,45 +462,55 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
             "results": [],
         }
 
-    results: List[Dict[str, Any]] = []
-    failures: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     for user in users:
         user_id = int(user.get("userId") or 0)
         try:
             result = _request_watchlist_review_for_user(session_name, user)
             result_payload = result.get("data") if isinstance(result.get("data"), dict) else result
-            result_status = str(result_payload.get("status") or "").strip().lower() if isinstance(result_payload, dict) else ""
+            result_status = (
+                str(result_payload.get("status") or "").strip().lower() if isinstance(result_payload, dict) else ""
+            )
             if isinstance(result_payload, dict):
                 if _is_watchlist_review_skipped(result_payload):
-                    skipped.append({
-                        "userId": user_id,
-                        "message": _analysis_summary(result, session_name),
-                        "status": result_status or "skipped",
-                        "reason": result_payload.get("reason") or "no_targets",
-                    })
+                    skipped.append(
+                        {
+                            "userId": user_id,
+                            "message": _analysis_summary(result, session_name),
+                            "status": result_status or "skipped",
+                            "reason": result_payload.get("reason") or "no_targets",
+                        }
+                    )
                 elif _is_watchlist_review_failure(result_payload):
-                    failures.append({
-                        "userId": user_id,
-                        "message": _analysis_summary(result, session_name),
-                        "status": result_status or "failed",
-                    })
-            results.append({
-                "userId": user_id,
-                "username": user.get("username"),
-                "targetCount": int(user.get("targetCount") or 0),
-                "reason": user.get("reason"),
-                "result": result,
-            })
+                    failures.append(
+                        {
+                            "userId": user_id,
+                            "message": _analysis_summary(result, session_name),
+                            "status": result_status or "failed",
+                        }
+                    )
+            results.append(
+                {
+                    "userId": user_id,
+                    "username": user.get("username"),
+                    "targetCount": int(user.get("targetCount") or 0),
+                    "reason": user.get("reason"),
+                    "result": result,
+                }
+            )
         except Exception as exc:
             failures.append({"userId": user_id, "message": str(exc)[:220]})
-            results.append({
-                "userId": user_id,
-                "username": user.get("username"),
-                "targetCount": int(user.get("targetCount") or 0),
-                "reason": user.get("reason"),
-                "error": str(exc)[:500],
-            })
+            results.append(
+                {
+                    "userId": user_id,
+                    "username": user.get("username"),
+                    "targetCount": int(user.get("targetCount") or 0),
+                    "reason": user.get("reason"),
+                    "error": str(exc)[:500],
+                }
+            )
 
     skipped_count = len(skipped)
     success_count = max(0, len(users) - len(failures) - skipped_count)
@@ -522,14 +546,14 @@ def _run_watchlist_review(session_name: str) -> Dict[str, Any]:
     }
 
 
-def _run_us_open_ai_trade_for_user(user: Dict[str, Any]) -> Dict[str, Any]:
+def _run_us_open_ai_trade_for_user(user: dict[str, Any]) -> dict[str, Any]:
     user_id = int(user.get("userId") or user.get("id") or 0)
     if user_id <= 0:
         raise RuntimeError("美股开盘 AI 自动交易用户无效")
     return QuantTradingService.run_us_open_watchlist_ai_trade(user_id=user_id, source="scheduler")
 
 
-def _run_us_open_ai_trade() -> Dict[str, Any]:
+def _run_us_open_ai_trade() -> dict[str, Any]:
     now = datetime.now()
     job_name = "watchlist_us_open_ai_trade"
     settings = _us_open_ai_trade_settings()
@@ -560,8 +584,8 @@ def _run_us_open_ai_trade() -> Dict[str, Any]:
             "results": [],
         }
 
-    results: List[Dict[str, Any]] = []
-    failures: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
     for user in users:
         user_id = int(user.get("userId") or 0)
         try:
@@ -603,12 +627,14 @@ def _run_us_open_ai_trade() -> Dict[str, Any]:
 
 
 class ManagedDailyTaskRunner:
-    def __init__(self, task_key: str, default_hour: int, default_minute: int, runner: Callable[[], Dict[str, Any]]) -> None:
+    def __init__(
+        self, task_key: str, default_hour: int, default_minute: int, runner: Callable[[], dict[str, Any]]
+    ) -> None:
         self.JOB_NAME = task_key
         self._default_hour = default_hour
         self._default_minute = default_minute
         self._runner = runner
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._poll_interval_seconds = 60
 
@@ -624,7 +650,7 @@ class ManagedDailyTaskRunner:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
 
-    def run_once(self) -> Dict[str, Any]:
+    def run_once(self) -> dict[str, Any]:
         return self._runner()
 
     def _loop(self) -> None:
@@ -648,11 +674,11 @@ class ManagedDailyTaskRunner:
 
 
 class ManagedIntervalTaskRunner:
-    def __init__(self, task_key: str, default_interval_seconds: int, runner: Callable[[], Dict[str, Any]]) -> None:
+    def __init__(self, task_key: str, default_interval_seconds: int, runner: Callable[[], dict[str, Any]]) -> None:
         self.JOB_NAME = task_key
         self._default_interval_seconds = default_interval_seconds
         self._runner = runner
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
     def start(self) -> None:
@@ -667,7 +693,7 @@ class ManagedIntervalTaskRunner:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
 
-    def run_once(self) -> Dict[str, Any]:
+    def run_once(self) -> dict[str, Any]:
         return self._runner()
 
     def _loop(self) -> None:
@@ -710,7 +736,7 @@ watchlist_us_open_ai_trade_scheduler = ManagedIntervalTaskRunner(
 
 class SchedulerRuntime:
     def __init__(self) -> None:
-        self._managed: Dict[str, Dict[str, Any]] = {
+        self._managed: dict[str, dict[str, Any]] = {
             "market_universe_daily_sync": {
                 "title": "市场底库全量同步",
                 "scope": "system",
@@ -821,7 +847,7 @@ class SchedulerRuntime:
         for meta in self._managed.values():
             meta["scheduler"].stop()
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         services = []
         for task_key, meta in self._managed.items():
             scheduler = meta["scheduler"]
@@ -857,23 +883,26 @@ class SchedulerLeadership:
         self._lease_seconds = SCHEDULER_LEASE_SECONDS
         self._renew_interval = SCHEDULER_RENEW_INTERVAL_SECONDS
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._is_leader = False
-        self._last_error: Optional[str] = None
-        self._last_renew_at: Optional[str] = None
+        self._last_error: str | None = None
+        self._last_renew_at: str | None = None
 
-    def _fetch_lock_row(self) -> Dict[str, Any]:
+    def _fetch_lock_row(self) -> dict[str, Any]:
         _ensure_runtime_lease_table()
-        return DbUtil.fetch_one(
-            """
+        return (
+            DbUtil.fetch_one(
+                """
             SELECT lock_name, owner_id, lease_until, acquired_at, updated_at
             FROM scheduler_runtime_leases
             WHERE lock_name = %s
             LIMIT 1
             """,
-            (self.LOCK_NAME,),
-        ) or {}
+                (self.LOCK_NAME,),
+            )
+            or {}
+        )
 
     def _set_leader_state(self, is_leader: bool) -> None:
         with self._lock:
@@ -958,7 +987,7 @@ class SchedulerLeadership:
         except Exception as exc:
             self._last_error = str(exc)
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         row = self._fetch_lock_row()
         lease_until = row.get("lease_until")
         return {
@@ -980,7 +1009,7 @@ class SchedulerLeadership:
 scheduler_leadership = SchedulerLeadership(scheduler_runtime)
 
 
-def _build_task_snapshot(task_key: str, user_id: int) -> Dict[str, Any]:
+def _build_task_snapshot(task_key: str, user_id: int) -> dict[str, Any]:
     policy = SystemTaskService.get_policy(task_key)
     if not policy:
         raise HTTPException(status_code=404, detail="未找到任务策略")
@@ -997,7 +1026,7 @@ def _build_task_snapshot(task_key: str, user_id: int) -> Dict[str, Any]:
     }
 
 
-def _list_task_snapshots(user_id: int, session: dict) -> List[Dict[str, Any]]:
+def _list_task_snapshots(user_id: int, session: dict) -> list[dict[str, Any]]:
     SystemTaskService.ensure_schema()
     tasks = []
     for task_key in SystemTaskService.DEFAULT_POLICIES.keys():
@@ -1010,17 +1039,20 @@ def _list_task_snapshots(user_id: int, session: dict) -> List[Dict[str, Any]]:
     return tasks
 
 
-def _recent_jobs(user_id: int, session: dict, limit: int = 20) -> List[Dict[str, Any]]:
+def _recent_jobs(user_id: int, session: dict, limit: int = 20) -> list[dict[str, Any]]:
     _ensure_job_table()
-    rows = DbUtil.fetch_all(
-        """
+    rows = (
+        DbUtil.fetch_all(
+            """
         SELECT job_name, last_run_date, last_run_at, status, message, updated_at
         FROM scheduled_jobs
         ORDER BY COALESCE(last_run_at, updated_at) DESC
         LIMIT %s
         """,
-        (max(1, min(int(limit or 20), 120)),),
-    ) or []
+            (max(1, min(int(limit or 20), 120)),),
+        )
+        or []
+    )
 
     allowed_job_names = None
     if not _is_admin(session):
@@ -1047,7 +1079,7 @@ def _recent_jobs(user_id: int, session: dict, limit: int = 20) -> List[Dict[str,
     return items
 
 
-def _assert_task_access(session: dict, task_key: str) -> Dict[str, Any]:
+def _assert_task_access(session: dict, task_key: str) -> dict[str, Any]:
     policy = SystemTaskService.get_policy(task_key)
     if not policy:
         raise HTTPException(status_code=404, detail="未找到任务策略")
@@ -1056,7 +1088,7 @@ def _assert_task_access(session: dict, task_key: str) -> Dict[str, Any]:
     return policy
 
 
-def _run_market_universe(user_id: int) -> Dict[str, Any]:
+def _run_market_universe(user_id: int) -> dict[str, Any]:
     market_universe_scheduler._ensure_job_table()  # noqa: SLF001
     markets = market_universe_scheduler._get_markets()  # noqa: SLF001
     from datetime import datetime
@@ -1073,8 +1105,9 @@ def _run_market_universe(user_id: int) -> Dict[str, Any]:
     return result
 
 
-def _run_historical_sync(user_id: Optional[int] = None) -> Dict[str, Any]:
+def _run_historical_sync(user_id: int | None = None) -> dict[str, Any]:
     from datetime import datetime
+
     from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 
     historical_market_data_scheduler._ensure_job_table()  # noqa: SLF001
@@ -1113,8 +1146,9 @@ def _run_historical_sync(user_id: Optional[int] = None) -> Dict[str, Any]:
     return result
 
 
-def _run_indicator_refresh() -> Dict[str, Any]:
+def _run_indicator_refresh() -> dict[str, Any]:
     from datetime import datetime
+
     from core.analysis.IndicatorSnapshotService import IndicatorSnapshotService
 
     indicator_refresh_scheduler._ensure_job_table()  # noqa: SLF001
@@ -1144,8 +1178,9 @@ def _run_indicator_refresh() -> Dict[str, Any]:
     return result
 
 
-def _run_market_scan(user_id: Optional[int] = None) -> Dict[str, Any]:
+def _run_market_scan(user_id: int | None = None) -> dict[str, Any]:
     from datetime import datetime
+
     from core.analysis.DailyMarketScanService import DailyMarketScanService
 
     daily_market_scan_scheduler._ensure_job_table()  # noqa: SLF001
@@ -1183,7 +1218,7 @@ def _run_market_scan(user_id: Optional[int] = None) -> Dict[str, Any]:
     return result
 
 
-def _run_market_insight(user_id: int) -> Dict[str, Any]:
+def _run_market_insight(user_id: int) -> dict[str, Any]:
     from core.analysis.MarketInsightService import MarketInsightService
 
     result = MarketInsightService.refresh_all_markets(user_id=user_id, source="manual")
@@ -1191,7 +1226,7 @@ def _run_market_insight(user_id: int) -> Dict[str, Any]:
     return result
 
 
-def _run_recommendation_refresh(user_id: int) -> Dict[str, Any]:
+def _run_recommendation_refresh(user_id: int) -> dict[str, Any]:
     from core.analysis.RecommendationService import RecommendationService
 
     RecommendationService.refresh_all_profiles(user_id=user_id)
@@ -1199,8 +1234,9 @@ def _run_recommendation_refresh(user_id: int) -> Dict[str, Any]:
     return {"refreshed": True}
 
 
-def _run_finance_briefing(user_id: int) -> Dict[str, Any]:
+def _run_finance_briefing(user_id: int) -> dict[str, Any]:
     from datetime import datetime
+
     from core.analysis.FinanceBriefingService import FinanceBriefingService
 
     finance_briefing_scheduler._ensure_job_table()  # noqa: SLF001
@@ -1214,7 +1250,7 @@ def _run_finance_briefing(user_id: int) -> Dict[str, Any]:
     return result
 
 
-def _run_account_asset_snapshot_refresh(user_id: int) -> Dict[str, Any]:
+def _run_account_asset_snapshot_refresh(user_id: int) -> dict[str, Any]:
     snapshots = AccountAssetSnapshotService.refresh_for_user(user_id=user_id, source="scheduler")
     _write_job_status(
         "account_asset_snapshot_refresh",
@@ -1226,7 +1262,7 @@ def _run_account_asset_snapshot_refresh(user_id: int) -> Dict[str, Any]:
     return {"snapshots": snapshots, "count": len(snapshots)}
 
 
-def _run_position_snapshot_refresh(user_id: int) -> Dict[str, Any]:
+def _run_position_snapshot_refresh(user_id: int) -> dict[str, Any]:
     snapshots = PositionSnapshotService.refresh_for_user(user_id=user_id, source="scheduler")
     position_count = sum(len(items) for items in snapshots.values())
     _write_job_status(
@@ -1239,7 +1275,7 @@ def _run_position_snapshot_refresh(user_id: int) -> Dict[str, Any]:
     return {"accounts": len(snapshots), "positionCount": position_count}
 
 
-def _run_risk_overview_snapshot_refresh(user_id: int) -> Dict[str, Any]:
+def _run_risk_overview_snapshot_refresh(user_id: int) -> dict[str, Any]:
     from core.broker.BrokerInterface import get_broker_manager
 
     saved = 0
@@ -1278,14 +1314,14 @@ def _run_risk_overview_snapshot_refresh(user_id: int) -> Dict[str, Any]:
     return {"count": saved}
 
 
-def _run_symbol_content_cache_refresh(user_id: int) -> Dict[str, Any]:
-    from core.analysis.MarketInsightService import MarketInsightService
+def _run_symbol_content_cache_refresh(user_id: int) -> dict[str, Any]:
     from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
+    from core.analysis.MarketInsightService import MarketInsightService
 
     quote_ctx = build_quote_context(user_id=user_id, region=resolve_region())
     content_ctx = build_content_context(user_id=user_id, region=resolve_region())
 
-    symbols: List[str] = []
+    symbols: list[str] = []
     for items in MarketInsightService.BENCHMARKS.values():
         for item in items[:3]:
             symbol = HistoricalMarketDataService.normalize_symbol(item.get("symbol"))
@@ -1337,7 +1373,7 @@ def _run_symbol_content_cache_refresh(user_id: int) -> Dict[str, Any]:
     return {"symbolCount": len(symbols[:9]), "savedCount": saved}
 
 
-TASK_RUNNERS: Dict[str, Callable[[int], Dict[str, Any]]] = {
+TASK_RUNNERS: dict[str, Callable[[int], dict[str, Any]]] = {
     "market_universe_daily_sync": _run_market_universe,
     "historical_market_data_daily_sync": lambda user_id: _run_historical_sync(user_id),
     "market_history_universe_backfill": lambda user_id: market_history_backfill_scheduler.run_once(),
@@ -1356,7 +1392,9 @@ TASK_RUNNERS: Dict[str, Callable[[int], Dict[str, Any]]] = {
     "risk_overview_snapshot_refresh": _run_risk_overview_snapshot_refresh,
     "symbol_content_cache_refresh": _run_symbol_content_cache_refresh,
     "position_monitor": lambda user_id: StrategyMonitorService.run_monitor(user_id=user_id, source="manual"),
-    "quant_trading": lambda user_id: QuantTradingService.run_watchlist_strategy_cycle(user_id=user_id, source="manual", execute=False),
+    "quant_trading": lambda user_id: QuantTradingService.run_watchlist_strategy_cycle(
+        user_id=user_id, source="manual", execute=False
+    ),
     "bootstrap_market_history_2024": lambda user_id: MarketHistoryBootstrapService.run_once(
         user_id=user_id,
         batch_size=SystemTaskService.get_batch_size("bootstrap_market_history_2024", 160),
@@ -1387,7 +1425,9 @@ async def health():
     runtime_running = bool(runtime.get("allAlive"))
     is_leader = bool(leadership.get("isLeader"))
     deps = {
-        "mysql": build_dependency_status("mysql", "healthy" if mysql_ok else "degraded", detail="调度任务、租约与执行状态存储"),
+        "mysql": build_dependency_status(
+            "mysql", "healthy" if mysql_ok else "degraded", detail="调度任务、租约与执行状态存储"
+        ),
         "runtime": build_dependency_status(
             "runtime",
             "healthy" if runtime_running else "degraded",
@@ -1397,7 +1437,11 @@ async def health():
     }
     alerts = []
     if not runtime_running:
-        alerts.append(build_alert("scheduler-runtime-stopped", "warning", "调度线程未运行", action="检查调度租约和 runtime/start 接口"))
+        alerts.append(
+            build_alert(
+                "scheduler-runtime-stopped", "warning", "调度线程未运行", action="检查调度租约和 runtime/start 接口"
+            )
+        )
     if leadership and not is_leader:
         alerts.append(build_alert("scheduler-follower", "info", "当前实例不是调度 leader，部分任务不会在本实例执行"))
     return build_health_payload(
@@ -1443,7 +1487,10 @@ async def bootstrap_scheduler(
 async def scheduler_runtime_status(session: dict = Depends(get_current_session)):
     if not _is_admin(session):
         raise HTTPException(status_code=403, detail="当前用户无权查看系统调度运行时状态")
-    return {"success": True, "data": {"runtime": scheduler_runtime.snapshot(), "leadership": scheduler_leadership.snapshot()}}
+    return {
+        "success": True,
+        "data": {"runtime": scheduler_runtime.snapshot(), "leadership": scheduler_leadership.snapshot()},
+    }
 
 
 @app.post("/api/v1/scheduler/runtime/start")

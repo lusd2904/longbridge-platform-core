@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from utils.DbUtil import DbUtil
 
@@ -48,9 +48,9 @@ class RiskOverviewSnapshotService:
         cls,
         *,
         user_id: int,
-        payload: Dict[str, Any],
-        account_id: Optional[int] = None,
-        snapshot_at: Optional[datetime] = None,
+        payload: dict[str, Any],
+        account_id: int | None = None,
+        snapshot_at: datetime | None = None,
         source: str = "risk-service",
     ) -> None:
         cls.ensure_schema()
@@ -115,9 +115,9 @@ class RiskOverviewSnapshotService:
         cls,
         *,
         user_id: int,
-        account_id: Optional[int] = None,
+        account_id: int | None = None,
         use_primary: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         cls.ensure_schema()
         fetch_one = DbUtil.fetch_one_primary if use_primary else DbUtil.fetch_one
         sql = f"""
@@ -134,7 +134,7 @@ class RiskOverviewSnapshotService:
         return cls._normalize_row(row) if row else None
 
     @classmethod
-    def _normalize_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         overview = row.get("overview_json")
         if isinstance(overview, str):
             try:
@@ -162,4 +162,3 @@ class RiskOverviewSnapshotService:
             "overview": overview,
             "events": events,
         }
-

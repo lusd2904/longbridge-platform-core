@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.broker.BrokerInterface import get_broker_manager
 from utils.DbUtil import DbUtil
@@ -45,11 +45,11 @@ class AccountAssetSnapshotService:
         *,
         user_id: int,
         account_id: int,
-        summary: Dict[str, Any],
+        summary: dict[str, Any],
         broker_type: str = "",
         source: str = "broker",
-        snapshot_at: Optional[datetime] = None,
-        payload: Optional[Dict[str, Any]] = None,
+        snapshot_at: datetime | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> None:
         cls.ensure_schema()
         safe_snapshot_at = snapshot_at or datetime.now()
@@ -85,7 +85,9 @@ class AccountAssetSnapshotService:
                 float(summary.get("buying_power") or summary.get("buyingPower") or summary.get("cash") or 0),
                 float(summary.get("maintenance_margin") or summary.get("maintenanceMargin") or 0),
                 float(summary.get("today_pnl") or summary.get("todayPnL") or summary.get("daily_pnl") or 0),
-                float(summary.get("today_pnl_percent") or summary.get("todayPnLPercent") or summary.get("pnl_ratio") or 0),
+                float(
+                    summary.get("today_pnl_percent") or summary.get("todayPnLPercent") or summary.get("pnl_ratio") or 0
+                ),
                 safe_snapshot_at,
                 source,
                 json.dumps(payload or summary, ensure_ascii=False),
@@ -93,11 +95,15 @@ class AccountAssetSnapshotService:
         )
 
     @classmethod
-    def refresh_for_account(cls, user_id: int, account_id: int, source: str = "broker") -> Dict[str, Any]:
+    def refresh_for_account(cls, user_id: int, account_id: int, source: str = "broker") -> dict[str, Any]:
         cls.ensure_schema()
         manager = get_broker_manager()
         account = next(
-            (item for item in (manager.list_accounts(user_id=user_id) or []) if int(item.get("id") or 0) == int(account_id)),
+            (
+                item
+                for item in (manager.list_accounts(user_id=user_id) or [])
+                if int(item.get("id") or 0) == int(account_id)
+            ),
             None,
         )
         if not account:
@@ -136,8 +142,8 @@ class AccountAssetSnapshotService:
         return saved
 
     @classmethod
-    def refresh_for_user(cls, user_id: int, source: str = "broker") -> List[Dict[str, Any]]:
-        snapshots: List[Dict[str, Any]] = []
+    def refresh_for_user(cls, user_id: int, source: str = "broker") -> list[dict[str, Any]]:
+        snapshots: list[dict[str, Any]] = []
         manager = get_broker_manager()
         for account in manager.list_accounts(user_id=user_id) or []:
             account_id = int(account.get("id") or 0)
@@ -154,9 +160,9 @@ class AccountAssetSnapshotService:
         cls,
         *,
         user_id: int,
-        account_id: Optional[int] = None,
+        account_id: int | None = None,
         use_primary: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         cls.ensure_schema()
         fetch_one = DbUtil.fetch_one_primary if use_primary else DbUtil.fetch_one
         if account_id is not None:
@@ -176,11 +182,12 @@ class AccountAssetSnapshotService:
         return rows[0] if rows else None
 
     @classmethod
-    def list_latest_for_user(cls, *, user_id: int, use_primary: bool = False) -> List[Dict[str, Any]]:
+    def list_latest_for_user(cls, *, user_id: int, use_primary: bool = False) -> list[dict[str, Any]]:
         cls.ensure_schema()
         fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
-        rows = fetch_all(
-            f"""
+        rows = (
+            fetch_all(
+                f"""
             SELECT snap.*
             FROM {cls.TABLE_NAME} snap
             INNER JOIN (
@@ -194,10 +201,12 @@ class AccountAssetSnapshotService:
             WHERE snap.user_id = %s
             ORDER BY snap.snapshot_at DESC, snap.id DESC
             """,
-            (int(user_id), int(user_id)),
-        ) or []
+                (int(user_id), int(user_id)),
+            )
+            or []
+        )
 
-        deduped: Dict[int, Dict[str, Any]] = {}
+        deduped: dict[int, dict[str, Any]] = {}
         for row in rows:
             account_id = int(row.get("account_id") or 0)
             if account_id <= 0 or account_id in deduped:
@@ -206,7 +215,7 @@ class AccountAssetSnapshotService:
         return list(deduped.values())
 
     @classmethod
-    def _normalize_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         payload = row.get("payload_json")
         if isinstance(payload, str):
             try:
@@ -233,4 +242,3 @@ class AccountAssetSnapshotService:
             "source": row.get("source") or "broker",
             "payload": payload,
         }
-

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Dict, List
 
+from core.analysis.ai_analyst import AIAnalyst
 from core.analysis.IndicatorSnapshotService import IndicatorSnapshotService
 from core.analysis.MarketInsightService import MarketInsightService
-from core.analysis.ai_analyst import AIAnalyst
 from utils.DbUtil import DbUtil
 
 
@@ -39,18 +38,15 @@ class DailyMarketScanService:
         )
 
     @classmethod
-    def refresh_all_markets(cls, user_id: int = 1) -> Dict[str, object]:
+    def refresh_all_markets(cls, user_id: int = 1) -> dict[str, object]:
         cls.ensure_schema()
         results = []
         for market in ["US", "CN", "HK"]:
             results.append(cls.refresh_market(market, user_id=user_id))
-        return {
-            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "markets": results
-        }
+        return {"generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "markets": results}
 
     @classmethod
-    def refresh_market(cls, market: str, user_id: int = 1) -> Dict[str, object]:
+    def refresh_market(cls, market: str, user_id: int = 1) -> dict[str, object]:
         cls.ensure_schema()
         safe_market = str(market or "US").upper()
         insight = MarketInsightService.build_market_insight(safe_market, user_id=user_id)
@@ -74,18 +70,51 @@ class DailyMarketScanService:
             signal_up = float(daily_snapshot.get("changePercent") or 0) >= 0
             if signal_up:
                 positive_count += 1
-            benchmark_indicators.append({
-                "symbol": symbol,
-                "name": benchmark.get("name") or symbol,
-                "price": float(benchmark.get("price") or 0),
-                "changePercent": float(benchmark.get("changePercent") or 0),
-                "trendLabel": daily_snapshot.get("trendLabel") or ("上涨" if float(benchmark.get("changePercent") or 0) > 0 else "下跌" if float(benchmark.get("changePercent") or 0) < 0 else "震荡"),
-                "rsi": float(daily_snapshot.get("rsi") or 50),
-                "momentumScore": float(daily_snapshot.get("momentumScore") or (55 if float(benchmark.get("changePercent") or 0) > 0 else 45 if float(benchmark.get("changePercent") or 0) < 0 else 50))
-            })
+            benchmark_indicators.append(
+                {
+                    "symbol": symbol,
+                    "name": benchmark.get("name") or symbol,
+                    "price": float(benchmark.get("price") or 0),
+                    "changePercent": float(benchmark.get("changePercent") or 0),
+                    "trendLabel": daily_snapshot.get("trendLabel")
+                    or (
+                        "上涨"
+                        if float(benchmark.get("changePercent") or 0) > 0
+                        else "下跌"
+                        if float(benchmark.get("changePercent") or 0) < 0
+                        else "震荡"
+                    ),
+                    "rsi": float(daily_snapshot.get("rsi") or 50),
+                    "momentumScore": float(
+                        daily_snapshot.get("momentumScore")
+                        or (
+                            55
+                            if float(benchmark.get("changePercent") or 0) > 0
+                            else 45
+                            if float(benchmark.get("changePercent") or 0) < 0
+                            else 50
+                        )
+                    ),
+                }
+            )
 
         breadth_ratio = (positive_count / len(benchmark_indicators) * 100) if benchmark_indicators else 0
         technical_score = cls._technical_score(benchmark_indicators)
+
+        # 从数据库提纯因子缓存表中极速拉取最新黄金因子
+        golden_factors_text = ""
+        try:
+            factor_rows = DbUtil.execute_sql(
+                "SELECT symbol, golden_factors_json FROM quant_factors_daily WHERE market = %s ORDER BY trade_date DESC LIMIT 50",
+                (safe_market,),
+            )
+            if factor_rows:
+                golden_factors_text = "\n[经过机构级量化回测的黄金预测因子 (对模型推断极为重要)]:\n"
+                for r in factor_rows:
+                    if isinstance(r, dict) and r.get("symbol") and r.get("golden_factors_json"):
+                        golden_factors_text += f"- {r['symbol']}: {r['golden_factors_json']}\n"
+        except Exception:
+            pass
 
         prompt = f"""你是市场技术总览分析师，请根据下面的真实市场数据给出简洁技术扫描。
 
@@ -113,7 +142,7 @@ class DailyMarketScanService:
                 status_text=insight.get("statusText", insight.get("regime", "balanced")),
                 breadth_ratio=breadth_ratio,
                 technical_score=technical_score,
-                benchmarks=benchmark_indicators
+                benchmarks=benchmark_indicators,
             )
             text = fallback_text
 
@@ -131,7 +160,7 @@ class DailyMarketScanService:
             "technicalObservation": cls._extract_field(text, "技术观察"),
             "riskHint": cls._extract_field(text, "风险提示"),
             "rhythm": cls._extract_field(text, "操作节奏"),
-            "fullText": text
+            "fullText": text,
         }
 
         plan = AIAnalyst.get_task_model_plan(user_id=user_id).get("final") or {}
@@ -148,13 +177,13 @@ class DailyMarketScanService:
             "benchmarks": benchmark_indicators,
             "modelId": plan.get("id"),
             "modelAlias": plan.get("alias"),
-            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         cls._save_result(result)
         return result
 
     @classmethod
-    def get_latest_scans(cls) -> List[Dict[str, object]]:
+    def get_latest_scans(cls) -> list[dict[str, object]]:
         cls.ensure_schema()
         rows = DbUtil.fetch_all(
             f"""
@@ -163,9 +192,9 @@ class DailyMarketScanService:
             ORDER BY trade_date DESC, id DESC
             LIMIT %s
             """,
-            (32,)
+            (32,),
         )
-        latest: Dict[str, Dict[str, object]] = {}
+        latest: dict[str, dict[str, object]] = {}
         for row in rows:
             market = row.get("market")
             if market in latest:
@@ -182,14 +211,14 @@ class DailyMarketScanService:
                 "benchmarks": cls._json_load(row.get("benchmarks_json")).get("items", []),
                 "modelId": row.get("model_id") or "",
                 "modelAlias": row.get("model_alias") or "",
-                "generatedAt": row.get("updated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else None
+                "generatedAt": row.get("updated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else None,
             }
             if len(latest) == 3:
                 break
         return [latest[key] for key in ["US", "CN", "HK"] if key in latest]
 
     @classmethod
-    def _save_result(cls, result: Dict[str, object]) -> None:
+    def _save_result(cls, result: dict[str, object]) -> None:
         status = str(result.get("status") or "").strip()
         if status not in {"偏强", "偏弱", "中性"} or len(status) > 32:
             status = cls._normalize_status(
@@ -228,12 +257,12 @@ class DailyMarketScanService:
                 result["headline"],
                 result["summary"],
                 json.dumps(result["insights"], ensure_ascii=False),
-                json.dumps({"items": result["benchmarks"]}, ensure_ascii=False)
-            )
+                json.dumps({"items": result["benchmarks"]}, ensure_ascii=False),
+            ),
         )
 
     @staticmethod
-    def _technical_score(benchmarks: List[Dict[str, object]]) -> float:
+    def _technical_score(benchmarks: list[dict[str, object]]) -> float:
         if not benchmarks:
             return 0.0
         total = 0.0
@@ -242,7 +271,7 @@ class DailyMarketScanService:
         return total / len(benchmarks)
 
     @staticmethod
-    def _format_benchmarks(benchmarks: List[Dict[str, object]]) -> str:
+    def _format_benchmarks(benchmarks: list[dict[str, object]]) -> str:
         if not benchmarks:
             return "- 暂无基准数据"
         lines = []
@@ -322,18 +351,23 @@ class DailyMarketScanService:
         status_text: str,
         breadth_ratio: float,
         technical_score: float,
-        benchmarks: List[Dict[str, object]]
+        benchmarks: list[dict[str, object]],
     ) -> str:
-        strongest = sorted(
-            benchmarks,
-            key=lambda item: abs(float(item.get("changePercent") or 0)),
-            reverse=True
-        )[:2]
-        benchmark_text = "、".join(
-            f"{item.get('name', item.get('symbol'))}{float(item.get('changePercent') or 0):+.2f}%"
-            for item in strongest
-        ) or "基准行情平稳"
-        rhythm = "顺势分批" if breadth_ratio >= 55 and technical_score >= 50 else "控制节奏" if breadth_ratio >= 40 else "偏防守"
+        strongest = sorted(benchmarks, key=lambda item: abs(float(item.get("changePercent") or 0)), reverse=True)[:2]
+        benchmark_text = (
+            "、".join(
+                f"{item.get('name', item.get('symbol'))}{float(item.get('changePercent') or 0):+.2f}%"
+                for item in strongest
+            )
+            or "基准行情平稳"
+        )
+        rhythm = (
+            "顺势分批"
+            if breadth_ratio >= 55 and technical_score >= 50
+            else "控制节奏"
+            if breadth_ratio >= 40
+            else "偏防守"
+        )
         risk_hint = "波动偏大，注意仓位控制" if breadth_ratio < 40 else "主线尚在，注意强弱分化"
         return (
             f"标题: {market_label}技术扫描\n"

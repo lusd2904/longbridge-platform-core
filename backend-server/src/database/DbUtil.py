@@ -1,11 +1,12 @@
-from datetime import datetime
-import sys
 import os
+import sys
+from datetime import datetime
 
 # 添加父目录到路径，以便导入utils.DbUtil
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.DbUtil import DbUtil as MySQLDbUtil
 from utils.DbUtil import get_db_connection, get_db_cursor
+
 
 class DbUtil:
     """
@@ -29,7 +30,7 @@ class DbUtil:
         将AI决策记录写入MySQL数据库（替代monitor.db）
         """
         try:
-            decision_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            decision_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             MySQLDbUtil.add_ai_decision(decision_time, symbol, gemma, llama, deepseek, status, side, detail)
         except Exception as e:
             print(f"DB Error: {e}")

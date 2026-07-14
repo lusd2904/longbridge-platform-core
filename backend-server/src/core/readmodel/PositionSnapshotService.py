@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.broker.BrokerInterface import get_broker_manager
 from utils.DbUtil import DbUtil
@@ -48,9 +48,9 @@ class PositionSnapshotService:
         *,
         user_id: int,
         account_id: int,
-        positions: List[Dict[str, Any]],
+        positions: list[dict[str, Any]],
         source: str = "broker",
-        snapshot_at: Optional[datetime] = None,
+        snapshot_at: datetime | None = None,
     ) -> None:
         cls.ensure_schema()
         safe_snapshot_at = snapshot_at or datetime.now()
@@ -71,7 +71,9 @@ class PositionSnapshotService:
                     "weight": 0,
                 }
             ]
-        total_market_value = sum(float(item.get("marketValue") or item.get("market_value") or 0) for item in safe_positions)
+        total_market_value = sum(
+            float(item.get("marketValue") or item.get("market_value") or 0) for item in safe_positions
+        )
         for item in safe_positions:
             symbol = str(item.get("symbol") or "").strip().upper()
             if not symbol:
@@ -112,7 +114,9 @@ class PositionSnapshotService:
                     market_value,
                     float(item.get("pnl") or item.get("unrealized_pnl") or 0),
                     float(item.get("pnlPercent") or item.get("pnl_percent") or 0),
-                    round((market_value / total_market_value * 100), 4) if total_market_value > 0 else float(item.get("weight") or 0),
+                    round((market_value / total_market_value * 100), 4)
+                    if total_market_value > 0
+                    else float(item.get("weight") or 0),
                     safe_snapshot_at,
                     source,
                     json.dumps(item, ensure_ascii=False),
@@ -120,7 +124,7 @@ class PositionSnapshotService:
             )
 
     @classmethod
-    def refresh_for_account(cls, user_id: int, account_id: int, source: str = "broker") -> List[Dict[str, Any]]:
+    def refresh_for_account(cls, user_id: int, account_id: int, source: str = "broker") -> list[dict[str, Any]]:
         cls.ensure_schema()
         manager = get_broker_manager()
         broker = manager.get_broker(int(account_id), user_id=user_id)
@@ -161,8 +165,8 @@ class PositionSnapshotService:
         return cls.get_latest(user_id=user_id, account_id=int(account_id), use_primary=True)
 
     @classmethod
-    def refresh_for_user(cls, user_id: int, source: str = "broker") -> Dict[int, List[Dict[str, Any]]]:
-        payload: Dict[int, List[Dict[str, Any]]] = {}
+    def refresh_for_user(cls, user_id: int, source: str = "broker") -> dict[int, list[dict[str, Any]]]:
+        payload: dict[int, list[dict[str, Any]]] = {}
         manager = get_broker_manager()
         for account in manager.list_accounts(user_id=user_id) or []:
             account_id = int(account.get("id") or 0)
@@ -181,7 +185,7 @@ class PositionSnapshotService:
         user_id: int,
         account_id: int,
         use_primary: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         cls.ensure_schema()
         fetch_one = DbUtil.fetch_one_primary if use_primary else DbUtil.fetch_one
         fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
@@ -198,19 +202,20 @@ class PositionSnapshotService:
         if not latest or not latest.get("snapshot_at"):
             return []
 
-        rows = fetch_all(
-            f"""
+        rows = (
+            fetch_all(
+                f"""
             SELECT *
             FROM {cls.TABLE_NAME}
             WHERE user_id = %s AND account_id = %s AND snapshot_at = %s
             ORDER BY market_value DESC, symbol ASC
             """,
-            (int(user_id), int(account_id), latest.get("snapshot_at")),
-        ) or []
+                (int(user_id), int(account_id), latest.get("snapshot_at")),
+            )
+            or []
+        )
         return [
-            cls._normalize_row(row)
-            for row in rows
-            if str(row.get("symbol") or "").strip().upper() != cls.EMPTY_SYMBOL
+            cls._normalize_row(row) for row in rows if str(row.get("symbol") or "").strip().upper() != cls.EMPTY_SYMBOL
         ]
 
     @classmethod
@@ -268,7 +273,7 @@ class PositionSnapshotService:
         return round(((current_price - avg_price) / avg_price) * 100, 4)
 
     @classmethod
-    def _normalize_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         payload = row.get("payload_json")
         if isinstance(payload, str):
             try:

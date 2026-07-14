@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
+from datetime import datetime
 from decimal import Decimal
-from datetime import datetime, timedelta
-from typing import Dict, Iterable, List, Optional
 
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from utils.DbUtil import DbUtil
@@ -65,8 +65,8 @@ class IndicatorSnapshotService:
         cls,
         symbol: str,
         user_id: int = 1,
-        timeframes: Iterable[str] = ("daily", "weekly", "monthly", "quarterly", "yearly")
-    ) -> Dict[str, object]:
+        timeframes: Iterable[str] = ("daily", "weekly", "monthly", "quarterly", "yearly"),
+    ) -> dict[str, object]:
         cls.ensure_schema()
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         series = cls._load_price_series(normalized_symbol, user_id=user_id, limit=520)
@@ -88,20 +88,12 @@ class IndicatorSnapshotService:
             cls._save_snapshot(snapshot)
             saved.append(snapshot)
 
-        return {
-            "symbol": normalized_symbol,
-            "saved": len(saved),
-            "snapshots": saved
-        }
+        return {"symbol": normalized_symbol, "saved": len(saved), "snapshots": saved}
 
     @classmethod
     def refresh_universe(
-        cls,
-        markets: Optional[Iterable[str]] = None,
-        user_id: int = 1,
-        batch_size: int = 1500,
-        cursor: int = 0
-    ) -> Dict[str, object]:
+        cls, markets: Iterable[str] | None = None, user_id: int = 1, batch_size: int = 1500, cursor: int = 0
+    ) -> dict[str, object]:
         cls.ensure_schema()
         safe_cursor = max(0, int(cursor or 0))
         safe_batch_size = max(50, int(batch_size or 1500))
@@ -122,11 +114,11 @@ class IndicatorSnapshotService:
             "failed": failed[:20],
             "cursor": safe_cursor,
             "nextCursor": next_cursor,
-            "hasMore": len(symbols) == safe_batch_size
+            "hasMore": len(symbols) == safe_batch_size,
         }
 
     @classmethod
-    def get_latest_snapshots(cls, symbol: str) -> Dict[str, Dict[str, object]]:
+    def get_latest_snapshots(cls, symbol: str) -> dict[str, dict[str, object]]:
         cls.ensure_schema()
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         # Each refresh writes at most one row per timeframe, so we only need a
@@ -139,9 +131,9 @@ class IndicatorSnapshotService:
             ORDER BY generated_at DESC, id DESC
             LIMIT %s
             """,
-            (normalized_symbol, 32)
+            (normalized_symbol, 32),
         )
-        latest: Dict[str, Dict[str, object]] = {}
+        latest: dict[str, dict[str, object]] = {}
         for row in rows:
             timeframe = row.get("timeframe")
             if timeframe in latest:
@@ -152,7 +144,7 @@ class IndicatorSnapshotService:
         return latest
 
     @classmethod
-    def get_snapshot(cls, symbol: str, timeframe: str = "daily", user_id: int = 1) -> Dict[str, object]:
+    def get_snapshot(cls, symbol: str, timeframe: str = "daily", user_id: int = 1) -> dict[str, object]:
         cls.ensure_schema()
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         safe_timeframe = str(timeframe or "daily").strip().lower()
@@ -167,7 +159,7 @@ class IndicatorSnapshotService:
             ORDER BY generated_at DESC, id DESC
             LIMIT 1
             """,
-            (normalized_symbol, safe_timeframe)
+            (normalized_symbol, safe_timeframe),
         )
         if row:
             return cls._normalize_snapshot_row(row)
@@ -182,16 +174,13 @@ class IndicatorSnapshotService:
             return {}
 
         snapshot = cls._build_snapshot(
-            normalized_symbol,
-            safe_timeframe,
-            tf_series,
-            cls._load_fundamentals(normalized_symbol)
+            normalized_symbol, safe_timeframe, tf_series, cls._load_fundamentals(normalized_symbol)
         )
         cls._save_snapshot(snapshot)
         return snapshot
 
     @classmethod
-    def get_symbol_overview(cls, symbol: str, user_id: int = 1, allow_refresh: bool = True) -> Dict[str, object]:
+    def get_symbol_overview(cls, symbol: str, user_id: int = 1, allow_refresh: bool = True) -> dict[str, object]:
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         latest = cls.get_latest_snapshots(normalized_symbol)
         if not latest and allow_refresh:
@@ -206,11 +195,11 @@ class IndicatorSnapshotService:
             "symbol": normalized_symbol,
             "market": HistoricalMarketDataService.detect_market(normalized_symbol),
             "fundamentals": fundamentals,
-            "snapshots": latest
+            "snapshots": latest,
         }
 
     @classmethod
-    def _load_price_series(cls, symbol: str, user_id: int = 1, limit: int = 520) -> List[Dict[str, object]]:
+    def _load_price_series(cls, symbol: str, user_id: int = 1, limit: int = 520) -> list[dict[str, object]]:
         base_series = HistoricalMarketDataService._query_daily_series(symbol, limit)
         if len(base_series) >= 60:
             return base_series
@@ -221,7 +210,9 @@ class IndicatorSnapshotService:
                 return fallback_series
 
         try:
-            HistoricalMarketDataService.ensure_symbol_history(symbol, user_id=user_id, min_points=min(limit, 180), refresh=False)
+            HistoricalMarketDataService.ensure_symbol_history(
+                symbol, user_id=user_id, min_points=min(limit, 180), refresh=False
+            )
         except Exception:
             return base_series
         refreshed = HistoricalMarketDataService._query_daily_series(symbol, limit)
@@ -230,42 +221,47 @@ class IndicatorSnapshotService:
         return base_series
 
     @classmethod
-    def _query_us_history_table(cls, symbol: str, limit: int) -> List[Dict[str, object]]:
+    def _query_us_history_table(cls, symbol: str, limit: int) -> list[dict[str, object]]:
         short_symbol = symbol.split(".")[0]
-        rows = DbUtil.fetch_all(
-            """
+        rows = (
+            DbUtil.fetch_all(
+                """
             SELECT trade_date, open_price, high_price, low_price, close_price, volume, change_percent
             FROM us_stock_historical_data
             WHERE symbol = %s
             ORDER BY trade_date DESC
             LIMIT %s
             """,
-            (short_symbol, int(limit))
-        ) or []
+                (short_symbol, int(limit)),
+            )
+            or []
+        )
 
         series = []
         for row in reversed(rows):
             trade_date = row.get("trade_date")
-            series.append({
-                "date": trade_date.strftime("%Y-%m-%d") if trade_date else "",
-                "open": float(row.get("open_price") or 0),
-                "high": float(row.get("high_price") or 0),
-                "low": float(row.get("low_price") or 0),
-                "close": float(row.get("close_price") or 0),
-                "volume": int(row.get("volume") or 0),
-                "changePercent": float(row.get("change_percent") or 0)
-            })
+            series.append(
+                {
+                    "date": trade_date.strftime("%Y-%m-%d") if trade_date else "",
+                    "open": float(row.get("open_price") or 0),
+                    "high": float(row.get("high_price") or 0),
+                    "low": float(row.get("low_price") or 0),
+                    "close": float(row.get("close_price") or 0),
+                    "volume": int(row.get("volume") or 0),
+                    "changePercent": float(row.get("change_percent") or 0),
+                }
+            )
         return series
 
     @classmethod
-    def _aggregate_series(cls, series: List[Dict[str, object]], timeframe: str) -> List[Dict[str, object]]:
+    def _aggregate_series(cls, series: list[dict[str, object]], timeframe: str) -> list[dict[str, object]]:
         if timeframe == "daily":
             return series
         if timeframe in {"weekly", "monthly"}:
             return HistoricalMarketDataService._aggregate_series(series, timeframe)
 
-        buckets: Dict[str, List[Dict[str, object]]] = {}
-        ordered_keys: List[str] = []
+        buckets: dict[str, list[dict[str, object]]] = {}
+        ordered_keys: list[str] = []
         for item in series:
             target_date = datetime.strptime(item["date"], "%Y-%m-%d").date()
             if timeframe == "quarterly":
@@ -284,25 +280,23 @@ class IndicatorSnapshotService:
         aggregated = []
         for bucket_key in ordered_keys:
             items = buckets[bucket_key]
-            aggregated.append({
-                "date": bucket_key,
-                "open": float(items[0]["open"]),
-                "high": max(float(entry["high"]) for entry in items),
-                "low": min(float(entry["low"]) for entry in items),
-                "close": float(items[-1]["close"]),
-                "volume": int(sum(int(entry["volume"]) for entry in items)),
-                "turnover": round(sum(float(entry.get("turnover") or 0) for entry in items), 2)
-            })
+            aggregated.append(
+                {
+                    "date": bucket_key,
+                    "open": float(items[0]["open"]),
+                    "high": max(float(entry["high"]) for entry in items),
+                    "low": min(float(entry["low"]) for entry in items),
+                    "close": float(items[-1]["close"]),
+                    "volume": int(sum(int(entry["volume"]) for entry in items)),
+                    "turnover": round(sum(float(entry.get("turnover") or 0) for entry in items), 2),
+                }
+            )
         return aggregated
 
     @classmethod
     def _build_snapshot(
-        cls,
-        symbol: str,
-        timeframe: str,
-        series: List[Dict[str, object]],
-        fundamentals: Dict[str, object]
-    ) -> Dict[str, object]:
+        cls, symbol: str, timeframe: str, series: list[dict[str, object]], fundamentals: dict[str, object]
+    ) -> dict[str, object]:
         prices = [float(item.get("close") or 0) for item in series]
         highs = [float(item.get("high") or item.get("close") or 0) for item in series]
         lows = [float(item.get("low") or item.get("close") or 0) for item in series]
@@ -359,14 +353,11 @@ class IndicatorSnapshotService:
             "trendLabel": trend_label,
             "momentumScore": round(momentum_score, 4),
             "fundamentals": fundamentals,
-            "meta": {
-                "points": len(series),
-                "latestVolume": volumes[-1] if volumes else 0
-            }
+            "meta": {"points": len(series), "latestVolume": volumes[-1] if volumes else 0},
         }
 
     @classmethod
-    def _save_snapshot(cls, snapshot: Dict[str, object]) -> None:
+    def _save_snapshot(cls, snapshot: dict[str, object]) -> None:
         DbUtil.execute_sql(
             f"""
             INSERT INTO {cls.TABLE_NAME} (
@@ -440,41 +431,45 @@ class IndicatorSnapshotService:
                 snapshot["trendLabel"],
                 snapshot["momentumScore"],
                 json.dumps(snapshot["fundamentals"] or {}, ensure_ascii=False),
-                json.dumps(snapshot["meta"] or {}, ensure_ascii=False)
-            )
+                json.dumps(snapshot["meta"] or {}, ensure_ascii=False),
+            ),
         )
 
     @classmethod
-    def _load_fundamentals(cls, symbol: str) -> Dict[str, object]:
+    def _load_fundamentals(cls, symbol: str) -> dict[str, object]:
         market = HistoricalMarketDataService.detect_market(symbol)
         short_symbol = symbol.split(".")[0]
         if market == "US":
-            row = DbUtil.fetch_one(
-                """
+            row = (
+                DbUtil.fetch_one(
+                    """
                 SELECT symbol, company_name AS name, sector, market_cap, pe_ratio, pb_ratio, dividend_yield
                 FROM large_cap_stocks
                 WHERE symbol IN (%s, %s)
                 ORDER BY CASE WHEN symbol = %s THEN 0 ELSE 1 END
                 LIMIT 1
                 """,
-                (symbol, short_symbol, symbol)
-            ) or DbUtil.fetch_one(
-                """
+                    (symbol, short_symbol, symbol),
+                )
+                or DbUtil.fetch_one(
+                    """
                 SELECT symbol, company_name AS name, sector, market_cap, NULL AS pe_ratio, NULL AS pb_ratio, NULL AS dividend_yield
                 FROM us_stock_info
                 WHERE symbol = %s
                 LIMIT 1
                 """,
-                (short_symbol,)
-            ) or DbUtil.fetch_one(
-                """
+                    (short_symbol,),
+                )
+                or DbUtil.fetch_one(
+                    """
                 SELECT symbol, etf_name AS name, category AS sector, market_cap, pe_ratio, NULL AS pb_ratio, NULL AS dividend_yield
                 FROM us_etf
                 WHERE symbol IN (%s, %s)
                 ORDER BY CASE WHEN symbol = %s THEN 0 ELSE 1 END
                 LIMIT 1
                 """,
-                (symbol, short_symbol, symbol)
+                    (symbol, short_symbol, symbol),
+                )
             )
         elif market == "CN":
             row = DbUtil.fetch_one(
@@ -484,7 +479,7 @@ class IndicatorSnapshotService:
                 WHERE symbol = %s
                 LIMIT 1
                 """,
-                (symbol,)
+                (symbol,),
             ) or DbUtil.fetch_one(
                 """
                 SELECT symbol, etf_name AS name, category AS sector, market_cap, pe_ratio, NULL AS pb_ratio, NULL AS dividend_yield
@@ -492,7 +487,7 @@ class IndicatorSnapshotService:
                 WHERE symbol = %s
                 LIMIT 1
                 """,
-                (symbol,)
+                (symbol,),
             )
         else:
             row = DbUtil.fetch_one(
@@ -502,7 +497,7 @@ class IndicatorSnapshotService:
                 WHERE symbol = %s
                 LIMIT 1
                 """,
-                (symbol,)
+                (symbol,),
             ) or DbUtil.fetch_one(
                 """
                 SELECT symbol, etf_name AS name, category AS sector, market_cap, pe_ratio, NULL AS pb_ratio, NULL AS dividend_yield
@@ -510,29 +505,28 @@ class IndicatorSnapshotService:
                 WHERE symbol = %s
                 LIMIT 1
                 """,
-                (symbol,)
+                (symbol,),
             )
         return cls._normalize_fundamentals_row(row or {})
 
     @classmethod
     def _collect_universe_symbols(
-        cls,
-        markets: Optional[Iterable[str]] = None,
-        limit: int = 1000,
-        offset: int = 0
-    ) -> List[Dict[str, object]]:
-        normalized_markets = [str(item).strip().upper() for item in (markets or ["US", "CN", "HK"]) if str(item).strip()]
+        cls, markets: Iterable[str] | None = None, limit: int = 1000, offset: int = 0
+    ) -> list[dict[str, object]]:
+        normalized_markets = [
+            str(item).strip().upper() for item in (markets or ["US", "CN", "HK"]) if str(item).strip()
+        ]
         allowed_markets = [item for item in normalized_markets if item in {"US", "CN", "HK"}] or ["US", "CN", "HK"]
 
         union_parts = []
-        params: List[object] = []
+        params: list[object] = []
         table_map = [
             ("large_cap_stocks", "US"),
             ("us_etf", "US"),
             ("cn_stocks", "CN"),
             ("cn_etf", "CN"),
             ("hk_stocks", "HK"),
-            ("hk_etf", "HK")
+            ("hk_etf", "HK"),
         ]
         for table_name, market in table_map:
             if market not in allowed_markets:
@@ -555,7 +549,7 @@ class IndicatorSnapshotService:
         return [{"symbol": row.get("symbol"), "market": row.get("market")} for row in rows if row.get("symbol")]
 
     @classmethod
-    def _normalize_snapshot_row(cls, row: Dict[str, object]) -> Dict[str, object]:
+    def _normalize_snapshot_row(cls, row: dict[str, object]) -> dict[str, object]:
         return {
             "symbol": row.get("symbol"),
             "market": row.get("market"),
@@ -587,7 +581,7 @@ class IndicatorSnapshotService:
             "momentumScore": float(row.get("momentum_score") or 0),
             "fundamentals": cls._json_load(row.get("fundamentals_json")),
             "meta": cls._json_load(row.get("meta_json")),
-            "generatedAt": row.get("generated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("generated_at") else None
+            "generatedAt": row.get("generated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("generated_at") else None,
         }
 
     @staticmethod
@@ -621,7 +615,7 @@ class IndicatorSnapshotService:
             return {}
 
     @staticmethod
-    def _normalize_fundamentals_row(row: Dict[str, object]) -> Dict[str, object]:
+    def _normalize_fundamentals_row(row: dict[str, object]) -> dict[str, object]:
         normalized = {}
         for key, value in (row or {}).items():
             if isinstance(value, Decimal):

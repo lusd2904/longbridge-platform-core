@@ -1,5 +1,6 @@
-from utils.MonitorLink import MonitorLink
 from config.Config import AppConfig
+from utils.MonitorLink import MonitorLink
+
 
 def ai_trade_decision(symbol_data: dict, is_held: bool):
     """
@@ -31,5 +32,5 @@ def ai_trade_decision(symbol_data: dict, is_held: bool):
     if decision != "HOLD":
         color = "#ef4444" if decision == "BUY" else "#10b981"
         MonitorLink.log(f"💡 <span style='color:{color};'>[算法建议]</span> {sym} -> {decision} ({reason})")
-    
+
     return decision

@@ -1,0 +1,17 @@
+{
+  "venvPath": "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core",
+  "venv": ".venv",
+  "extraPaths": [
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/backend-server/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/intelligence/strategy-service/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/intelligence/analysis-service/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/intelligence/agno-sidecar/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/platform/api-gateway/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/platform/user-center/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/operations/scheduler-service/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/governance/risk-service/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/market/sentiment-service/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/market/market-service/src",
+    "/Users/lusd/Documents/longbridge-workspace/active-services/platform-core/apps/trading/trade-service/src"
+  ]
+}

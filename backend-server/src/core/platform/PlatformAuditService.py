@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 from utils.DbUtil import DbUtil
 
 
@@ -33,13 +31,13 @@ class PlatformAuditService:
     def log(
         cls,
         *,
-        user_id: Optional[int],
-        username: Optional[str],
+        user_id: int | None,
+        username: str | None,
         module: str,
         operation: str,
         description: str,
         level: str = "info",
-        extra: Optional[Dict[str, object]] = None
+        extra: dict[str, object] | None = None,
     ) -> None:
         try:
             cls.ensure_schema()
@@ -57,31 +55,34 @@ class PlatformAuditService:
                     (module or "platform")[:64],
                     (operation or "")[:64] or None,
                     (description or "")[:255] or None,
-                    cls._to_json(extra)
-                )
+                    cls._to_json(extra),
+                ),
             )
         except Exception:
             return
 
     @classmethod
-    def list_recent(cls, limit: int = 120, level: str = "") -> List[Dict[str, object]]:
+    def list_recent(cls, limit: int = 120, level: str = "") -> list[dict[str, object]]:
         cls.ensure_schema()
-        params: List[object] = []
+        params: list[object] = []
         where_clause = ""
         if level and level.lower() != "all":
             where_clause = "WHERE level = %s"
             params.append(level.lower())
         params.append(max(10, min(int(limit or 120), 400)))
-        rows = DbUtil.fetch_all(
-            f"""
+        rows = (
+            DbUtil.fetch_all(
+                f"""
             SELECT id, user_id, username, level, module, operation, description, created_at
             FROM {cls.TABLE_NAME}
             {where_clause}
             ORDER BY id DESC
             LIMIT %s
             """,
-            tuple(params)
-        ) or []
+                tuple(params),
+            )
+            or []
+        )
         return [
             {
                 "id": int(row.get("id") or 0),
@@ -90,14 +91,15 @@ class PlatformAuditService:
                 "module": row.get("module") or "platform",
                 "operation": row.get("operation") or "",
                 "message": row.get("description") or "",
-                "username": row.get("username") or ""
+                "username": row.get("username") or "",
             }
             for row in rows
         ]
 
     @staticmethod
-    def _to_json(payload: Optional[Dict[str, object]]) -> Optional[str]:
+    def _to_json(payload: dict[str, object] | None) -> str | None:
         if not payload:
             return None
         import json
+
         return json.dumps(payload, ensure_ascii=False)

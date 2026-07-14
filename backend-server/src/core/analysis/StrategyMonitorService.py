@@ -1,10 +1,9 @@
-import hashlib
 import json
 import math
 import os
 import threading
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -239,7 +238,7 @@ class StrategyMonitorService:
             "total_return": 8.6,
             "sharpe_ratio": 1.22,
             "max_drawdown": 5.4,
-            "win_rate": 63.0
+            "win_rate": 63.0,
         },
         {
             "name": "分段止盈",
@@ -253,7 +252,7 @@ class StrategyMonitorService:
             "total_return": 14.2,
             "sharpe_ratio": 1.35,
             "max_drawdown": 7.1,
-            "win_rate": 58.0
+            "win_rate": 58.0,
         },
         {
             "name": "仓位过重调仓",
@@ -267,7 +266,7 @@ class StrategyMonitorService:
             "total_return": 10.4,
             "sharpe_ratio": 1.04,
             "max_drawdown": 4.2,
-            "win_rate": 71.0
+            "win_rate": 71.0,
         },
         {
             "name": "大盘转弱防守",
@@ -281,8 +280,8 @@ class StrategyMonitorService:
             "total_return": 11.8,
             "sharpe_ratio": 1.41,
             "max_drawdown": 3.9,
-            "win_rate": 66.0
-        }
+            "win_rate": 66.0,
+        },
     ]
 
     @classmethod
@@ -404,15 +403,16 @@ class StrategyMonitorService:
                     item["total_return"],
                     item["sharpe_ratio"],
                     item["max_drawdown"],
-                    item["win_rate"]
-                )
+                    item["win_rate"],
+                ),
             )
 
     @classmethod
-    def list_strategies(cls, user_id: int = 1) -> List[Dict[str, Any]]:
+    def list_strategies(cls, user_id: int = 1) -> list[dict[str, Any]]:
         cls.ensure_schema(user_id=user_id)
-        rows = DbUtil.fetch_all(
-            """
+        rows = (
+            DbUtil.fetch_all(
+                """
             SELECT id, name, type, description, params_json, status, execution_mode,
                    schedule_frequency, schedule_period, last_executed_at, total_return,
                    sharpe_ratio, max_drawdown, win_rate, trigger_count,
@@ -421,12 +421,14 @@ class StrategyMonitorService:
             WHERE user_id = %s
             ORDER BY status = 'active' DESC, id ASC
             """,
-            (user_id,)
-        ) or []
+                (user_id,),
+            )
+            or []
+        )
         return [cls._normalize_strategy(row) for row in rows]
 
     @classmethod
-    def save_strategy(cls, user_id: int, payload: Dict[str, Any], strategy_id: Optional[int] = None) -> Dict[str, Any]:
+    def save_strategy(cls, user_id: int, payload: dict[str, Any], strategy_id: int | None = None) -> dict[str, Any]:
         cls.ensure_schema(user_id=user_id)
 
         if strategy_id:
@@ -439,41 +441,41 @@ class StrategyMonitorService:
                 FROM strategies
                 WHERE id = %s AND user_id = %s
                 """,
-                (strategy_id, user_id)
+                (strategy_id, user_id),
             )
             if not current:
-                raise ValueError('策略不存在')
+                raise ValueError("策略不存在")
         else:
             current = {}
 
-        name = str(payload.get('name', current.get('name') or '') or '').strip()
-        strategy_type = str(payload.get('type', current.get('type') or 'custom') or 'custom').strip() or 'custom'
-        description = str(payload.get('description', current.get('description') or '') or '').strip()
-        raw_params = payload.get('params', cls._json_load(current.get('params_json')) or {})
+        name = str(payload.get("name", current.get("name") or "") or "").strip()
+        strategy_type = str(payload.get("type", current.get("type") or "custom") or "custom").strip() or "custom"
+        description = str(payload.get("description", current.get("description") or "") or "").strip()
+        raw_params = payload.get("params", cls._json_load(current.get("params_json")) or {})
         if isinstance(raw_params, list):
             params = {
-                str(item.get('name') or f'param_{index}'): item.get('value')
+                str(item.get("name") or f"param_{index}"): item.get("value")
                 for index, item in enumerate(raw_params)
-                if str(item.get('name') or '').strip() or item.get('value') not in (None, '')
+                if str(item.get("name") or "").strip() or item.get("value") not in (None, "")
             }
         elif isinstance(raw_params, dict):
             params = raw_params
         else:
             params = {}
         params_json = json.dumps(params, ensure_ascii=False)
-        status = str(payload.get('status', current.get('status') or 'stopped') or 'stopped').strip() or 'stopped'
+        status = str(payload.get("status", current.get("status") or "stopped") or "stopped").strip() or "stopped"
         execution_mode = cls._normalize_execution_mode(
-            payload.get('executionMode', payload.get('execution_mode', current.get('execution_mode')))
+            payload.get("executionMode", payload.get("execution_mode", current.get("execution_mode")))
         )
         schedule_frequency = cls._normalize_schedule_frequency(
-            payload.get('scheduleFrequency', payload.get('schedule_frequency', current.get('schedule_frequency')))
+            payload.get("scheduleFrequency", payload.get("schedule_frequency", current.get("schedule_frequency")))
         )
         schedule_period = cls._normalize_schedule_period(
-            payload.get('schedulePeriod', payload.get('schedule_period', current.get('schedule_period')))
+            payload.get("schedulePeriod", payload.get("schedule_period", current.get("schedule_period")))
         )
 
         if not name:
-            raise ValueError('策略名称不能为空')
+            raise ValueError("策略名称不能为空")
 
         if strategy_id:
             DbUtil.execute_sql(
@@ -501,7 +503,7 @@ class StrategyMonitorService:
                     schedule_period,
                     strategy_id,
                     user_id,
-                )
+                ),
             )
             row = DbUtil.fetch_one(
                 """
@@ -512,7 +514,7 @@ class StrategyMonitorService:
                 FROM strategies
                 WHERE id = %s AND user_id = %s
                 """,
-                (strategy_id, user_id)
+                (strategy_id, user_id),
             )
             return cls._normalize_strategy(row)
 
@@ -534,7 +536,7 @@ class StrategyMonitorService:
                 execution_mode,
                 schedule_frequency,
                 schedule_period,
-            )
+            ),
         )
         row = DbUtil.fetch_one(
             """
@@ -547,7 +549,7 @@ class StrategyMonitorService:
             ORDER BY id DESC
             LIMIT 1
             """,
-            (user_id,)
+            (user_id,),
         )
         return cls._normalize_strategy(row)
 
@@ -555,7 +557,9 @@ class StrategyMonitorService:
     def delete_strategy(cls, user_id: int, strategy_id: int):
         cls.ensure_schema(user_id=user_id)
         cls._unlink_risk_orders_for_deleted_strategy(user_id=user_id, strategy_id=strategy_id)
-        DbUtil.execute_sql("DELETE FROM strategy_alerts WHERE strategy_id = %s AND user_id = %s", (strategy_id, user_id))
+        DbUtil.execute_sql(
+            "DELETE FROM strategy_alerts WHERE strategy_id = %s AND user_id = %s", (strategy_id, user_id)
+        )
         DbUtil.execute_sql("DELETE FROM strategies WHERE id = %s AND user_id = %s", (strategy_id, user_id))
 
     @classmethod
@@ -582,10 +586,11 @@ class StrategyMonitorService:
             print(f"⚠️ [StrategyMonitor] 解除已删除策略的保护单归属失败: {exc}")
 
     @classmethod
-    def list_backtests(cls, user_id: int = 1) -> List[Dict[str, Any]]:
+    def list_backtests(cls, user_id: int = 1) -> list[dict[str, Any]]:
         cls.ensure_schema(user_id=user_id)
-        rows = DbUtil.fetch_all(
-            """
+        rows = (
+            DbUtil.fetch_all(
+                """
             SELECT id, strategy_id, name, strategy_name, symbol, start_date, end_date,
                    final_pnl, total_return, annual_return, sharpe_ratio, max_drawdown,
                    win_rate, trade_count, status, performance_json, equity_curve_json,
@@ -595,15 +600,17 @@ class StrategyMonitorService:
             ORDER BY id DESC
             LIMIT 50
             """,
-            (user_id,)
-        ) or []
+                (user_id,),
+            )
+            or []
+        )
         return [cls._normalize_backtest(row) for row in rows]
 
     @classmethod
-    def run_backtest(cls, user_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def run_backtest(cls, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         cls.ensure_schema(user_id=user_id)
 
-        strategy_id = payload.get('strategy_id')
+        strategy_id = payload.get("strategy_id")
         strategy = None
         if strategy_id:
             strategy = DbUtil.fetch_one(
@@ -615,50 +622,47 @@ class StrategyMonitorService:
                 FROM strategies
                 WHERE id = %s AND user_id = %s
                 """,
-                (strategy_id, user_id)
+                (strategy_id, user_id),
             )
 
-        strategy_name = (strategy or {}).get('name') or '策略回测'
-        strategy_type = (strategy or {}).get('type') or 'custom'
-        symbol = str(payload.get('symbol') or '').strip().upper()
+        strategy_name = (strategy or {}).get("name") or "策略回测"
+        strategy_type = (strategy or {}).get("type") or "custom"
+        symbol = str(payload.get("symbol") or "").strip().upper()
         if not symbol:
-            raise ValueError('symbol 不能为空')
+            raise ValueError("symbol 不能为空")
 
-        end_date = cls._parse_date(payload.get('end_date')) or datetime.now().date()
-        start_date = cls._parse_date(payload.get('start_date')) or (end_date - timedelta(days=90))
+        end_date = cls._parse_date(payload.get("end_date")) or datetime.now().date()
+        start_date = cls._parse_date(payload.get("start_date")) or (end_date - timedelta(days=90))
         if start_date >= end_date:
-            raise ValueError('开始日期必须早于结束日期')
+            raise ValueError("开始日期必须早于结束日期")
 
-        initial_capital = float(payload.get('initial_capital') or 100000)
-        params = cls._json_load((strategy or {}).get('params_json')) or {}
+        initial_capital = float(payload.get("initial_capital") or 100000)
+        params = cls._json_load((strategy or {}).get("params_json")) or {}
         history_series = cls._load_backtest_series(
-            symbol=symbol,
-            user_id=user_id,
-            start_date=start_date,
-            end_date=end_date
+            symbol=symbol, user_id=user_id, start_date=start_date, end_date=end_date
         )
         if len(history_series) < 10:
-            raise ValueError(f'{symbol} 历史行情不足，无法运行真实回测')
+            raise ValueError(f"{symbol} 历史行情不足，无法运行真实回测")
 
         simulation = cls._simulate_strategy(
             symbol=symbol,
             strategy_type=strategy_type,
             params=params,
             series=history_series,
-            initial_capital=initial_capital
+            initial_capital=initial_capital,
         )
-        curve_dates = simulation['equityCurve']['dates']
-        curve_values = simulation['equityCurve']['values']
-        trades = simulation['trades']
-        performance = simulation['performance']
+        curve_dates = simulation["equityCurve"]["dates"]
+        curve_values = simulation["equityCurve"]["values"]
+        trades = simulation["trades"]
+        performance = simulation["performance"]
         final_equity = float(curve_values[-1] if curve_values else initial_capital)
         final_pnl = round(final_equity - initial_capital, 2)
-        total_return = float(performance.get('totalReturn') or 0)
-        annual_return = float(performance.get('annualReturn') or 0)
-        sharpe_ratio = float(performance.get('sharpeRatio') or 0)
-        max_drawdown = float(performance.get('maxDrawdown') or 0)
-        win_rate = float(performance.get('winRate') or 0)
-        equity_curve = simulation['equityCurve']
+        total_return = float(performance.get("totalReturn") or 0)
+        annual_return = float(performance.get("annualReturn") or 0)
+        sharpe_ratio = float(performance.get("sharpeRatio") or 0)
+        max_drawdown = float(performance.get("maxDrawdown") or 0)
+        win_rate = float(performance.get("winRate") or 0)
+        equity_curve = simulation["equityCurve"]
         record_name = f"{strategy_name} · {symbol}"
 
         DbUtil.execute_sql(
@@ -687,8 +691,8 @@ class StrategyMonitorService:
                 len(trades),
                 json.dumps(performance, ensure_ascii=False),
                 json.dumps(equity_curve, ensure_ascii=False),
-                json.dumps(trades, ensure_ascii=False)
-            )
+                json.dumps(trades, ensure_ascii=False),
+            ),
         )
 
         row = DbUtil.fetch_one(
@@ -702,20 +706,20 @@ class StrategyMonitorService:
             ORDER BY id DESC
             LIMIT 1
             """,
-            (user_id,)
+            (user_id,),
         )
         return cls._normalize_backtest(row)
 
     @classmethod
-    def get_monitor_summary(cls, user_id: int = 1, account_id: Optional[int] = None) -> Dict[str, Any]:
+    def get_monitor_summary(cls, user_id: int = 1, account_id: int | None = None) -> dict[str, Any]:
         cls.ensure_schema(user_id=user_id)
         strategies = cls.list_strategies(user_id=user_id)
         alerts = cls.get_alerts(user_id=user_id, limit=12)
-        active_rules = [item for item in strategies if item.get('status') == 'active']
-        auto_rules = [item for item in strategies if item.get('executionMode') == cls.EXECUTION_MODE_AUTO]
-        manual_rules = [item for item in strategies if item.get('executionMode') == cls.EXECUTION_MODE_MANUAL]
-        auto_active_rules = [item for item in active_rules if item.get('executionMode') == cls.EXECUTION_MODE_AUTO]
-        manual_active_rules = [item for item in active_rules if item.get('executionMode') == cls.EXECUTION_MODE_MANUAL]
+        active_rules = [item for item in strategies if item.get("status") == "active"]
+        auto_rules = [item for item in strategies if item.get("executionMode") == cls.EXECUTION_MODE_AUTO]
+        manual_rules = [item for item in strategies if item.get("executionMode") == cls.EXECUTION_MODE_MANUAL]
+        auto_active_rules = [item for item in active_rules if item.get("executionMode") == cls.EXECUTION_MODE_AUTO]
+        manual_active_rules = [item for item in active_rules if item.get("executionMode") == cls.EXECUTION_MODE_MANUAL]
 
         position_count = cls._load_trade_service_position_count(account_id=account_id, user_id=user_id)
 
@@ -725,7 +729,7 @@ class StrategyMonitorService:
             FROM scheduled_jobs
             WHERE job_name = %s
             """,
-            (f'position_monitor:user:{int(user_id)}',)
+            (f"position_monitor:user:{int(user_id)}",),
         )
 
         return {
@@ -737,18 +741,20 @@ class StrategyMonitorService:
                 "autoActiveRuleCount": len(auto_active_rules),
                 "manualActiveRuleCount": len(manual_active_rules),
                 "alertCount": len(alerts),
-                "highRiskCount": len([item for item in alerts if item.get('severity') == 'high']),
+                "highRiskCount": len([item for item in alerts if item.get("severity") == "high"]),
                 "positionCount": position_count,
-                "lastRunAt": job.get('last_run_at').strftime('%Y-%m-%d %H:%M:%S') if job and job.get('last_run_at') else None,
-                "status": job.get('status') if job else 'idle',
-                "message": job.get('message') if job else ''
+                "lastRunAt": job.get("last_run_at").strftime("%Y-%m-%d %H:%M:%S")
+                if job and job.get("last_run_at")
+                else None,
+                "status": job.get("status") if job else "idle",
+                "message": job.get("message") if job else "",
             },
             "rules": strategies,
-            "alerts": alerts
+            "alerts": alerts,
         }
 
     @classmethod
-    def _load_trade_service_position_count(cls, account_id: Optional[int], user_id: int) -> int:
+    def _load_trade_service_position_count(cls, account_id: int | None, user_id: int) -> int:
         """Read-only monitor summaries must not open broker sessions."""
         try:
             account = cls._load_trade_service_account(account_id=account_id, user_id=user_id)
@@ -767,10 +773,11 @@ class StrategyMonitorService:
             return 0
 
     @classmethod
-    def get_alerts(cls, user_id: int = 1, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_alerts(cls, user_id: int = 1, limit: int = 20) -> list[dict[str, Any]]:
         cls.ensure_schema(user_id=user_id)
-        rows = DbUtil.fetch_all(
-            """
+        rows = (
+            DbUtil.fetch_all(
+                """
             SELECT sa.id, sa.strategy_id, s.name AS strategy_name, sa.account_id, sa.symbol, sa.market,
                    sa.severity, sa.action_suggested, sa.message, sa.pnl_percent,
                    sa.weight, sa.current_price, sa.created_at
@@ -780,36 +787,40 @@ class StrategyMonitorService:
             ORDER BY sa.id DESC
             LIMIT %s
             """,
-            (user_id, limit)
-        ) or []
+                (user_id, limit),
+            )
+            or []
+        )
 
         alerts = []
         for row in rows:
-            alerts.append({
-                "id": row.get('id'),
-                "strategyId": row.get('strategy_id'),
-                "strategyName": row.get('strategy_name') or '监控规则',
-                "accountId": row.get('account_id'),
-                "symbol": row.get('symbol'),
-                "market": row.get('market'),
-                "severity": row.get('severity') or 'medium',
-                "actionSuggested": row.get('action_suggested') or 'ALERT',
-                "message": row.get('message') or '',
-                "pnlPercent": float(row.get('pnl_percent') or 0),
-                "weight": float(row.get('weight') or 0),
-                "currentPrice": float(row.get('current_price') or 0),
-                "createdAt": row.get('created_at').strftime('%Y-%m-%d %H:%M:%S') if row.get('created_at') else None
-            })
+            alerts.append(
+                {
+                    "id": row.get("id"),
+                    "strategyId": row.get("strategy_id"),
+                    "strategyName": row.get("strategy_name") or "监控规则",
+                    "accountId": row.get("account_id"),
+                    "symbol": row.get("symbol"),
+                    "market": row.get("market"),
+                    "severity": row.get("severity") or "medium",
+                    "actionSuggested": row.get("action_suggested") or "ALERT",
+                    "message": row.get("message") or "",
+                    "pnlPercent": float(row.get("pnl_percent") or 0),
+                    "weight": float(row.get("weight") or 0),
+                    "currentPrice": float(row.get("current_price") or 0),
+                    "createdAt": row.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else None,
+                }
+            )
         return alerts
 
     @classmethod
     def run_monitor(
         cls,
         user_id: int = 1,
-        account_id: Optional[int] = None,
-        source: str = 'manual',
-        strategy_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        account_id: int | None = None,
+        source: str = "manual",
+        strategy_id: int | None = None,
+    ) -> dict[str, Any]:
         cls.ensure_schema(user_id=user_id)
         strategies = cls._select_monitor_strategies(
             cls.list_strategies(user_id=user_id),
@@ -817,9 +828,9 @@ class StrategyMonitorService:
         )
         if strategy_id is not None:
             strategy_id = int(strategy_id)
-            strategies = [item for item in strategies if int(item.get('id') or 0) == strategy_id]
+            strategies = [item for item in strategies if int(item.get("id") or 0) == strategy_id]
             if not strategies:
-                raise ValueError('目标策略不存在、未启用，或当前不满足执行条件')
+                raise ValueError("目标策略不存在、未启用，或当前不满足执行条件")
         if not strategies:
             return {
                 "source": source,
@@ -827,35 +838,36 @@ class StrategyMonitorService:
                 "positionCount": 0,
                 "alertCount": 0,
                 "alerts": [],
-                "strategyIds": []
+                "strategyIds": [],
             }
 
         manager = get_broker_manager()
         broker = manager.get_broker(account_id, user_id=user_id)
         if not broker:
-            raise ValueError('未找到当前用户可用的券商账户')
+            raise ValueError("未找到当前用户可用的券商账户")
 
         if not broker.is_connected and not broker.connect():
-            raise ConnectionError('券商连接失败')
+            raise ConnectionError("券商连接失败")
 
-        bound_account_id = int(getattr(broker, 'account_id', account_id or 0) or account_id or 0) or None
+        bound_account_id = int(getattr(broker, "account_id", account_id or 0) or account_id or 0) or None
         positions = broker.get_positions() or []
-        evaluated_strategy_ids = [int(item['id']) for item in strategies if item.get('id') is not None]
-        total_market_value = sum(float(getattr(item, 'market_value', 0) or 0) for item in positions)
+        evaluated_strategy_ids = [int(item["id"]) for item in strategies if item.get("id") is not None]
+        total_market_value = sum(float(getattr(item, "market_value", 0) or 0) for item in positions)
         market_insights = {
-            item.get('market'): item
-            for item in MarketInsightService.get_latest_snapshots(user_id=user_id)
+            item.get("market"): item for item in MarketInsightService.get_latest_snapshots(user_id=user_id)
         }
 
         alerts = []
-        should_auto_execute = source == 'scheduler'
-        realtime_orders_cache: Optional[List[Any]] = None
+        should_auto_execute = source == "scheduler"
+        realtime_orders_cache: list[Any] | None = None
         realtime_orders_error = ""
         for position in positions:
-            symbol = getattr(position, 'symbol', '')
-            current_price = float(getattr(position, 'market_price', 0) or 0)
-            avg_price = float(getattr(position, 'average_cost', 0) or 0)
-            market_value = float(getattr(position, 'market_value', current_price * float(getattr(position, 'quantity', 0) or 0)) or 0)
+            symbol = getattr(position, "symbol", "")
+            current_price = float(getattr(position, "market_price", 0) or 0)
+            avg_price = float(getattr(position, "average_cost", 0) or 0)
+            market_value = float(
+                getattr(position, "market_value", current_price * float(getattr(position, "quantity", 0) or 0)) or 0
+            )
             pnl_percent = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
             weight = (market_value / total_market_value * 100) if total_market_value > 0 else 0.0
             market = cls.detect_market(symbol)
@@ -867,8 +879,8 @@ class StrategyMonitorService:
                 "current_price": current_price,
                 "pnl_percent": pnl_percent,
                 "weight": weight,
-                "market_regime": insight.get('regime') or 'balanced',
-                "market_headline": insight.get('headline') or ''
+                "market_regime": insight.get("regime") or "balanced",
+                "market_headline": insight.get("headline") or "",
             }
 
             for strategy in strategies:
@@ -886,7 +898,7 @@ class StrategyMonitorService:
                       AND created_at >= DATE_SUB(NOW(), INTERVAL 15 MINUTE)
                     LIMIT 1
                     """,
-                    (user_id, strategy['id'], symbol)
+                    (user_id, strategy["id"], symbol),
                 )
                 if duplicate:
                     continue
@@ -901,17 +913,17 @@ class StrategyMonitorService:
                     """,
                     (
                         user_id,
-                        strategy['id'],
+                        strategy["id"],
                         bound_account_id,
                         symbol,
                         market,
-                        alert['severity'],
-                        alert['actionSuggested'],
-                        alert['message'],
+                        alert["severity"],
+                        alert["actionSuggested"],
+                        alert["message"],
                         pnl_percent,
                         weight,
-                        current_price
-                    )
+                        current_price,
+                    ),
                 )
                 DbUtil.execute_sql(
                     """
@@ -921,7 +933,7 @@ class StrategyMonitorService:
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s AND user_id = %s
                     """,
-                    (strategy['id'], user_id)
+                    (strategy["id"], user_id),
                 )
                 execution = cls._build_execution_result(status="alert_only")
                 if should_auto_execute and strategy.get("executionMode") == cls.EXECUTION_MODE_AUTO:
@@ -947,19 +959,21 @@ class StrategyMonitorService:
                             realtime_orders_cache = list(realtime_orders_cache or [])
                             realtime_orders_cache.append(submitted_order)
 
-                alerts.append({
-                    "strategyId": strategy['id'],
-                    "strategyName": strategy['name'],
-                    "symbol": symbol,
-                    "market": market,
-                    "severity": alert['severity'],
-                    "actionSuggested": alert['actionSuggested'],
-                    "message": alert['message'],
-                    "pnlPercent": round(pnl_percent, 2),
-                    "weight": round(weight, 2),
-                    "currentPrice": round(current_price, 2),
-                    "execution": execution,
-                })
+                alerts.append(
+                    {
+                        "strategyId": strategy["id"],
+                        "strategyName": strategy["name"],
+                        "symbol": symbol,
+                        "market": market,
+                        "severity": alert["severity"],
+                        "actionSuggested": alert["actionSuggested"],
+                        "message": alert["message"],
+                        "pnlPercent": round(pnl_percent, 2),
+                        "weight": round(weight, 2),
+                        "currentPrice": round(current_price, 2),
+                        "execution": execution,
+                    }
+                )
 
         cls._mark_strategies_executed(user_id=user_id, strategy_ids=evaluated_strategy_ids)
 
@@ -969,46 +983,46 @@ class StrategyMonitorService:
             "positionCount": len(positions),
             "alertCount": len(alerts),
             "alerts": alerts,
-            "strategyIds": evaluated_strategy_ids
+            "strategyIds": evaluated_strategy_ids,
         }
 
     @classmethod
-    def _evaluate_strategy(cls, strategy: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        strategy_type = strategy.get('type')
-        params = strategy.get('params') or {}
-        threshold = abs(float(params.get('threshold', 0) or 0))
-        action = str(params.get('action') or 'ALERT').upper()
-        pnl_percent = float(context.get('pnl_percent') or 0)
-        weight = float(context.get('weight') or 0)
-        symbol = context.get('symbol')
-        market_regime = context.get('market_regime') or 'balanced'
+    def _evaluate_strategy(cls, strategy: dict[str, Any], context: dict[str, Any]) -> dict[str, Any] | None:
+        strategy_type = strategy.get("type")
+        params = strategy.get("params") or {}
+        threshold = abs(float(params.get("threshold", 0) or 0))
+        action = str(params.get("action") or "ALERT").upper()
+        pnl_percent = float(context.get("pnl_percent") or 0)
+        weight = float(context.get("weight") or 0)
+        symbol = context.get("symbol")
+        market_regime = context.get("market_regime") or "balanced"
 
-        if strategy_type == 'stop_loss' and pnl_percent <= -threshold:
+        if strategy_type == "stop_loss" and pnl_percent <= -threshold:
             return {
                 "severity": "high",
                 "actionSuggested": action,
-                "message": f"{symbol} 浮亏 {pnl_percent:.2f}% ，已达到止损阈值 {-threshold:.2f}%"
+                "message": f"{symbol} 浮亏 {pnl_percent:.2f}% ，已达到止损阈值 {-threshold:.2f}%",
             }
 
-        if strategy_type == 'take_profit' and pnl_percent >= threshold:
+        if strategy_type == "take_profit" and pnl_percent >= threshold:
             return {
                 "severity": "medium",
                 "actionSuggested": action,
-                "message": f"{symbol} 浮盈 {pnl_percent:.2f}% ，建议分批锁定利润"
+                "message": f"{symbol} 浮盈 {pnl_percent:.2f}% ，建议分批锁定利润",
             }
 
-        if strategy_type == 'overweight_trim' and weight >= threshold:
+        if strategy_type == "overweight_trim" and weight >= threshold:
             return {
                 "severity": "medium",
                 "actionSuggested": action,
-                "message": f"{symbol} 仓位占比 {weight:.2f}% ，已超过阈值 {threshold:.2f}%"
+                "message": f"{symbol} 仓位占比 {weight:.2f}% ，已超过阈值 {threshold:.2f}%",
             }
 
-        if strategy_type == 'market_guard' and market_regime == 'risk_off' and pnl_percent <= 0:
+        if strategy_type == "market_guard" and market_regime == "risk_off" and pnl_percent <= 0:
             return {
                 "severity": "high",
                 "actionSuggested": action,
-                "message": f"{symbol} 所属市场进入防守状态，且持仓表现偏弱，建议降低暴露"
+                "message": f"{symbol} 所属市场进入防守状态，且持仓表现偏弱，建议降低暴露",
             }
 
         return None
@@ -1017,16 +1031,16 @@ class StrategyMonitorService:
     def _execute_strategy_alert(
         cls,
         *,
-        strategy: Dict[str, Any],
-        alert: Dict[str, Any],
-        context: Dict[str, Any],
+        strategy: dict[str, Any],
+        alert: dict[str, Any],
+        context: dict[str, Any],
         position: Any,
-        account_id: Optional[int],
+        account_id: int | None,
         user_id: int,
         source: str,
-        realtime_orders: Optional[List[Any]],
+        realtime_orders: list[Any] | None,
         realtime_orders_error: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         action = str((strategy.get("params") or {}).get("action") or "ALERT").strip().upper()
         if action == "ALERT":
             return cls._build_execution_result(status="alert_only")
@@ -1103,13 +1117,13 @@ class StrategyMonitorService:
     def _build_order_intent(
         cls,
         *,
-        strategy: Dict[str, Any],
-        alert: Dict[str, Any],
-        context: Dict[str, Any],
+        strategy: dict[str, Any],
+        alert: dict[str, Any],
+        context: dict[str, Any],
         position: Any,
-        account_id: Optional[int],
+        account_id: int | None,
         source: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         params = strategy.get("params") or {}
         action = str(params.get("action") or "ALERT").strip().upper()
         symbol = HistoricalMarketDataService.normalize_symbol(context.get("symbol"))
@@ -1173,7 +1187,7 @@ class StrategyMonitorService:
         return 0
 
     @classmethod
-    def _load_trade_service_orders(cls, account_id: Optional[int], user_id: int) -> tuple[List[Any], str]:
+    def _load_trade_service_orders(cls, account_id: int | None, user_id: int) -> tuple[list[Any], str]:
         try:
             response = cls._request_trade_service(
                 method="GET",
@@ -1198,8 +1212,8 @@ class StrategyMonitorService:
         *,
         account_id: int,
         user_id: int,
-        order_intent: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        order_intent: dict[str, Any],
+    ) -> dict[str, Any]:
         if account_id <= 0:
             raise ValueError("未找到可用账户，无法自动执行策略")
         response = cls._request_trade_service(
@@ -1214,21 +1228,23 @@ class StrategyMonitorService:
         order_id = data.get("orderId") or data.get("order_id") or response.get("order_id")
         standard_status = cls._standard_order_status(data.get("status") or response.get("status") or "submitted")
         return {
-            "status": "executed" if standard_status in {"submitted", "accepted", "partially_filled", "filled"} else standard_status,
+            "status": "executed"
+            if standard_status in {"submitted", "accepted", "partially_filled", "filled"}
+            else standard_status,
             "order_id": order_id,
             "standardStatus": standard_status,
             "boundary": "trade-service",
         }
 
     @classmethod
-    def _assert_paper_trading_account(cls, account_id: Optional[int], user_id: int) -> Dict[str, Any]:
+    def _assert_paper_trading_account(cls, account_id: int | None, user_id: int) -> dict[str, Any]:
         account = cls._load_trade_service_account(account_id=account_id, user_id=user_id)
         if cls._is_paper_account(account):
             return account
         raise PermissionError("策略自动交易仅允许纸账户/模拟账户执行，当前账户未通过 paper 校验")
 
     @classmethod
-    def _load_trade_service_account(cls, account_id: Optional[int], user_id: int) -> Dict[str, Any]:
+    def _load_trade_service_account(cls, account_id: int | None, user_id: int) -> dict[str, Any]:
         try:
             if account_id:
                 response = cls._request_trade_service(
@@ -1254,7 +1270,7 @@ class StrategyMonitorService:
             raise PermissionError(f"纸账户校验失败: {exc}") from exc
 
     @classmethod
-    def _is_paper_account(cls, account: Dict[str, Any]) -> bool:
+    def _is_paper_account(cls, account: dict[str, Any]) -> bool:
         if not account:
             return False
         trading_mode = str(account.get("trading_mode") or account.get("tradingMode") or "").strip().lower()
@@ -1266,10 +1282,13 @@ class StrategyMonitorService:
             str(account.get(key) or "")
             for key in ("account_id", "accountId", "display_name", "displayName", "broker_name", "brokerName", "name")
         ).upper()
-        return any(keyword in descriptor for keyword in ("PAPER", "PAPERTRADING", "LBPT", "SIM", "SIMULAT", "DEMO", "SANDBOX", "模拟"))
+        return any(
+            keyword in descriptor
+            for keyword in ("PAPER", "PAPERTRADING", "LBPT", "SIM", "SIMULAT", "DEMO", "SANDBOX", "模拟")
+        )
 
     @classmethod
-    def _find_active_trade_service_order(cls, orders: List[Any], symbol: str, side: str) -> Optional[Dict[str, Any]]:
+    def _find_active_trade_service_order(cls, orders: list[Any], symbol: str, side: str) -> dict[str, Any] | None:
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         normalized_side = cls._normalize_order_side(side)
         for order in orders or []:
@@ -1320,14 +1339,18 @@ class StrategyMonitorService:
 
     @staticmethod
     def _trade_service_base_url() -> str:
-        return str(
-            os.getenv("REF_TRADE_SERVICE_URL")
-            or os.getenv("TRADE_SERVICE_URL")
-            or f"http://127.0.0.1:{os.getenv('REF_TRADE_SERVICE_PORT', '8105')}"
-        ).strip().rstrip("/")
+        return (
+            str(
+                os.getenv("REF_TRADE_SERVICE_URL")
+                or os.getenv("TRADE_SERVICE_URL")
+                or f"http://127.0.0.1:{os.getenv('REF_TRADE_SERVICE_PORT', '8105')}"
+            )
+            .strip()
+            .rstrip("/")
+        )
 
     @classmethod
-    def _trade_service_headers(cls, user_id: int) -> Dict[str, str]:
+    def _trade_service_headers(cls, user_id: int) -> dict[str, str]:
         try:
             from apps.runtime_shared.auth import generate_token
 
@@ -1343,10 +1366,10 @@ class StrategyMonitorService:
         method: str,
         path: str,
         user_id: int,
-        payload: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
+        payload: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
         timeout: int = 30,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         base_url = cls._trade_service_base_url()
         if not base_url:
             raise RuntimeError("REF_TRADE_SERVICE_URL 未配置")
@@ -1368,45 +1391,51 @@ class StrategyMonitorService:
                 parsed = json.loads(response_body) if response_body else {}
             except ValueError:
                 parsed = {}
-            message = parsed.get("error") or parsed.get("message") or parsed.get("detail") or response_body or exc.reason
+            message = (
+                parsed.get("error") or parsed.get("message") or parsed.get("detail") or response_body or exc.reason
+            )
             raise RuntimeError(str(message)[:300]) from exc
         except Exception as exc:
             raise RuntimeError(f"trade-service 调用失败: {exc}") from exc
 
     @staticmethod
-    def _build_execution_result(status: str, **kwargs: Any) -> Dict[str, Any]:
+    def _build_execution_result(status: str, **kwargs: Any) -> dict[str, Any]:
         return {"status": status, **kwargs}
 
     @classmethod
-    def _normalize_strategy(cls, row: Dict[str, Any]) -> Dict[str, Any]:
-        params = row.get('params_json')
+    def _normalize_strategy(cls, row: dict[str, Any]) -> dict[str, Any]:
+        params = row.get("params_json")
         try:
             params = json.loads(params) if params else {}
         except (TypeError, ValueError, json.JSONDecodeError):
             params = {}
 
         return {
-            "id": row.get('id'),
-            "name": row.get('name') or '策略',
-            "type": row.get('type') or 'custom',
-            "description": row.get('description') or '',
+            "id": row.get("id"),
+            "name": row.get("name") or "策略",
+            "type": row.get("type") or "custom",
+            "description": row.get("description") or "",
             "params": params,
-            "status": row.get('status') or 'stopped',
-            "executionMode": cls._normalize_execution_mode(row.get('execution_mode')),
-            "scheduleFrequency": cls._normalize_schedule_frequency(row.get('schedule_frequency')),
-            "schedulePeriod": cls._normalize_schedule_period(row.get('schedule_period')),
-            "totalReturn": float(row.get('total_return') or 0),
-            "sharpeRatio": float(row.get('sharpe_ratio') or 0),
-            "maxDrawdown": float(row.get('max_drawdown') or 0),
-            "winRate": float(row.get('win_rate') or 0),
-            "triggerCount": int(row.get('trigger_count') or 0),
-            "lastExecutedAt": row.get('last_executed_at').strftime('%Y-%m-%d %H:%M:%S') if row.get('last_executed_at') else None,
-            "lastTriggeredAt": row.get('last_triggered_at').strftime('%Y-%m-%d %H:%M:%S') if row.get('last_triggered_at') else None,
-            "createdAt": row.get('created_at').strftime('%Y-%m-%d %H:%M:%S') if row.get('created_at') else None
+            "status": row.get("status") or "stopped",
+            "executionMode": cls._normalize_execution_mode(row.get("execution_mode")),
+            "scheduleFrequency": cls._normalize_schedule_frequency(row.get("schedule_frequency")),
+            "schedulePeriod": cls._normalize_schedule_period(row.get("schedule_period")),
+            "totalReturn": float(row.get("total_return") or 0),
+            "sharpeRatio": float(row.get("sharpe_ratio") or 0),
+            "maxDrawdown": float(row.get("max_drawdown") or 0),
+            "winRate": float(row.get("win_rate") or 0),
+            "triggerCount": int(row.get("trigger_count") or 0),
+            "lastExecutedAt": row.get("last_executed_at").strftime("%Y-%m-%d %H:%M:%S")
+            if row.get("last_executed_at")
+            else None,
+            "lastTriggeredAt": row.get("last_triggered_at").strftime("%Y-%m-%d %H:%M:%S")
+            if row.get("last_triggered_at")
+            else None,
+            "createdAt": row.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else None,
         }
 
     @classmethod
-    def get_strategy_templates(cls) -> Dict[str, Any]:
+    def get_strategy_templates(cls) -> dict[str, Any]:
         categories = {
             "risk": "风险控制",
             "profit": "止盈退出",
@@ -1489,7 +1518,7 @@ class StrategyMonitorService:
         return normalized
 
     @classmethod
-    def _select_monitor_strategies(cls, strategies: List[Dict[str, Any]], source: str) -> List[Dict[str, Any]]:
+    def _select_monitor_strategies(cls, strategies: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
         selected = []
         for strategy in strategies:
             if strategy.get("status") != "active":
@@ -1503,7 +1532,7 @@ class StrategyMonitorService:
         return selected
 
     @classmethod
-    def _is_strategy_due(cls, strategy: Dict[str, Any]) -> bool:
+    def _is_strategy_due(cls, strategy: dict[str, Any]) -> bool:
         last_executed_at = strategy.get("lastExecutedAt")
         if not last_executed_at:
             return True
@@ -1517,7 +1546,7 @@ class StrategyMonitorService:
         return (datetime.now() - last_run).total_seconds() >= required_seconds
 
     @classmethod
-    def _mark_strategies_executed(cls, user_id: int, strategy_ids: List[int]) -> None:
+    def _mark_strategies_executed(cls, user_id: int, strategy_ids: list[int]) -> None:
         unique_ids = sorted({int(item) for item in strategy_ids if item})
         if not unique_ids:
             return
@@ -1534,36 +1563,33 @@ class StrategyMonitorService:
         )
 
     @classmethod
-    def _normalize_backtest(cls, row: Dict[str, Any]) -> Dict[str, Any]:
-        performance = cls._json_load(row.get('performance_json')) or {}
-        equity_curve = cls._json_load(row.get('equity_curve_json')) or {"dates": [], "values": []}
-        trades = cls._json_load(row.get('trades_json')) or []
+    def _normalize_backtest(cls, row: dict[str, Any]) -> dict[str, Any]:
+        performance = cls._json_load(row.get("performance_json")) or {}
+        equity_curve = cls._json_load(row.get("equity_curve_json")) or {"dates": [], "values": []}
+        trades = cls._json_load(row.get("trades_json")) or []
 
         return {
-            "id": row.get('id'),
-            "name": row.get('name') or row.get('strategy_name') or '回测',
-            "strategyId": row.get('strategy_id'),
-            "strategyName": row.get('strategy_name') or '策略',
-            "symbol": row.get('symbol') or '',
-            "startDate": row.get('start_date').strftime('%Y-%m-%d') if row.get('start_date') else None,
-            "endDate": row.get('end_date').strftime('%Y-%m-%d') if row.get('end_date') else None,
-            "finalPnl": float(row.get('final_pnl') or 0),
-            "totalReturn": float(row.get('total_return') or 0),
-            "status": row.get('status') or 'completed',
+            "id": row.get("id"),
+            "name": row.get("name") or row.get("strategy_name") or "回测",
+            "strategyId": row.get("strategy_id"),
+            "strategyName": row.get("strategy_name") or "策略",
+            "symbol": row.get("symbol") or "",
+            "startDate": row.get("start_date").strftime("%Y-%m-%d") if row.get("start_date") else None,
+            "endDate": row.get("end_date").strftime("%Y-%m-%d") if row.get("end_date") else None,
+            "finalPnl": float(row.get("final_pnl") or 0),
+            "totalReturn": float(row.get("total_return") or 0),
+            "status": row.get("status") or "completed",
             "performance": {
-                "totalReturn": float(performance.get('totalReturn') or row.get('total_return') or 0),
-                "annualReturn": float(performance.get('annualReturn') or row.get('annual_return') or 0),
-                "sharpeRatio": float(performance.get('sharpeRatio') or row.get('sharpe_ratio') or 0),
-                "maxDrawdown": float(performance.get('maxDrawdown') or row.get('max_drawdown') or 0),
-                "winRate": float(performance.get('winRate') or row.get('win_rate') or 0),
-                "tradeCount": int(performance.get('tradeCount') or row.get('trade_count') or 0)
+                "totalReturn": float(performance.get("totalReturn") or row.get("total_return") or 0),
+                "annualReturn": float(performance.get("annualReturn") or row.get("annual_return") or 0),
+                "sharpeRatio": float(performance.get("sharpeRatio") or row.get("sharpe_ratio") or 0),
+                "maxDrawdown": float(performance.get("maxDrawdown") or row.get("max_drawdown") or 0),
+                "winRate": float(performance.get("winRate") or row.get("win_rate") or 0),
+                "tradeCount": int(performance.get("tradeCount") or row.get("trade_count") or 0),
             },
-            "equityCurve": {
-                "dates": equity_curve.get('dates') or [],
-                "values": equity_curve.get('values') or []
-            },
+            "equityCurve": {"dates": equity_curve.get("dates") or [], "values": equity_curve.get("values") or []},
             "trades": trades,
-            "createdAt": row.get('created_at').strftime('%Y-%m-%d %H:%M:%S') if row.get('created_at') else None
+            "createdAt": row.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else None,
         }
 
     @staticmethod
@@ -1581,36 +1607,35 @@ class StrategyMonitorService:
     def _parse_date(value: Any):
         if not value:
             return None
-        if hasattr(value, 'date'):
-            return value.date() if hasattr(value, 'hour') else value
+        if hasattr(value, "date"):
+            return value.date() if hasattr(value, "hour") else value
         try:
-            return datetime.strptime(str(value), '%Y-%m-%d').date()
+            return datetime.strptime(str(value), "%Y-%m-%d").date()
         except ValueError:
             return None
 
     @staticmethod
     def detect_market(symbol: str) -> str:
-        symbol = str(symbol or '').upper()
-        if symbol.endswith('.HK'):
-            return 'HK'
-        if symbol.endswith('.SH') or symbol.endswith('.SZ'):
-            return 'CN'
-        return 'US'
+        symbol = str(symbol or "").upper()
+        if symbol.endswith(".HK"):
+            return "HK"
+        if symbol.endswith(".SH") or symbol.endswith(".SZ"):
+            return "CN"
+        return "US"
 
     @classmethod
-    def _load_backtest_series(cls, symbol: str, user_id: int, start_date, end_date) -> List[Dict[str, Any]]:
+    def _load_backtest_series(cls, symbol: str, user_id: int, start_date, end_date) -> list[dict[str, Any]]:
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         lookback_days = max((end_date - start_date).days + 90, 180)
         HistoricalMarketDataService.ensure_symbol_history(
-            normalized_symbol,
-            user_id=user_id,
-            min_points=min(max(lookback_days, 180), 520),
-            refresh=False
+            normalized_symbol, user_id=user_id, min_points=min(max(lookback_days, 180), 520), refresh=False
         )
-        series = HistoricalMarketDataService._query_daily_series(normalized_symbol, min(max(lookback_days * 2, 240), 1500))
+        series = HistoricalMarketDataService._query_daily_series(
+            normalized_symbol, min(max(lookback_days * 2, 240), 1500)
+        )
         filtered = []
         for item in series:
-            trade_date = cls._parse_date(item.get('date'))
+            trade_date = cls._parse_date(item.get("date"))
             if not trade_date:
                 continue
             if start_date <= trade_date <= end_date:
@@ -1619,22 +1644,18 @@ class StrategyMonitorService:
 
     @staticmethod
     def _simulate_strategy(
-        symbol: str,
-        strategy_type: str,
-        params: Dict[str, Any],
-        series: List[Dict[str, Any]],
-        initial_capital: float
-    ) -> Dict[str, Any]:
+        symbol: str, strategy_type: str, params: dict[str, Any], series: list[dict[str, Any]], initial_capital: float
+    ) -> dict[str, Any]:
         fee_rate = 0.001
-        threshold = abs(float(params.get('threshold', 6) or 6))
+        threshold = abs(float(params.get("threshold", 6) or 6))
         cash = float(initial_capital)
         shares = 0
         entry_price = 0.0
         partial_taken = False
-        dates: List[str] = []
-        values: List[float] = []
-        trades: List[Dict[str, Any]] = []
-        closes: List[float] = []
+        dates: list[str] = []
+        values: list[float] = []
+        trades: list[dict[str, Any]] = []
+        closes: list[float] = []
 
         def moving_average(window: int) -> float:
             if not closes:
@@ -1643,7 +1664,7 @@ class StrategyMonitorService:
             return sum(points) / len(points)
 
         for index, item in enumerate(series):
-            price = float(item.get('close') or 0)
+            price = float(item.get("close") or 0)
             if price <= 0:
                 continue
 
@@ -1653,34 +1674,36 @@ class StrategyMonitorService:
             should_buy = shares == 0 and index >= 4 and price >= sma5 and (len(closes) < 20 or price >= sma20)
 
             if should_buy:
-                risk_budget = 0.95 if strategy_type != 'market_guard' else 0.72
+                risk_budget = 0.95 if strategy_type != "market_guard" else 0.72
                 quantity = int((cash * risk_budget) / price)
                 if quantity > 0:
                     cash -= quantity * price * (1 + fee_rate)
                     shares += quantity
                     entry_price = price
                     partial_taken = False
-                    trades.append({
-                        "date": item.get('date'),
-                        "symbol": symbol,
-                        "action": "buy",
-                        "price": round(price, 2),
-                        "quantity": quantity,
-                        "pnl": 0.0
-                    })
+                    trades.append(
+                        {
+                            "date": item.get("date"),
+                            "symbol": symbol,
+                            "action": "buy",
+                            "price": round(price, 2),
+                            "quantity": quantity,
+                            "pnl": 0.0,
+                        }
+                    )
 
             pnl_percent = ((price - entry_price) / entry_price * 100) if entry_price > 0 else 0.0
             momentum_10 = ((price - closes[-10]) / closes[-10] * 100) if len(closes) >= 10 and closes[-10] else 0.0
             sell_quantity = 0
             if shares > 0:
-                if strategy_type == 'stop_loss' and pnl_percent <= -threshold:
+                if strategy_type == "stop_loss" and pnl_percent <= -threshold:
                     sell_quantity = shares
-                elif strategy_type == 'take_profit' and pnl_percent >= threshold and not partial_taken:
+                elif strategy_type == "take_profit" and pnl_percent >= threshold and not partial_taken:
                     sell_quantity = max(1, shares // 2)
                     partial_taken = True
-                elif strategy_type == 'overweight_trim' and pnl_percent >= max(3.0, threshold / 2) and price < sma5:
+                elif strategy_type == "overweight_trim" and pnl_percent >= max(3.0, threshold / 2) and price < sma5:
                     sell_quantity = max(1, shares // 2)
-                elif strategy_type == 'market_guard' and (price < sma20 and momentum_10 <= -4):
+                elif strategy_type == "market_guard" and (price < sma20 and momentum_10 <= -4):
                     sell_quantity = shares if pnl_percent <= 0 else max(1, shares // 2)
                 elif price < sma20 * 0.96:
                     sell_quantity = max(1, shares // 2)
@@ -1690,29 +1713,35 @@ class StrategyMonitorService:
                 cash += sell_quantity * price * (1 - fee_rate)
                 realized_pnl = (price - entry_price) * sell_quantity
                 shares -= sell_quantity
-                trades.append({
-                    "date": item.get('date'),
-                    "symbol": symbol,
-                    "action": "sell",
-                    "price": round(price, 2),
-                    "quantity": int(sell_quantity),
-                    "pnl": round(realized_pnl, 2)
-                })
+                trades.append(
+                    {
+                        "date": item.get("date"),
+                        "symbol": symbol,
+                        "action": "sell",
+                        "price": round(price, 2),
+                        "quantity": int(sell_quantity),
+                        "pnl": round(realized_pnl, 2),
+                    }
+                )
                 if shares == 0:
                     entry_price = 0.0
                     partial_taken = False
 
             equity = cash + shares * price
-            dates.append(item.get('date'))
+            dates.append(item.get("date"))
             values.append(round(equity, 2))
 
         if not values:
             values = [round(initial_capital, 2)]
-            dates = [series[-1].get('date') if series else datetime.now().strftime('%Y-%m-%d')]
+            dates = [series[-1].get("date") if series else datetime.now().strftime("%Y-%m-%d")]
 
         total_return = ((values[-1] / initial_capital) - 1) * 100 if initial_capital else 0.0
         total_days = max(len(values), 2)
-        annual_return = ((values[-1] / initial_capital) ** (252 / total_days) - 1) * 100 if initial_capital > 0 and values[-1] > 0 else 0.0
+        annual_return = (
+            ((values[-1] / initial_capital) ** (252 / total_days) - 1) * 100
+            if initial_capital > 0 and values[-1] > 0
+            else 0.0
+        )
 
         returns = []
         for index in range(1, len(values)):
@@ -1731,8 +1760,8 @@ class StrategyMonitorService:
             if peak > 0:
                 max_drawdown = min(max_drawdown, (value - peak) / peak)
 
-        sell_trades = [item for item in trades if item.get('action') == 'sell']
-        winning_trades = len([item for item in sell_trades if float(item.get('pnl') or 0) >= 0])
+        sell_trades = [item for item in trades if item.get("action") == "sell"]
+        winning_trades = len([item for item in sell_trades if float(item.get("pnl") or 0) >= 0])
         win_rate = (winning_trades / len(sell_trades) * 100) if sell_trades else 0.0
 
         return {
@@ -1742,11 +1771,8 @@ class StrategyMonitorService:
                 "sharpeRatio": round(sharpe_ratio, 2),
                 "maxDrawdown": round(abs(max_drawdown) * 100, 2),
                 "winRate": round(win_rate, 2),
-                "tradeCount": len(trades)
+                "tradeCount": len(trades),
             },
-            "equityCurve": {
-                "dates": dates,
-                "values": values
-            },
-            "trades": trades
+            "equityCurve": {"dates": dates, "values": values},
+            "trades": trades,
         }

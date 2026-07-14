@@ -2,19 +2,20 @@
 加密工具模块
 用于API密钥等敏感信息的加密存储和解密
 """
-import os
+
 import base64
-import hashlib
+import logging
+import os
+
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import logging
 
 logger = logging.getLogger(__name__)
 
 # 从环境变量获取加密密钥，如果没有则使用默认密钥（生产环境必须使用环境变量）
-MASTER_KEY = os.environ.get('API_ENCRYPTION_KEY', 'LongbridgeTrade-Secret-Key-2025')
-SALT = os.environ.get('API_ENCRYPTION_SALT', 'LongbridgeTrade-Salt').encode()
+MASTER_KEY = os.environ.get("API_ENCRYPTION_KEY", "LongbridgeTrade-Secret-Key-2025")
+SALT = os.environ.get("API_ENCRYPTION_SALT", "LongbridgeTrade-Salt").encode()
 
 
 def _get_fernet() -> Fernet:
@@ -114,13 +115,7 @@ def decrypt_dict(data: dict, fields: list) -> dict:
 
 
 # 老虎证券需要加密的字段
-TIGER_ENCRYPT_FIELDS = [
-    'tiger_id',
-    'tiger_account',
-    'tiger_license',
-    'tiger_private_key_pk1',
-    'tiger_private_key_pk8'
-]
+TIGER_ENCRYPT_FIELDS = ["tiger_id", "tiger_account", "tiger_license", "tiger_private_key_pk1", "tiger_private_key_pk8"]
 
 # 所有需要加密的字段
 ALL_ENCRYPT_FIELDS = TIGER_ENCRYPT_FIELDS

@@ -1,15 +1,18 @@
 """
 数据库工具类 - 使用连接池和上下文管理器优化
 """
-import pymysql
-from pymysql.cursors import DictCursor
-from pymysql.connections import Connection
-from typing import Optional, Tuple, Any, Dict, List, Generator
-from contextlib import contextmanager
+
 import logging
-import sys
 import os
+import sys
 import threading
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Any
+
+import pymysql
+from pymysql.connections import Connection
+from pymysql.cursors import DictCursor
 
 # 添加父目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -21,20 +24,20 @@ logger = logging.getLogger(__name__)
 
 class DatabasePool:
     """数据库连接池（简单实现）"""
-    
-    def __init__(self, config: Dict[str, Any], pool_size: int = 5, label: str = "write"):
+
+    def __init__(self, config: dict[str, Any], pool_size: int = 5, label: str = "write"):
         self.pool_size = pool_size
         self.config = dict(config)
         self.label = label
-        self._pool: List[Connection] = []
+        self._pool: list[Connection] = []
         self._max_overflow = 10
         self._borrowed_count = 0
         self._lock = threading.Lock()
-        
+
     def _create_connection(self) -> Connection:
         """创建新连接"""
         return pymysql.connect(**self.config)
-    
+
     def get_connection(self) -> Connection:
         """获取连接"""
         with self._lock:
@@ -55,7 +58,7 @@ class DatabasePool:
             with self._lock:
                 self._borrowed_count = max(0, self._borrowed_count - 1)
             raise
-    
+
     def release_connection(self, conn: Connection) -> None:
         """释放连接回池"""
         with self._lock:
@@ -69,7 +72,7 @@ class DatabasePool:
                 conn.close()
             except Exception:
                 logger.warning("关闭数据库连接失败", exc_info=True)
-    
+
     def close_all(self) -> None:
         """关闭所有连接"""
         with self._lock:
@@ -82,7 +85,7 @@ class DatabasePool:
 
 
 # 全局连接池实例
-_pool_instances: Dict[str, DatabasePool] = {}
+_pool_instances: dict[str, DatabasePool] = {}
 
 
 def get_pool(read_only: bool = False) -> DatabasePool:
@@ -106,7 +109,7 @@ def get_db_connection(read_only: bool = False) -> Generator[Connection, None, No
                 cursor.execute(sql)
     """
     conn = None
-    pool: Optional[DatabasePool] = None
+    pool: DatabasePool | None = None
     try:
         try:
             pool = get_pool(read_only=read_only)
@@ -147,7 +150,7 @@ def get_db_cursor(dict_cursor: bool = False, read_only: bool = False) -> Generat
 
 class DbUtil:
     """数据库工具类"""
-    
+
     # 保持向后兼容
     URL_CONFIG = settings.get_db_config()
 
@@ -174,8 +177,9 @@ class DbUtil:
             raise
 
     @staticmethod
-    def add_ai_decision(decision_time: str, symbol: str, gemma: str, llama: str, deepseek: str,
-                        status: str, side: str, detail: str) -> None:
+    def add_ai_decision(
+        decision_time: str, symbol: str, gemma: str, llama: str, deepseek: str, status: str, side: str, detail: str
+    ) -> None:
         """添加AI决策记录到ai_decisions表"""
         try:
             with get_db_cursor() as cursor:
@@ -190,7 +194,7 @@ class DbUtil:
             raise
 
     @staticmethod
-    def get_scan_logs(limit: int = 50) -> List[Dict[str, Any]]:
+    def get_scan_logs(limit: int = 50) -> list[dict[str, Any]]:
         """获取扫描日志列表"""
         try:
             with get_db_cursor(dict_cursor=True) as cursor:
@@ -202,7 +206,7 @@ class DbUtil:
             return []
 
     @staticmethod
-    def get_ai_decisions(limit: int = 20) -> List[Dict[str, Any]]:
+    def get_ai_decisions(limit: int = 20) -> list[dict[str, Any]]:
         """获取AI决策记录列表"""
         try:
             with get_db_cursor(dict_cursor=True) as cursor:
@@ -217,8 +221,9 @@ class DbUtil:
             return []
 
     @staticmethod
-    def save_account_snapshot(net_assets: float, buy_power: float, market_value: float = 0, 
-                                today_pnl: float = 0, today_pnl_percent: float = 0) -> None:
+    def save_account_snapshot(
+        net_assets: float, buy_power: float, market_value: float = 0, today_pnl: float = 0, today_pnl_percent: float = 0
+    ) -> None:
         """保存账户快照"""
         try:
             with get_db_cursor() as cursor:
@@ -257,10 +262,17 @@ class DbUtil:
         except Exception as e:
             logger.error(f"初始化用户资产趋势表失败: {e}")
             raise
-    
+
     @staticmethod
-    def save_asset_trend(date: str, total_assets: float, cash: float, market_value: float, 
-                         today_pnl: float, today_pnl_percent: float, user_id: int = 1) -> None:
+    def save_asset_trend(
+        date: str,
+        total_assets: float,
+        cash: float,
+        market_value: float,
+        today_pnl: float,
+        today_pnl_percent: float,
+        user_id: int = 1,
+    ) -> None:
         """保存资产趋势数据（日线）"""
         try:
             DbUtil._ensure_user_asset_trend_table()
@@ -279,14 +291,14 @@ class DbUtil:
                         today_pnl_percent = VALUES(today_pnl_percent),
                         updated_at = CURRENT_TIMESTAMP
                     """,
-                    (user_id, date, total_assets, cash, market_value, today_pnl, today_pnl_percent)
+                    (user_id, date, total_assets, cash, market_value, today_pnl, today_pnl_percent),
                 )
         except Exception as e:
             logger.error(f"保存资产趋势失败: {e}")
             raise
-    
+
     @staticmethod
-    def get_asset_trend(days: int = 30, user_id: int = 1) -> List[Dict[str, Any]]:
+    def get_asset_trend(days: int = 30, user_id: int = 1) -> list[dict[str, Any]]:
         """获取资产趋势数据"""
         try:
             DbUtil._ensure_user_asset_trend_table()
@@ -303,9 +315,9 @@ class DbUtil:
         except Exception as e:
             logger.error(f"获取资产趋势失败: {e}")
             return []
-    
+
     @staticmethod
-    def execute_sql(sql: str, params: Optional[Tuple[Any, ...]] = None) -> int:
+    def execute_sql(sql: str, params: tuple[Any, ...] | None = None) -> int:
         """
         执行SQL语句
         返回：影响的行数
@@ -320,14 +332,14 @@ class DbUtil:
         except Exception as e:
             logger.error(f"执行SQL失败: {e}, SQL: {sql[:100]}")
             raise
-    
+
     @staticmethod
-    def execute(sql: str, params: Optional[Tuple[Any, ...]] = None) -> int:
+    def execute(sql: str, params: tuple[Any, ...] | None = None) -> int:
         """execute_sql的别名"""
         return DbUtil.execute_sql(sql, params)
 
     @staticmethod
-    def execute_insert(sql: str, params: Optional[Tuple[Any, ...]] = None) -> int:
+    def execute_insert(sql: str, params: tuple[Any, ...] | None = None) -> int:
         """执行插入语句并返回 lastrowid。"""
         try:
             with get_db_connection() as conn:
@@ -340,9 +352,9 @@ class DbUtil:
         except Exception as e:
             logger.error(f"执行插入失败: {e}, SQL: {sql[:100]}")
             raise
-    
+
     @staticmethod
-    def query_all(sql: str, params: Optional[Tuple[Any, ...]] = None) -> List[Tuple[Any, ...]]:
+    def query_all(sql: str, params: tuple[Any, ...] | None = None) -> list[tuple[Any, ...]]:
         """查询所有结果"""
         try:
             with get_db_cursor(read_only=True) as cursor:
@@ -354,9 +366,9 @@ class DbUtil:
         except Exception as e:
             logger.error(f"查询失败: {e}, SQL: {sql[:100]}")
             return []
-    
+
     @staticmethod
-    def query_one(sql: str, params: Optional[Tuple[Any, ...]] = None) -> Optional[Tuple[Any, ...]]:
+    def query_one(sql: str, params: tuple[Any, ...] | None = None) -> tuple[Any, ...] | None:
         """查询单条结果"""
         try:
             with get_db_cursor(read_only=True) as cursor:
@@ -370,7 +382,7 @@ class DbUtil:
             return None
 
     @staticmethod
-    def fetch_one(sql: str, params: Optional[Tuple[Any, ...]] = None) -> Optional[Dict[str, Any]]:
+    def fetch_one(sql: str, params: tuple[Any, ...] | None = None) -> dict[str, Any] | None:
         """查询单条结果，返回字典格式"""
         try:
             with get_db_cursor(dict_cursor=True, read_only=True) as cursor:
@@ -384,7 +396,7 @@ class DbUtil:
             return None
 
     @staticmethod
-    def fetch_all(sql: str, params: Optional[Tuple[Any, ...]] = None) -> List[Dict[str, Any]]:
+    def fetch_all(sql: str, params: tuple[Any, ...] | None = None) -> list[dict[str, Any]]:
         """查询所有结果，返回字典列表格式"""
         try:
             with get_db_cursor(dict_cursor=True, read_only=True) as cursor:
@@ -398,7 +410,7 @@ class DbUtil:
             return []
 
     @staticmethod
-    def fetch_one_primary(sql: str, params: Optional[Tuple[Any, ...]] = None) -> Optional[Dict[str, Any]]:
+    def fetch_one_primary(sql: str, params: tuple[Any, ...] | None = None) -> dict[str, Any] | None:
         """强制走主库查询单条结果。"""
         try:
             with get_db_cursor(dict_cursor=True, read_only=False) as cursor:
@@ -412,7 +424,7 @@ class DbUtil:
             return None
 
     @staticmethod
-    def fetch_all_primary(sql: str, params: Optional[Tuple[Any, ...]] = None) -> List[Dict[str, Any]]:
+    def fetch_all_primary(sql: str, params: tuple[Any, ...] | None = None) -> list[dict[str, Any]]:
         """强制走主库查询多条结果。"""
         try:
             with get_db_cursor(dict_cursor=True, read_only=False) as cursor:
@@ -434,7 +446,7 @@ class DbUtil:
                 check_sql = "SELECT symbol FROM positions WHERE symbol = %s"
                 cursor.execute(check_sql, (symbol,))
                 existing = cursor.fetchone()
-                
+
                 if existing:
                     # 更新已有记录
                     update_sql = """
@@ -453,7 +465,7 @@ class DbUtil:
         except Exception as e:
             logger.error(f"保存持仓信息失败: {e}")
             raise
-    
+
     @staticmethod
     def close_pool() -> None:
         """关闭连接池（应用关闭时调用）"""

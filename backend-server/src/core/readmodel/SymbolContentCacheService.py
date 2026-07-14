@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from utils.DbUtil import DbUtil
 
@@ -51,9 +52,9 @@ class SymbolContentCacheService:
         symbol: str,
         market: str,
         content_type: str,
-        items: Iterable[Dict[str, Any]],
+        items: Iterable[dict[str, Any]],
         source_name: str,
-        fetched_at: Optional[datetime] = None,
+        fetched_at: datetime | None = None,
     ) -> int:
         cls.ensure_schema()
         normalized_symbol = str(symbol or "").strip().upper()
@@ -121,23 +122,26 @@ class SymbolContentCacheService:
         limit: int = 20,
         use_primary: bool = False,
         include_expired: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         cls.ensure_schema()
         fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
         conditions = ["symbol = %s", "content_type = %s"]
-        params: List[Any] = [str(symbol or "").strip().upper(), cls._normalize_content_type(content_type)]
+        params: list[Any] = [str(symbol or "").strip().upper(), cls._normalize_content_type(content_type)]
         if not include_expired:
             conditions.append("(expires_at IS NULL OR expires_at >= NOW())")
-        rows = fetch_all(
-            f"""
+        rows = (
+            fetch_all(
+                f"""
             SELECT *
             FROM {cls.TABLE_NAME}
             WHERE {' AND '.join(conditions)}
             ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC
             LIMIT %s
             """,
-            tuple(params + [max(1, min(int(limit or 20), 100))]),
-        ) or []
+                tuple(params + [max(1, min(int(limit or 20), 100))]),
+            )
+            or []
+        )
         return [cls._normalize_row(row) for row in rows]
 
     @classmethod
@@ -147,21 +151,16 @@ class SymbolContentCacheService:
         symbol: str,
         market: str,
         content_type: str,
-        item: Dict[str, Any],
+        item: dict[str, Any],
         source_name: str,
         fetched_at: datetime,
         expires_at: datetime,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         title = str(item.get("title") or item.get("file_name") or item.get("name") or "").strip()
         if not title:
             return None
         summary = str(item.get("description") or item.get("summary") or item.get("content") or title).strip()
-        source_link = (
-            item.get("url")
-            or item.get("link")
-            or (item.get("file_urls") or [None])[0]
-            or None
-        )
+        source_link = item.get("url") or item.get("link") or (item.get("file_urls") or [None])[0] or None
         published_at = cls._parse_datetime(
             item.get("published_at")
             or item.get("publish_time")
@@ -205,7 +204,7 @@ class SymbolContentCacheService:
         }
 
     @classmethod
-    def _normalize_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         payload = row.get("payload_json")
         if isinstance(payload, str):
             try:
@@ -255,7 +254,7 @@ class SymbolContentCacheService:
         return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _parse_datetime(value: Any) -> Optional[datetime]:
+    def _parse_datetime(value: Any) -> datetime | None:
         if isinstance(value, datetime):
             return value
         text = str(value or "").strip()

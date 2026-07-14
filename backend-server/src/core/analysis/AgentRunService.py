@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from utils.DbUtil import DbUtil
 
@@ -144,12 +144,12 @@ class AgentRunService:
         trigger_source: str,
         user_id: int,
         status: str = "queued",
-        input_summary: Optional[Any] = None,
-        result_summary: Optional[Any] = None,
-        error_summary: Optional[Any] = None,
-        trace_ref: Optional[str] = None,
-        started_at: Optional[Any] = None,
-        finished_at: Optional[Any] = None,
+        input_summary: Any | None = None,
+        result_summary: Any | None = None,
+        error_summary: Any | None = None,
+        trace_ref: str | None = None,
+        started_at: Any | None = None,
+        finished_at: Any | None = None,
     ) -> int:
         cls.ensure_schema()
         safe_status = cls._validate_status(status)
@@ -191,10 +191,10 @@ class AgentRunService:
         cls,
         run_id: int,
         *,
-        input_summary: Optional[Any] = None,
-        trace_ref: Optional[str] = None,
-        started_at: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+        input_summary: Any | None = None,
+        trace_ref: str | None = None,
+        started_at: Any | None = None,
+    ) -> dict[str, Any] | None:
         cls.ensure_schema()
         safe_started_at = cls._coerce_datetime(started_at) or datetime.now()
         DbUtil.execute_sql(
@@ -222,9 +222,9 @@ class AgentRunService:
         cls,
         run_id: int,
         *,
-        input_summary: Optional[Any] = None,
-        trace_ref: Optional[str] = None,
-        started_at: Optional[Any] = None,
+        input_summary: Any | None = None,
+        trace_ref: str | None = None,
+        started_at: Any | None = None,
     ) -> bool:
         cls.ensure_schema()
         safe_started_at = cls._coerce_datetime(started_at) or datetime.now()
@@ -254,10 +254,10 @@ class AgentRunService:
         cls,
         run_id: int,
         *,
-        result_summary: Optional[Any] = None,
-        trace_ref: Optional[str] = None,
-        finished_at: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+        result_summary: Any | None = None,
+        trace_ref: str | None = None,
+        finished_at: Any | None = None,
+    ) -> dict[str, Any] | None:
         cls.ensure_schema()
         safe_finished_at = cls._coerce_datetime(finished_at) or datetime.now()
         DbUtil.execute_sql(
@@ -287,11 +287,11 @@ class AgentRunService:
         cls,
         run_id: int,
         *,
-        error_summary: Optional[Any] = None,
-        trace_ref: Optional[str] = None,
-        finished_at: Optional[Any] = None,
+        error_summary: Any | None = None,
+        trace_ref: str | None = None,
+        finished_at: Any | None = None,
         status: str = "failed",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         cls.ensure_schema()
         safe_status = cls._validate_status(status)
         if safe_status not in {"failed", "cancelled"}:
@@ -323,8 +323,8 @@ class AgentRunService:
         cls,
         *,
         max_age_minutes: int = 60,
-        scene_prefix: Optional[str] = "watchlist_",
-        reason: Optional[Any] = None,
+        scene_prefix: str | None = "watchlist_",
+        reason: Any | None = None,
     ) -> int:
         cls.ensure_schema()
         safe_minutes = max(5, min(int(max_age_minutes or 60), 24 * 60))
@@ -333,7 +333,7 @@ class AgentRunService:
             "message": f"analysis-service startup cleanup cancelled queued/running runs older than {safe_minutes} minutes",
         }
         conditions = ["status IN (%s, %s)", "updated_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)"]
-        params: List[Any] = ["queued", "running", safe_minutes]
+        params: list[Any] = ["queued", "running", safe_minutes]
         if scene_prefix:
             conditions.append("scene LIKE %s")
             params.append(f"{str(scene_prefix)}%")
@@ -346,11 +346,13 @@ class AgentRunService:
                 updated_at = CURRENT_TIMESTAMP
             WHERE {' AND '.join(conditions)}
             """,
-            tuple([
-                "cancelled",
-                cls._serialize_summary(reason_payload, cls.MAX_ERROR_LENGTH),
-                *params,
-            ]),
+            tuple(
+                [
+                    "cancelled",
+                    cls._serialize_summary(reason_payload, cls.MAX_ERROR_LENGTH),
+                    *params,
+                ]
+            ),
         )
         return int(affected or 0)
 
@@ -361,17 +363,17 @@ class AgentRunService:
         run_id: int,
         step_name: str,
         status: str,
-        input_summary: Optional[Any] = None,
-        output_summary: Optional[Any] = None,
-        model_tier: Optional[str] = None,
-        handoff: Optional[str] = None,
-        latency_ms: Optional[Any] = None,
-        token_count: Optional[Any] = None,
-        cost_estimate: Optional[Any] = None,
-        prompt_trace_ref: Optional[str] = None,
-        error_summary: Optional[Any] = None,
-        started_at: Optional[Any] = None,
-        finished_at: Optional[Any] = None,
+        input_summary: Any | None = None,
+        output_summary: Any | None = None,
+        model_tier: str | None = None,
+        handoff: str | None = None,
+        latency_ms: Any | None = None,
+        token_count: Any | None = None,
+        cost_estimate: Any | None = None,
+        prompt_trace_ref: str | None = None,
+        error_summary: Any | None = None,
+        started_at: Any | None = None,
+        finished_at: Any | None = None,
     ) -> int:
         cls.ensure_schema()
         safe_status = cls._validate_status(status)
@@ -421,10 +423,10 @@ class AgentRunService:
         user_id: int,
         actor: str,
         action: str,
-        reason: Optional[Any] = None,
-        old_status: Optional[str] = None,
-        new_status: Optional[str] = None,
-        review_note: Optional[Any] = None,
+        reason: Any | None = None,
+        old_status: str | None = None,
+        new_status: str | None = None,
+        review_note: Any | None = None,
     ) -> int:
         cls.ensure_schema()
         safe_action = cls._validate_override_action(action)
@@ -461,7 +463,7 @@ class AgentRunService:
         return override_id
 
     @classmethod
-    def get_run(cls, run_id: int, use_primary: bool = False) -> Optional[Dict[str, Any]]:
+    def get_run(cls, run_id: int, use_primary: bool = False) -> dict[str, Any] | None:
         cls.ensure_schema()
         fetch_one = DbUtil.fetch_one_primary if use_primary else DbUtil.fetch_one
         fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
@@ -478,24 +480,30 @@ class AgentRunService:
         if not run_row:
             return None
 
-        step_rows = fetch_all(
-            f"""
+        step_rows = (
+            fetch_all(
+                f"""
             SELECT *
             FROM {cls.STEPS_TABLE}
             WHERE run_id = %s
             ORDER BY created_at ASC, step_id ASC
             """,
-            (int(run_id),),
-        ) or []
-        override_rows = fetch_all(
-            f"""
+                (int(run_id),),
+            )
+            or []
+        )
+        override_rows = (
+            fetch_all(
+                f"""
             SELECT *
             FROM {cls.OVERRIDES_TABLE}
             WHERE run_id = %s
             ORDER BY created_at ASC, override_id ASC
             """,
-            (int(run_id),),
-        ) or []
+                (int(run_id),),
+            )
+            or []
+        )
 
         data = cls._normalize_run_row(run_row)
         data["steps"] = [cls._normalize_step_row(row) for row in step_rows]
@@ -508,16 +516,16 @@ class AgentRunService:
         cls,
         *,
         limit: int = 20,
-        scene: Optional[str] = None,
-        user_id: Optional[int] = None,
-        status: Optional[str] = None,
+        scene: str | None = None,
+        user_id: int | None = None,
+        status: str | None = None,
         use_primary: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         cls.ensure_schema()
         fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
 
         if scene:
             conditions.append("scene = %s")
@@ -532,21 +540,28 @@ class AgentRunService:
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(max(1, min(int(limit or 20), 200)))
 
-        rows = fetch_all(
-            f"""
+        rows = (
+            fetch_all(
+                f"""
             SELECT *
             FROM {cls.RUNS_TABLE}
             {where_clause}
             ORDER BY created_at DESC, run_id DESC
             LIMIT %s
             """,
-            tuple(params),
-        ) or []
+                tuple(params),
+            )
+            or []
+        )
         if not rows:
             return []
 
         data = [cls._normalize_run_row(row) for row in rows]
-        run_ids = [int(item.get("runId") or item.get("run_id") or 0) for item in data if int(item.get("runId") or item.get("run_id") or 0) > 0]
+        run_ids = [
+            int(item.get("runId") or item.get("run_id") or 0)
+            for item in data
+            if int(item.get("runId") or item.get("run_id") or 0) > 0
+        ]
         overrides_by_run_id = cls._list_overrides_by_run_ids(run_ids, use_primary=use_primary)
         for item in data:
             run_id = int(item.get("runId") or item.get("run_id") or 0)
@@ -562,7 +577,7 @@ class AgentRunService:
         return safe_status
 
     @classmethod
-    def _validate_optional_status(cls, status: Optional[str]) -> Optional[str]:
+    def _validate_optional_status(cls, status: str | None) -> str | None:
         if status is None or str(status).strip() == "":
             return None
         return cls._validate_status(status)
@@ -575,7 +590,7 @@ class AgentRunService:
         return normalized
 
     @classmethod
-    def _validate_override_new_status(cls, action: str, status: Optional[str]) -> Optional[str]:
+    def _validate_override_new_status(cls, action: str, status: str | None) -> str | None:
         safe_status = cls._validate_optional_status(status)
         if safe_status is None:
             return None
@@ -585,7 +600,7 @@ class AgentRunService:
         return safe_status
 
     @classmethod
-    def _serialize_summary(cls, value: Optional[Any], max_length: int) -> Optional[str]:
+    def _serialize_summary(cls, value: Any | None, max_length: int) -> str | None:
         if value is None:
             return None
 
@@ -599,7 +614,7 @@ class AgentRunService:
     @classmethod
     def _redact_sensitive_data(cls, value: Any) -> Any:
         if isinstance(value, dict):
-            cleaned: Dict[str, Any] = {}
+            cleaned: dict[str, Any] = {}
             for key, item in value.items():
                 key_text = str(key)
                 if cls._is_sensitive_key(key_text):
@@ -641,7 +656,7 @@ class AgentRunService:
         return "[REDACTED]"
 
     @staticmethod
-    def _clean_text(value: Optional[Any], max_length: int) -> Optional[str]:
+    def _clean_text(value: Any | None, max_length: int) -> str | None:
         if value is None:
             return None
         text = str(value).strip()
@@ -654,7 +669,7 @@ class AgentRunService:
         return f"{text[:allowed]}{suffix}"
 
     @staticmethod
-    def _coerce_datetime(value: Optional[Any]) -> Optional[datetime]:
+    def _coerce_datetime(value: Any | None) -> datetime | None:
         if value is None or value == "":
             return None
         if isinstance(value, datetime):
@@ -671,19 +686,19 @@ class AgentRunService:
         raise ValueError(f"unsupported datetime value: {value}")
 
     @staticmethod
-    def _coerce_int(value: Optional[Any]) -> Optional[int]:
+    def _coerce_int(value: Any | None) -> int | None:
         if value is None or value == "":
             return None
         return int(value)
 
     @staticmethod
-    def _coerce_decimal(value: Optional[Any]) -> Optional[float]:
+    def _coerce_decimal(value: Any | None) -> float | None:
         if value is None or value == "":
             return None
         return float(value)
 
     @classmethod
-    def _normalize_run_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_run_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         run_id = int(row.get("run_id") or 0)
         scene = row.get("scene") or ""
         trigger_source = row.get("trigger_source") or ""
@@ -725,7 +740,7 @@ class AgentRunService:
         }
 
     @classmethod
-    def _normalize_step_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_step_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         step_id = int(row.get("step_id") or 0)
         run_id = int(row.get("run_id") or 0)
         step_name = row.get("step_name") or ""
@@ -779,7 +794,7 @@ class AgentRunService:
         }
 
     @classmethod
-    def _normalize_override_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_override_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         override_id = int(row.get("override_id") or 0)
         run_id = int(row.get("run_id") or 0)
         user_id = int(row.get("user_id") or 0)
@@ -814,27 +829,30 @@ class AgentRunService:
     @classmethod
     def _list_overrides_by_run_ids(
         cls,
-        run_ids: List[int],
+        run_ids: list[int],
         *,
         use_primary: bool = False,
-    ) -> Dict[int, List[Dict[str, Any]]]:
+    ) -> dict[int, list[dict[str, Any]]]:
         filtered_run_ids = [int(run_id) for run_id in run_ids if int(run_id) > 0]
         if not filtered_run_ids:
             return {}
 
         fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
         placeholders = ", ".join(["%s"] * len(filtered_run_ids))
-        rows = fetch_all(
-            f"""
+        rows = (
+            fetch_all(
+                f"""
             SELECT *
             FROM {cls.OVERRIDES_TABLE}
             WHERE run_id IN ({placeholders})
             ORDER BY created_at ASC, override_id ASC
             """,
-            tuple(filtered_run_ids),
-        ) or []
+                tuple(filtered_run_ids),
+            )
+            or []
+        )
 
-        grouped: Dict[int, List[Dict[str, Any]]] = {}
+        grouped: dict[int, list[dict[str, Any]]] = {}
         for row in rows:
             override = cls._normalize_override_row(row)
             run_id = int(override.get("runId") or override.get("run_id") or 0)
@@ -842,10 +860,12 @@ class AgentRunService:
         return grouped
 
     @classmethod
-    def _attach_review_state(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _attach_review_state(cls, data: dict[str, Any]) -> dict[str, Any]:
         overrides = data.get("overrides") if isinstance(data.get("overrides"), list) else []
         latest_override = overrides[-1] if overrides else None
-        review_action = str(latest_override.get("action") or "").strip().lower() if isinstance(latest_override, dict) else ""
+        review_action = (
+            str(latest_override.get("action") or "").strip().lower() if isinstance(latest_override, dict) else ""
+        )
         data["latestOverride"] = latest_override
         data["reviewAction"] = review_action or None
         data["reviewedAt"] = latest_override.get("createdAt") if isinstance(latest_override, dict) else None
@@ -853,7 +873,7 @@ class AgentRunService:
         return data
 
     @staticmethod
-    def _deserialize_summary(value: Optional[Any]) -> Optional[Any]:
+    def _deserialize_summary(value: Any | None) -> Any | None:
         if value is None:
             return None
         if not isinstance(value, str):
@@ -867,7 +887,7 @@ class AgentRunService:
             return text
 
     @staticmethod
-    def _format_datetime(value: Optional[Any]) -> Optional[str]:
+    def _format_datetime(value: Any | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, datetime):

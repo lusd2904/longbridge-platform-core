@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional
 
 from utils.DbUtil import DbUtil
 
@@ -46,23 +45,23 @@ class TradeAuditService:
         cls,
         *,
         user_id: int,
-        username: Optional[str],
+        username: str | None,
         account_id: int,
         broker_type: str,
         symbol: str,
         action: str,
         order_type: str,
         quantity: float,
-        request_price: Optional[float],
-        reference_price: Optional[float],
+        request_price: float | None,
+        reference_price: float | None,
         risk_level: str,
         risk_passed: bool,
         status: str,
         message: str,
-        order_id: Optional[str] = None,
-        request_id: Optional[str] = None,
-        client_ip: Optional[str] = None,
-        extra: Optional[Dict[str, object]] = None
+        order_id: str | None = None,
+        request_id: str | None = None,
+        client_ip: str | None = None,
+        extra: dict[str, object] | None = None,
     ) -> None:
         try:
             cls.ensure_schema()
@@ -93,23 +92,24 @@ class TradeAuditService:
                     (order_id or "")[:64] or None,
                     (request_id or "")[:64] or None,
                     (client_ip or "")[:64] or None,
-                    cls._to_json(extra)
-                )
+                    cls._to_json(extra),
+                ),
             )
         except Exception:
             return
 
     @classmethod
-    def list_recent(cls, limit: int = 120, user_id: Optional[int] = None) -> List[Dict[str, object]]:
+    def list_recent(cls, limit: int = 120, user_id: int | None = None) -> list[dict[str, object]]:
         cls.ensure_schema()
         where_clause = ""
-        params: List[object] = []
+        params: list[object] = []
         if user_id is not None:
             where_clause = "WHERE user_id = %s"
             params.append(int(user_id))
         params.append(max(10, min(int(limit or 120), 300)))
-        rows = DbUtil.fetch_all(
-            f"""
+        rows = (
+            DbUtil.fetch_all(
+                f"""
             SELECT id, user_id, username, account_id, broker_type, symbol, action, order_type,
                    quantity, request_price, reference_price, risk_level, risk_passed,
                    status, message, order_id, request_id, client_ip, created_at
@@ -118,8 +118,10 @@ class TradeAuditService:
             ORDER BY id DESC
             LIMIT %s
             """,
-            tuple(params)
-        ) or []
+                tuple(params),
+            )
+            or []
+        )
         return [
             {
                 "id": int(row.get("id") or 0),
@@ -132,7 +134,9 @@ class TradeAuditService:
                 "orderType": row.get("order_type") or "",
                 "quantity": float(row.get("quantity") or 0),
                 "requestPrice": float(row.get("request_price") or 0) if row.get("request_price") is not None else None,
-                "referencePrice": float(row.get("reference_price") or 0) if row.get("reference_price") is not None else None,
+                "referencePrice": float(row.get("reference_price") or 0)
+                if row.get("reference_price") is not None
+                else None,
                 "riskLevel": row.get("risk_level") or "",
                 "riskPassed": bool(row.get("risk_passed")),
                 "status": row.get("status") or "received",
@@ -140,13 +144,13 @@ class TradeAuditService:
                 "orderId": row.get("order_id") or None,
                 "requestId": row.get("request_id") or None,
                 "clientIp": row.get("client_ip") or None,
-                "createdAt": row.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else None
+                "createdAt": row.get("created_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("created_at") else None,
             }
             for row in rows
         ]
 
     @staticmethod
-    def _to_json(payload: Optional[Dict[str, object]]) -> Optional[str]:
+    def _to_json(payload: dict[str, object] | None) -> str | None:
         if not payload:
             return None
         return json.dumps(payload, ensure_ascii=False)

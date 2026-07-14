@@ -2,7 +2,13 @@
 量化策略引擎
 策略定义、回测、优化
 """
+
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Callable, Any
@@ -18,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class SignalType(Enum):
     """信号类型"""
+
     BUY = "buy"
     SELL = "sell"
     HOLD = "hold"
@@ -29,7 +36,7 @@ class StrategyType(Enum):
     MEAN_REVERSION = "mean_reversion"        # 均值回归
     MOMENTUM = "momentum"                    # 动量策略
     BREAKOUT = "breakout"                    # 突破策略
-    PAIRS_TRADING = "pairs_trading"          # 配令人交易
+    PAIRS_TRADING = "pairs_trading"          # 配对交易
     MULTI_FACTOR = "multi_factor"            # 多因子策略
     MID_LONG_TERM_VALUE = "mid_long_term_value"  # 中长线价值策略
 
@@ -37,28 +44,31 @@ class StrategyType(Enum):
 @dataclass
 class Signal:
     """交易信号"""
+
     type: SignalType
     symbol: str
     timestamp: datetime
     price: float
     confidence: float = 1.0
-    metadata: Dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
 class StrategyConfig:
     """策略配置"""
+
     name: str
     type: StrategyType
-    symbols: List[str]
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    risk_limits: Dict = field(default_factory=dict)
+    symbols: list[str]
+    parameters: dict[str, Any] = field(default_factory=dict)
+    risk_limits: dict = field(default_factory=dict)
     enabled: bool = True
 
 
 @dataclass
 class BacktestResult:
     """回测结果"""
+
     strategy_name: str
     start_date: datetime
     end_date: datetime
@@ -73,42 +83,37 @@ class BacktestResult:
     total_trades: int
     winning_trades: int
     losing_trades: int
-    equity_curve: List[Dict] = field(default_factory=list)
-    trades: List[Dict] = field(default_factory=list)
-    monthly_returns: Dict = field(default_factory=dict)
+    equity_curve: list[dict] = field(default_factory=list)
+    trades: list[dict] = field(default_factory=list)
+    monthly_returns: dict = field(default_factory=dict)
 
 
 class BaseStrategy:
     """策略基类"""
-    
+
     def __init__(self, config: StrategyConfig):
         self.config = config
-        self.signals: List[Signal] = []
-        self.positions: Dict[str, Dict] = {}
+        self.signals: list[Signal] = []
+        self.positions: dict[str, dict] = {}
         self.cash: float = 0
         self.equity: float = 0
-    
+
     def initialize(self, initial_capital: float):
         """初始化策略"""
         self.cash = initial_capital
         self.equity = initial_capital
         self.signals = []
         self.positions = {}
-    
-    def on_data(self, timestamp: datetime, data: Dict[str, pd.DataFrame]):
+
+    def on_data(self, timestamp: datetime, data: dict[str, pd.DataFrame]):
         """
         处理数据
         子类需要重写此方法
         """
         raise NotImplementedError
-    
+
     def generate_signal(
-        self,
-        symbol: str,
-        signal_type: SignalType,
-        price: float,
-        confidence: float = 1.0,
-        metadata: Dict = None
+        self, symbol: str, signal_type: SignalType, price: float, confidence: float = 1.0, metadata: dict = None
     ) -> Signal:
         """生成信号"""
         signal = Signal(
@@ -117,46 +122,46 @@ class BaseStrategy:
             timestamp=datetime.now(),
             price=price,
             confidence=confidence,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
         self.signals.append(signal)
         return signal
-    
-    def get_parameters(self) -> Dict:
+
+    def get_parameters(self) -> dict:
         """获取策略参数"""
         return self.config.parameters
-    
-    def set_parameters(self, parameters: Dict):
+
+    def set_parameters(self, parameters: dict):
         """设置策略参数"""
         self.config.parameters.update(parameters)
 
 
 class MovingAverageCrossStrategy(BaseStrategy):
     """移动平均线交叉策略"""
-    
+
     def __init__(self, config: StrategyConfig):
         super().__init__(config)
         self.fast_period = config.parameters.get("fast_period", 10)
         self.slow_period = config.parameters.get("slow_period", 30)
-        self.data_history: Dict[str, pd.DataFrame] = {}
-    
-    def on_data(self, timestamp: datetime, data: Dict[str, pd.DataFrame]):
+        self.data_history: dict[str, pd.DataFrame] = {}
+
+    def on_data(self, timestamp: datetime, data: dict[str, pd.DataFrame]):
         """处理数据并生成信号"""
         for symbol, df in data.items():
             if len(df) < self.slow_period:
                 continue
-            
+
             # 计算移动平均线
-            fast_ma = df['close'].rolling(window=self.fast_period).mean().iloc[-1]
-            slow_ma = df['close'].rolling(window=self.slow_period).mean().iloc[-1]
-            
+            fast_ma = df["close"].rolling(window=self.fast_period).mean().iloc[-1]
+            slow_ma = df["close"].rolling(window=self.slow_period).mean().iloc[-1]
+
             # 获取前一天的均线
             if len(df) > self.slow_period:
-                prev_fast_ma = df['close'].rolling(window=self.fast_period).mean().iloc[-2]
-                prev_slow_ma = df['close'].rolling(window=self.slow_period).mean().iloc[-2]
-                
-                current_price = df['close'].iloc[-1]
-                
+                prev_fast_ma = df["close"].rolling(window=self.fast_period).mean().iloc[-2]
+                prev_slow_ma = df["close"].rolling(window=self.slow_period).mean().iloc[-2]
+
+                current_price = df["close"].iloc[-1]
+
                 # 金叉：快线上穿慢线
                 if prev_fast_ma <= prev_slow_ma and fast_ma > slow_ma:
                     self.generate_signal(
@@ -164,13 +169,9 @@ class MovingAverageCrossStrategy(BaseStrategy):
                         signal_type=SignalType.BUY,
                         price=current_price,
                         confidence=0.8,
-                        metadata={
-                            "fast_ma": fast_ma,
-                            "slow_ma": slow_ma,
-                            "signal": "golden_cross"
-                        }
+                        metadata={"fast_ma": fast_ma, "slow_ma": slow_ma, "signal": "golden_cross"},
                     )
-                
+
                 # 死叉：快线下穿慢线
                 elif prev_fast_ma >= prev_slow_ma and fast_ma < slow_ma:
                     self.generate_signal(
@@ -178,39 +179,35 @@ class MovingAverageCrossStrategy(BaseStrategy):
                         signal_type=SignalType.SELL,
                         price=current_price,
                         confidence=0.8,
-                        metadata={
-                            "fast_ma": fast_ma,
-                            "slow_ma": slow_ma,
-                            "signal": "death_cross"
-                        }
+                        metadata={"fast_ma": fast_ma, "slow_ma": slow_ma, "signal": "death_cross"},
                     )
 
 
 class RSIStrategy(BaseStrategy):
     """RSI策略"""
-    
+
     def __init__(self, config: StrategyConfig):
         super().__init__(config)
         self.period = config.parameters.get("period", 14)
         self.overbought = config.parameters.get("overbought", 70)
         self.oversold = config.parameters.get("oversold", 30)
-    
-    def on_data(self, timestamp: datetime, data: Dict[str, pd.DataFrame]):
+
+    def on_data(self, timestamp: datetime, data: dict[str, pd.DataFrame]):
         """处理数据并生成信号"""
         for symbol, df in data.items():
             if len(df) < self.period:
                 continue
-            
+
             # 计算RSI
-            delta = df['close'].diff()
+            delta = df["close"].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=self.period).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=self.period).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
-            
+
             current_rsi = rsi.iloc[-1]
-            current_price = df['close'].iloc[-1]
-            
+            current_price = df["close"].iloc[-1]
+
             # 超卖买入
             if current_rsi < self.oversold:
                 self.generate_signal(
@@ -218,9 +215,9 @@ class RSIStrategy(BaseStrategy):
                     signal_type=SignalType.BUY,
                     price=current_price,
                     confidence=(self.oversold - current_rsi) / self.oversold,
-                    metadata={"rsi": current_rsi, "condition": "oversold"}
+                    metadata={"rsi": current_rsi, "condition": "oversold"},
                 )
-            
+
             # 超买卖出
             elif current_rsi > self.overbought:
                 self.generate_signal(
@@ -228,7 +225,7 @@ class RSIStrategy(BaseStrategy):
                     signal_type=SignalType.SELL,
                     price=current_price,
                     confidence=(current_rsi - self.overbought) / (100 - self.overbought),
-                    metadata={"rsi": current_rsi, "condition": "overbought"}
+                    metadata={"rsi": current_rsi, "condition": "overbought"},
                 )
 
 class MidLongTermValueStrategy(BaseStrategy):
@@ -336,107 +333,89 @@ class MidLongTermValueStrategy(BaseStrategy):
 
 class BacktestEngine:
     """回测引擎"""
-    
+
     def __init__(self):
         self.commission_rate = 0.001  # 手续费率 0.1%
-        self.slippage = 0.001         # 滑点 0.1%
-    
+        self.slippage = 0.001  # 滑点 0.1%
+
     def run_backtest(
         self,
         strategy: BaseStrategy,
-        data: Dict[str, pd.DataFrame],
+        data: dict[str, pd.DataFrame],
         start_date: datetime,
         end_date: datetime,
-        initial_capital: float = 100000.0
+        initial_capital: float = 100000.0,
     ) -> BacktestResult:
         """
         运行回测
-        
+
         Args:
             strategy: 策略实例
             data: 历史数据 {symbol: DataFrame}
             start_date: 开始日期
             end_date: 结束日期
             initial_capital: 初始资金
-        
+
         Returns:
             回测结果
         """
         logger.info(f"开始回测: {strategy.config.name}")
-        
+
         # 初始化策略
         strategy.initialize(initial_capital)
-        
+
         # 准备数据
         all_dates = self._get_trading_dates(data, start_date, end_date)
-        
+
         # 回测状态
-        positions: Dict[str, Dict] = {}
+        positions: dict[str, dict] = {}
         cash = initial_capital
         equity_curve = []
         trades = []
-        
+
         # 遍历每个交易日
         for date in all_dates:
             # 获取当日数据
             day_data = self._get_day_data(data, date)
             if not day_data:
                 continue
-            
+
             # 策略处理数据
             strategy.positions = positions
             strategy.on_data(date, day_data)
-            
+
             # 执行信号
             for signal in strategy.signals:
                 if signal.timestamp.date() == date.date():
-                    trade_result = self._execute_signal(
-                        signal, positions, cash, initial_capital
-                    )
+                    trade_result = self._execute_signal(signal, positions, cash, initial_capital)
                     if trade_result:
                         trades.append(trade_result)
                         cash = trade_result["remaining_cash"]
-            
+
             # 计算当日权益
             equity = self._calculate_equity(cash, positions, day_data)
-            equity_curve.append({
-                "date": date.isoformat(),
-                "equity": equity,
-                "cash": cash
-            })
-        
+            equity_curve.append({"date": date.isoformat(), "equity": equity, "cash": cash})
+
         # 计算回测指标
         result = self._calculate_metrics(
-            strategy.config.name,
-            start_date,
-            end_date,
-            initial_capital,
-            equity_curve,
-            trades
+            strategy.config.name, start_date, end_date, initial_capital, equity_curve, trades
         )
-        
+
         logger.info(f"回测完成: 总收益 {result.total_return:.2%}")
-        
+
         return result
-    
+
     def _get_trading_dates(
-        self,
-        data: Dict[str, pd.DataFrame],
-        start_date: datetime,
-        end_date: datetime
-    ) -> List[datetime]:
+        self, data: dict[str, pd.DataFrame], start_date: datetime, end_date: datetime
+    ) -> list[datetime]:
         """获取交易日列表"""
         dates = set()
         for df in data.values():
             mask = (df.index >= start_date) & (df.index <= end_date)
             dates.update(df.index[mask].tolist())
         return sorted(list(dates))
-    
-    def _get_day_data(
-        self,
-        data: Dict[str, pd.DataFrame],
-        date: datetime
-    ) -> Dict[str, pd.DataFrame]:
+
+    def _get_day_data(self, data: dict[str, pd.DataFrame], date: datetime) -> dict[str, pd.DataFrame]:
         """获取某日数据"""
         result = {}
         for symbol, df in data.items():
@@ -444,7 +423,6 @@ class BacktestEngine:
             if len(day_df) > 0:
                 result[symbol] = day_df
         return result
-    
     def _execute_signal(
         self,
         signal: Signal,
@@ -473,27 +451,26 @@ class BacktestEngine:
             # 降级方案：固定使用 10% 资金
             position_size = total_capital * 0.1
             quantity = int(position_size / price)
-        
         if quantity <= 0:
             return None
-        
+
         if signal.type == SignalType.BUY:
             cost = quantity * price * (1 + self.commission_rate)
             if cost > cash:
                 return None
-            
+
             # 更新持仓
             if symbol not in positions:
                 positions[symbol] = {"quantity": 0, "cost_basis": 0}
-            
+
             old_qty = positions[symbol]["quantity"]
             old_cost = positions[symbol]["cost_basis"]
             new_qty = old_qty + quantity
             new_cost = (old_cost * old_qty + cost) / new_qty if new_qty > 0 else 0
-            
+
             positions[symbol]["quantity"] = new_qty
             positions[symbol]["cost_basis"] = new_cost
-            
+
             return {
                 "symbol": symbol,
                 "action": "buy",
@@ -501,20 +478,20 @@ class BacktestEngine:
                 "price": price,
                 "cost": cost,
                 "timestamp": signal.timestamp.isoformat(),
-                "remaining_cash": cash - cost
+                "remaining_cash": cash - cost,
             }
-        
+
         elif signal.type == SignalType.SELL:
             if symbol not in positions or positions[symbol]["quantity"] < quantity:
                 return None
-            
+
             proceeds = quantity * price * (1 - self.commission_rate)
-            
+
             # 更新持仓
             positions[symbol]["quantity"] -= quantity
             if positions[symbol]["quantity"] == 0:
                 del positions[symbol]
-            
+
             return {
                 "symbol": symbol,
                 "action": "sell",
@@ -522,33 +499,28 @@ class BacktestEngine:
                 "price": price,
                 "proceeds": proceeds,
                 "timestamp": signal.timestamp.isoformat(),
-                "remaining_cash": cash + proceeds
+                "remaining_cash": cash + proceeds,
             }
-        
+
         return None
-    
-    def _calculate_equity(
-        self,
-        cash: float,
-        positions: Dict,
-        data: Dict[str, pd.DataFrame]
-    ) -> float:
+
+    def _calculate_equity(self, cash: float, positions: dict, data: dict[str, pd.DataFrame]) -> float:
         """计算总权益"""
         equity = cash
         for symbol, pos in positions.items():
             if symbol in data and len(data[symbol]) > 0:
-                current_price = data[symbol]['close'].iloc[-1]
+                current_price = data[symbol]["close"].iloc[-1]
                 equity += pos["quantity"] * current_price
         return equity
-    
+
     def _calculate_metrics(
         self,
         strategy_name: str,
         start_date: datetime,
         end_date: datetime,
         initial_capital: float,
-        equity_curve: List[Dict],
-        trades: List[Dict]
+        equity_curve: list[dict],
+        trades: list[dict],
     ) -> BacktestResult:
         """计算回测指标"""
         if not equity_curve:
@@ -566,38 +538,40 @@ class BacktestEngine:
                 profit_factor=0,
                 total_trades=0,
                 winning_trades=0,
-                losing_trades=0
+                losing_trades=0,
             )
-        
+
         final_capital = equity_curve[-1]["equity"]
         total_return = (final_capital - initial_capital) / initial_capital
-        
+
         # 计算年化收益
         days = (end_date - start_date).days
         years = days / 365
         annual_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
-        
+
         # 计算最大回撤
         max_drawdown = self._calculate_max_drawdown(equity_curve)
-        
+
         # 计算夏普比率（简化）
         returns = []
         for i in range(1, len(equity_curve)):
-            daily_return = (equity_curve[i]["equity"] - equity_curve[i-1]["equity"]) / equity_curve[i-1]["equity"]
+            daily_return = (equity_curve[i]["equity"] - equity_curve[i - 1]["equity"]) / equity_curve[i - 1]["equity"]
             returns.append(daily_return)
-        
-        sharpe_ratio = np.mean(returns) / np.std(returns) * np.sqrt(252) if len(returns) > 1 and np.std(returns) > 0 else 0
-        
+
+        sharpe_ratio = (
+            np.mean(returns) / np.std(returns) * np.sqrt(252) if len(returns) > 1 and np.std(returns) > 0 else 0
+        )
+
         # 计算胜率
         winning_trades = sum(1 for t in trades if t.get("pnl", 0) > 0)
         total_trades = len(trades)
         win_rate = winning_trades / total_trades if total_trades > 0 else 0
-        
+
         # 计算盈亏比
         gross_profit = sum(t.get("pnl", 0) for t in trades if t.get("pnl", 0) > 0)
         gross_loss = abs(sum(t.get("pnl", 0) for t in trades if t.get("pnl", 0) < 0))
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-        
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+
         return BacktestResult(
             strategy_name=strategy_name,
             start_date=start_date,
@@ -614,21 +588,21 @@ class BacktestEngine:
             winning_trades=winning_trades,
             losing_trades=total_trades - winning_trades,
             equity_curve=equity_curve,
-            trades=trades
+            trades=trades,
         )
-    
-    def _calculate_max_drawdown(self, equity_curve: List[Dict]) -> float:
+
+    def _calculate_max_drawdown(self, equity_curve: list[dict]) -> float:
         """计算最大回撤"""
         peak = equity_curve[0]["equity"]
         max_dd = 0
-        
+
         for point in equity_curve:
             equity = point["equity"]
             if equity > peak:
                 peak = equity
             dd = (peak - equity) / peak
             max_dd = max(max_dd, dd)
-        
+
         return max_dd
 
 

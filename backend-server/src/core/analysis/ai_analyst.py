@@ -1,6 +1,5 @@
-import time
 import threading
-from typing import Dict, List, Optional
+import time
 
 import requests
 
@@ -10,12 +9,12 @@ from utils.MonitorLink import MonitorLink
 
 class AIAnalyst:
     _nvidia_rate_lock = threading.Lock()
-    _nvidia_call_times: List[float] = []
+    _nvidia_call_times: list[float] = []
     _provider_cooldown_lock = threading.Lock()
-    _provider_failures: Dict[str, Dict[str, object]] = {}
-    _provider_inflight: Dict[str, float] = {}
-    _ollama_models_cache: Dict[str, object] = {"at": 0.0, "models": []}
-    OFFICIAL_CLOUD_MODEL_IDS: List[str] = [
+    _provider_failures: dict[str, dict[str, object]] = {}
+    _provider_inflight: dict[str, float] = {}
+    _ollama_models_cache: dict[str, object] = {"at": 0.0, "models": []}
+    OFFICIAL_CLOUD_MODEL_IDS: list[str] = [
         "gpt-5.5",
         "gpt-5.4",
         "openai/gpt-oss-120b",
@@ -31,7 +30,7 @@ class AIAnalyst:
         "minimaxai/minimax-m2.1",
         "z-ai/glm4.7",
     ]
-    MODEL_ID_ALIASES: Dict[str, str] = {
+    MODEL_ID_ALIASES: dict[str, str] = {
         "coordinator-agent/openai/gpt-oss-120b": "openai/gpt-oss-120b",
         "coordinator-agent/openai/gpt-oss-20b": "openai/gpt-oss-20b",
         "coordinator-agent/nvidia/nemotron-3-super-120b-a12b": "nvidia/nemotron-3-super-120b-a12b",
@@ -48,7 +47,7 @@ class AIAnalyst:
         "coordinator-agent/minimaxai/minimax-m2.1": "minimaxai/minimax-m2.1",
         "coordinator-agent/z-ai/glm4.7": "z-ai/glm4.7",
     }
-    CONFIG_MODEL_FIELDS: List[str] = [
+    CONFIG_MODEL_FIELDS: list[str] = [
         "ai_model",
         "ai_model_scan_pulse",
         "ai_model_scan_fast",
@@ -59,163 +58,163 @@ class AIAnalyst:
         "ai_model_recommend_summary",
         "ai_model_vision",
     ]
-    MODEL_CATALOG: Dict[str, Dict[str, object]] = {
+    MODEL_CATALOG: dict[str, dict[str, object]] = {
         "gpt-5.5": {
             "alias": "gpt-5.5",
             "provider": "sub2api",
             "latency": "medium",
-            "best_for": ["复杂投研", "交易终审", "高质量总结"]
+            "best_for": ["复杂投研", "交易终审", "高质量总结"],
         },
         "gpt-5.4": {
             "alias": "gpt-5.4",
             "provider": "sub2api",
             "latency": "fast",
-            "best_for": ["快速扫描", "风险筛查", "批量摘要"]
+            "best_for": ["快速扫描", "风险筛查", "批量摘要"],
         },
         "coordinator-agent/openai/gpt-oss-120b": {
             "alias": "gpt-oss-120b",
             "provider": "openai",
             "latency": "medium",
-            "best_for": ["复杂推理", "长文总结", "高质量终审"]
+            "best_for": ["复杂推理", "长文总结", "高质量终审"],
         },
         "openai/gpt-oss-120b": {
             "alias": "gpt-oss-120b",
             "provider": "openai",
             "latency": "medium",
-            "best_for": ["复杂推理", "长文总结", "高质量终审"]
+            "best_for": ["复杂推理", "长文总结", "高质量终审"],
         },
         "coordinator-agent/openai/gpt-oss-20b": {
             "alias": "gpt-oss-20b",
             "provider": "openai",
             "latency": "fast",
-            "best_for": ["快速扫描", "短摘要", "低时延问答"]
+            "best_for": ["快速扫描", "短摘要", "低时延问答"],
         },
         "openai/gpt-oss-20b": {
             "alias": "gpt-oss-20b",
             "provider": "openai",
             "latency": "fast",
-            "best_for": ["快速扫描", "短摘要", "低时延问答"]
+            "best_for": ["快速扫描", "短摘要", "低时延问答"],
         },
         "coordinator-agent/nvidia/nemotron-3-super-120b-a12b": {
             "alias": "nemotron-3-super",
             "provider": "nvidia",
             "latency": "medium",
-            "best_for": ["综合分析", "交易终审", "大盘联动判断"]
+            "best_for": ["综合分析", "交易终审", "大盘联动判断"],
         },
         "coordinator-agent/nvidia/nemotron-nano-12b-v2-vl": {
             "alias": "nemotron-nano-12b-vl",
             "provider": "nvidia",
             "latency": "fast",
-            "best_for": ["轻量视觉理解", "截图识别", "快速图像问答"]
+            "best_for": ["轻量视觉理解", "截图识别", "快速图像问答"],
         },
         "nvidia/nemotron-nano-12b-v2-vl": {
             "alias": "nemotron-nano-12b-vl",
             "provider": "nvidia",
             "latency": "fast",
-            "best_for": ["官方 NIM 视觉", "快速图像问答"]
+            "best_for": ["官方 NIM 视觉", "快速图像问答"],
         },
         "coordinator-agent/nvidia/llama-3.1-nemotron-nano-vl-8b-v1": {
             "alias": "nemotron-nano-8b-vl",
             "provider": "nvidia",
             "latency": "fast",
-            "best_for": ["低成本视觉", "轻量多模态"]
+            "best_for": ["低成本视觉", "轻量多模态"],
         },
         "nvidia/llama-3.1-nemotron-nano-vl-8b-v1": {
             "alias": "nemotron-nano-8b-vl",
             "provider": "nvidia",
             "latency": "fast",
-            "best_for": ["官方 NIM 视觉", "轻量多模态"]
+            "best_for": ["官方 NIM 视觉", "轻量多模态"],
         },
         "coordinator-agent/nvidia/llama-3.1-nemotron-ultra-253b-v1": {
             "alias": "nemotron-ultra-253b",
             "provider": "nvidia",
             "latency": "slow",
-            "best_for": ["深度研究", "复杂投研"]
+            "best_for": ["深度研究", "复杂投研"],
         },
         "coordinator-agent/deepseek-ai/deepseek-r1-distill-llama-8b": {
             "alias": "deepseek-r1-8b",
             "provider": "deepseek",
             "latency": "fast",
-            "best_for": ["快评推荐", "结构化结论", "低延迟分析"]
+            "best_for": ["快评推荐", "结构化结论", "低延迟分析"],
         },
         "deepseek-ai/deepseek-r1-distill-llama-8b": {
             "alias": "deepseek-r1-8b",
             "provider": "deepseek",
             "latency": "fast",
-            "best_for": ["快评推荐", "结构化结论", "低延迟分析"]
+            "best_for": ["快评推荐", "结构化结论", "低延迟分析"],
         },
         "coordinator-agent/qwen/qwen3.5-397b-a17b": {
             "alias": "qwen3.5-397b",
             "provider": "qwen",
             "latency": "slow",
-            "best_for": ["复杂总结", "高容量上下文"]
+            "best_for": ["复杂总结", "高容量上下文"],
         },
         "qwen/qwen3.5-397b-a17b": {
             "alias": "qwen3.5-397b",
             "provider": "qwen",
             "latency": "slow",
-            "best_for": ["复杂总结", "高容量上下文"]
+            "best_for": ["复杂总结", "高容量上下文"],
         },
         "coordinator-agent/meta/llama-3.2-90b-vision-instruct": {
             "alias": "llama-3.2-90b-vision",
             "provider": "meta",
             "latency": "medium",
-            "best_for": ["图像理解", "视觉终审", "多模态洞察"]
+            "best_for": ["图像理解", "视觉终审", "多模态洞察"],
         },
         "meta/llama-3.2-90b-vision-instruct": {
             "alias": "llama-3.2-90b-vision",
             "provider": "meta",
             "latency": "medium",
-            "best_for": ["图像理解", "视觉终审", "多模态洞察"]
+            "best_for": ["图像理解", "视觉终审", "多模态洞察"],
         },
         "coordinator-agent/minimaxai/minimax-m2.5": {
             "alias": "minimax-m2.5",
             "provider": "minimax",
             "latency": "medium",
-            "best_for": ["综合助手", "自然语言润色"]
+            "best_for": ["综合助手", "自然语言润色"],
         },
         "minimaxai/minimax-m2.5": {
             "alias": "minimax-m2.5",
             "provider": "minimax",
             "latency": "medium",
-            "best_for": ["综合助手", "自然语言润色"]
+            "best_for": ["综合助手", "自然语言润色"],
         },
         "coordinator-agent/minimaxai/minimax-m2.1": {
             "alias": "minimax-m2.1",
             "provider": "minimax",
             "latency": "fast",
-            "best_for": ["快速问答", "轻量总结"]
+            "best_for": ["快速问答", "轻量总结"],
         },
         "minimaxai/minimax-m2.1": {
             "alias": "minimax-m2.1",
             "provider": "minimax",
             "latency": "fast",
-            "best_for": ["快速问答", "轻量总结"]
+            "best_for": ["快速问答", "轻量总结"],
         },
         "coordinator-agent/z-ai/glm4.7": {
             "alias": "glm4.7",
             "provider": "z-ai",
             "latency": "medium",
-            "best_for": ["中文表达", "中英文混合分析"]
+            "best_for": ["中文表达", "中英文混合分析"],
         },
         "z-ai/glm4.7": {
             "alias": "glm4.7",
             "provider": "z-ai",
             "latency": "medium",
-            "best_for": ["中文表达", "中英文混合分析"]
+            "best_for": ["中文表达", "中英文混合分析"],
         },
         "nvidia/nemotron-3-super-120b-a12b": {
             "alias": "nemotron-3-super",
             "provider": "nvidia",
             "latency": "medium",
-            "best_for": ["兼容兜底", "旧配置回退"]
+            "best_for": ["兼容兜底", "旧配置回退"],
         },
         "gemma3:12b": {
             "alias": "gemma3-12b",
             "provider": "ollama",
             "latency": "fast",
-            "best_for": ["本地低延迟", "脉冲扫描", "云端兜底"]
-        }
+            "best_for": ["本地低延迟", "脉冲扫描", "云端兜底"],
+        },
     }
 
     TASK_MODEL_KEYS = {
@@ -228,7 +227,7 @@ class AIAnalyst:
         "recommend_summary": "AI_MODEL_RECOMMEND_SUMMARY",
         "vision": "AI_MODEL_VISION",
         "assistant": ("AI_MODEL_ASSISTANT", "AI_MODEL"),
-        "general": "AI_MODEL"
+        "general": "AI_MODEL",
     }
 
     DEFAULT_MODEL = "gpt-5.5"
@@ -242,7 +241,7 @@ class AIAnalyst:
         "recommend_summary": "gpt-5.5",
         "vision": "gpt-5.4",
         "assistant": "gpt-5.5",
-        "general": "gpt-5.5"
+        "general": "gpt-5.5",
     }
 
     SCAN_TASKS = {"scan_pulse", "scan_fast", "scan_risk", "scan_final"}
@@ -252,34 +251,37 @@ class AIAnalyst:
 
     @staticmethod
     def _is_timeout_error_message(message: str) -> bool:
-        normalized = str(message or '').strip().lower()
-        return any(marker in normalized for marker in [
-            'gateway timeout',
-            'timed out',
-            'read timed out',
-            'connection refused',
-            'connection aborted',
-            'connection reset',
-            'max retries exceeded',
-            'failed to establish a new connection',
-            'service unavailable',
-            '504',
-            '503',
-            'sub2api',
-            '超时',
-            '拒绝连接'
-        ])
+        normalized = str(message or "").strip().lower()
+        return any(
+            marker in normalized
+            for marker in [
+                "gateway timeout",
+                "timed out",
+                "read timed out",
+                "connection refused",
+                "connection aborted",
+                "connection reset",
+                "max retries exceeded",
+                "failed to establish a new connection",
+                "service unavailable",
+                "504",
+                "503",
+                "sub2api",
+                "超时",
+                "拒绝连接",
+            ]
+        )
 
     @classmethod
     def _build_business_error(cls, detail: str) -> str:
-        detail_text = str(detail or '').strip()
+        detail_text = str(detail or "").strip()
         if cls._is_timeout_error_message(detail_text):
             return "AI研判服务超时，请稍后重试"
         return detail_text or "AI研判服务暂时不可用，请稍后重试"
 
     @classmethod
     def _provider_cooldown_seconds(cls, user_id: int = 1) -> int:
-        raw_value = AppConfig.get('AI_PROVIDER_COOLDOWN_SECONDS', user_id=user_id, default=90)
+        raw_value = AppConfig.get("AI_PROVIDER_COOLDOWN_SECONDS", user_id=user_id, default=90)
         try:
             return max(0, int(raw_value or 0))
         except (TypeError, ValueError):
@@ -287,7 +289,7 @@ class AIAnalyst:
 
     @classmethod
     def _provider_failure_threshold(cls, user_id: int = 1) -> int:
-        raw_value = AppConfig.get('AI_PROVIDER_COOLDOWN_FAILURES', user_id=user_id, default=1)
+        raw_value = AppConfig.get("AI_PROVIDER_COOLDOWN_FAILURES", user_id=user_id, default=1)
         try:
             return max(1, int(raw_value or 1))
         except (TypeError, ValueError):
@@ -303,7 +305,7 @@ class AIAnalyst:
 
     @classmethod
     def _provider_inflight_ttl_seconds(cls, user_id: int = 1) -> int:
-        raw_value = AppConfig.get('AI_PROVIDER_INFLIGHT_TTL_SECONDS', user_id=user_id, default=150)
+        raw_value = AppConfig.get("AI_PROVIDER_INFLIGHT_TTL_SECONDS", user_id=user_id, default=150)
         try:
             return max(15, int(raw_value or 150))
         except (TypeError, ValueError):
@@ -379,8 +381,8 @@ class AIAnalyst:
             )
 
     @classmethod
-    def _safe_scan_fallback(cls, task: str) -> Optional[str]:
-        if task == 'scan_pulse':
+    def _safe_scan_fallback(cls, task: str) -> str | None:
+        if task == "scan_pulse":
             return (
                 "趋势判断: 服务超时，沿用指标快照\n"
                 "指标共振: 已切换到本地指标判断\n"
@@ -389,7 +391,7 @@ class AIAnalyst:
                 "一句结论: AI 服务超时，先展示降级研判结果。\n"
                 "建议标签: HOLD"
             )
-        if task == 'scan_risk':
+        if task == "scan_risk":
             return (
                 "情绪温度: 中性\n"
                 "资金流与波动: 使用本地快照继续评估\n"
@@ -399,7 +401,7 @@ class AIAnalyst:
                 "一句结论: 风险层已降级为本地风控结论。\n"
                 "建议标签: HOLD"
             )
-        if task == 'scan_final':
+        if task == "scan_final":
             return (
                 "趋势判断: 当前以本地快照继续输出\n"
                 "关键指标: 待 AI 服务恢复后复核细节\n"
@@ -416,68 +418,39 @@ class AIAnalyst:
                 "详细理由: AI研判服务超时，系统已切换为本地降级结果，请稍后重试。"
             )
         return None
+
     TASK_FALLBACK_MODELS = {
-        "scan_pulse": [
-            "gpt-5.4",
-            "gpt-5.5"
-        ],
-        "scan_fast": [
-            "gpt-5.4",
-            "gpt-5.5"
-        ],
-        "scan_risk": [
-            "gpt-5.4",
-            "gpt-5.5"
-        ],
-        "scan_final": [
-            "gpt-5.5",
-            "gpt-5.4"
-        ],
-        "trend_batch": [
-            "gpt-5.4",
-            "gpt-5.5"
-        ],
-        "recommend_brief": [
-            "gpt-5.4",
-            "gpt-5.5"
-        ],
-        "recommend_summary": [
-            "gpt-5.5",
-            "gpt-5.4"
-        ],
-        "vision": [
-            "gpt-5.4",
-            "gpt-5.5"
-        ],
-        "assistant": [
-            "gpt-5.5",
-            "gpt-5.4"
-        ],
-        "general": [
-            "gpt-5.5",
-            "gpt-5.4"
-        ]
+        "scan_pulse": ["gpt-5.4", "gpt-5.5"],
+        "scan_fast": ["gpt-5.4", "gpt-5.5"],
+        "scan_risk": ["gpt-5.4", "gpt-5.5"],
+        "scan_final": ["gpt-5.5", "gpt-5.4"],
+        "trend_batch": ["gpt-5.4", "gpt-5.5"],
+        "recommend_brief": ["gpt-5.4", "gpt-5.5"],
+        "recommend_summary": ["gpt-5.5", "gpt-5.4"],
+        "vision": ["gpt-5.4", "gpt-5.5"],
+        "assistant": ["gpt-5.5", "gpt-5.4"],
+        "general": ["gpt-5.5", "gpt-5.4"],
     }
 
     @classmethod
     def _uses_official_nvidia_catalog(cls, user_id: int = 1) -> bool:
-        legacy_url = (AppConfig.get('AI_URL', user_id=user_id, default='') or '').strip().lower()
-        base_url = (AppConfig.get('AI_BASE_URL', user_id=user_id, default='') or '').strip().lower()
-        return 'integrate.api.nvidia.com' in legacy_url or 'integrate.api.nvidia.com' in base_url
+        legacy_url = (AppConfig.get("AI_URL", user_id=user_id, default="") or "").strip().lower()
+        base_url = (AppConfig.get("AI_BASE_URL", user_id=user_id, default="") or "").strip().lower()
+        return "integrate.api.nvidia.com" in legacy_url or "integrate.api.nvidia.com" in base_url
 
     @classmethod
     def _canonical_cloud_model_id(cls, model_id: str) -> str:
-        normalized = str(model_id or '').strip()
+        normalized = str(model_id or "").strip()
         if not normalized:
-            return ''
+            return ""
         if normalized in cls.MODEL_ID_ALIASES:
             return cls.MODEL_ID_ALIASES[normalized]
-        if normalized.startswith('coordinator-agent/'):
-            normalized = normalized.replace('coordinator-agent/', '', 1)
+        if normalized.startswith("coordinator-agent/"):
+            normalized = normalized.replace("coordinator-agent/", "", 1)
         return cls.MODEL_ID_ALIASES.get(normalized, normalized)
 
     @classmethod
-    def normalize_ai_config_map(cls, config_map: Dict[str, object]) -> Dict[str, object]:
+    def normalize_ai_config_map(cls, config_map: dict[str, object]) -> dict[str, object]:
         payload = dict(config_map or {})
         normalized = dict(payload)
         for field in cls.CONFIG_MODEL_FIELDS:
@@ -485,18 +458,22 @@ class AIAnalyst:
             if raw_value:
                 normalized[field] = cls._canonical_cloud_model_id(str(raw_value))
 
-        base_url = str(payload.get('ai_base_url') or '').strip().rstrip('/')
-        ai_url = str(payload.get('ai_url') or '').strip()
-        if base_url and ('integrate.api.nvidia.com' in base_url.lower() or 'sub2api' in base_url.lower()):
-            normalized['ai_base_url'] = base_url
-            normalized['ai_url'] = f"{base_url}/chat/completions"
-            normalized['ai_api_style'] = 'openai-chat-completions'
-        elif ai_url and 'integrate.api.nvidia.com' in ai_url.lower():
-            normalized['ai_url'] = ai_url.replace('/completions', '/chat/completions') if ai_url.endswith('/completions') and not ai_url.endswith('/chat/completions') else ai_url
+        base_url = str(payload.get("ai_base_url") or "").strip().rstrip("/")
+        ai_url = str(payload.get("ai_url") or "").strip()
+        if base_url and ("integrate.api.nvidia.com" in base_url.lower() or "sub2api" in base_url.lower()):
+            normalized["ai_base_url"] = base_url
+            normalized["ai_url"] = f"{base_url}/chat/completions"
+            normalized["ai_api_style"] = "openai-chat-completions"
+        elif ai_url and "integrate.api.nvidia.com" in ai_url.lower():
+            normalized["ai_url"] = (
+                ai_url.replace("/completions", "/chat/completions")
+                if ai_url.endswith("/completions") and not ai_url.endswith("/chat/completions")
+                else ai_url
+            )
         return normalized
 
     @classmethod
-    def migrate_user_ai_settings(cls, user_id: int = 1) -> Dict[str, object]:
+    def migrate_user_ai_settings(cls, user_id: int = 1) -> dict[str, object]:
         current = AppConfig.get_all(user_id)
         normalized = cls.normalize_ai_config_map(current)
         changed = {}
@@ -504,64 +481,60 @@ class AIAnalyst:
             if current.get(key) != value:
                 AppConfig.set(key.upper(), value, user_id=user_id, description=f"自动迁移 {key}")
                 changed[key] = value
-        return {
-            "changed": changed,
-            "changedCount": len(changed),
-            "configs": {**current, **normalized}
-        }
+        return {"changed": changed, "changedCount": len(changed), "configs": {**current, **normalized}}
 
     @staticmethod
-    def _normalize_provider(provider: Optional[str]) -> str:
-        normalized = str(provider or '').strip().lower()
-        if normalized in {'ollama', 'local'}:
-            return 'ollama'
-        if normalized in {'nvidia', 'openai', 'sub2api', 'openai-compatible', 'openai_chat'}:
-            return 'nvidia'
-        if normalized in {'hybrid'}:
+    def _normalize_provider(provider: str | None) -> str:
+        normalized = str(provider or "").strip().lower()
+        if normalized in {"ollama", "local"}:
+            return "ollama"
+        if normalized in {"nvidia", "openai", "sub2api", "openai-compatible", "openai_chat"}:
+            return "nvidia"
+        if normalized in {"hybrid"}:
             return normalized
-        return ''
+        return ""
 
     @classmethod
     def _provider(cls, user_id: int = 1) -> str:
-        provider = cls._normalize_provider(AppConfig.get('AI_PROVIDER', user_id=user_id, default=''))
+        provider = cls._normalize_provider(AppConfig.get("AI_PROVIDER", user_id=user_id, default=""))
         if provider:
             return provider
 
-        url = (AppConfig.get('AI_URL', user_id=user_id, default='') or '').strip().lower()
-        base_url = (AppConfig.get('AI_BASE_URL', user_id=user_id, default='') or '').strip().lower()
-        if any(marker in url or marker in base_url for marker in ('integrate.api.nvidia.com', 'sub2api', '/v1')):
-            return 'nvidia'
-        return 'ollama'
+        url = (AppConfig.get("AI_URL", user_id=user_id, default="") or "").strip().lower()
+        base_url = (AppConfig.get("AI_BASE_URL", user_id=user_id, default="") or "").strip().lower()
+        if any(marker in url or marker in base_url for marker in ("integrate.api.nvidia.com", "sub2api", "/v1")):
+            return "nvidia"
+        return "ollama"
 
     @classmethod
     def _fallback_provider(cls, user_id: int = 1) -> str:
-        configured = cls._normalize_provider(AppConfig.get('AI_FALLBACK_PROVIDER', user_id=user_id, default=''))
+        configured = cls._normalize_provider(AppConfig.get("AI_FALLBACK_PROVIDER", user_id=user_id, default=""))
         if configured:
             return configured
 
         primary = cls._provider(user_id=user_id)
-        return 'ollama' if primary == 'nvidia' and cls._fallback_enabled(user_id=user_id) else ''
+        return "ollama" if primary == "nvidia" and cls._fallback_enabled(user_id=user_id) else ""
 
     @staticmethod
     def _fallback_enabled(user_id: int = 1) -> bool:
-        raw = AppConfig.get('AI_FALLBACK_PROVIDER', user_id=user_id, default='')
-        return bool(str(raw or '').strip())
+        raw = AppConfig.get("AI_FALLBACK_PROVIDER", user_id=user_id, default="")
+        return bool(str(raw or "").strip())
 
     @staticmethod
     def _local_url(user_id: int = 1) -> str:
         return (
-            AppConfig.get('AI_LOCAL_URL', user_id=user_id, default='') or
-            AppConfig.get('AI_URL', user_id=user_id, default='') or
-            'http://127.0.0.1:11434/api/generate'
+            AppConfig.get("AI_LOCAL_URL", user_id=user_id, default="")
+            or AppConfig.get("AI_URL", user_id=user_id, default="")
+            or "http://127.0.0.1:11434/api/generate"
         ).strip()
 
     @staticmethod
     def _preferred_local_model(user_id: int = 1) -> str:
-        configured = (AppConfig.get('AI_LOCAL_MODEL', user_id=user_id, default='') or '').strip()
-        return configured or 'gemma3:12b'
+        configured = (AppConfig.get("AI_LOCAL_MODEL", user_id=user_id, default="") or "").strip()
+        return configured or "gemma3:12b"
 
     @classmethod
-    def _available_local_models(cls, user_id: int = 1) -> List[str]:
+    def _available_local_models(cls, user_id: int = 1) -> list[str]:
         now = time.time()
         cached_models = cls._ollama_models_cache.get("models") or []
         if cached_models and (now - float(cls._ollama_models_cache.get("at") or 0)) < 60:
@@ -570,16 +543,13 @@ class AIAnalyst:
         try:
             session = requests.Session()
             session.trust_env = False
-            response = session.get(
-                cls._local_url(user_id=user_id).replace('/api/generate', '/api/tags'),
-                timeout=3
-            )
+            response = session.get(cls._local_url(user_id=user_id).replace("/api/generate", "/api/tags"), timeout=3)
             if response.status_code == 200:
                 payload = response.json() or {}
                 models = [
-                    (item.get('model') or item.get('name') or '').strip()
-                    for item in payload.get('models', [])
-                    if (item.get('model') or item.get('name'))
+                    (item.get("model") or item.get("name") or "").strip()
+                    for item in payload.get("models", [])
+                    if (item.get("model") or item.get("name"))
                 ]
                 cls._ollama_models_cache = {"at": now, "models": models}
                 return models
@@ -595,24 +565,24 @@ class AIAnalyst:
             return preferred
         if preferred in available:
             return preferred
-        for candidate in ['llama-fast:latest', 'llama3.1:8b', 'gemma3:12b']:
+        for candidate in ["llama-fast:latest", "llama3.1:8b", "gemma3:12b"]:
             if candidate in available:
                 return candidate
         return available[0]
 
     @staticmethod
     def _local_timeout(user_id: int = 1) -> int:
-        return int(AppConfig.get('AI_LOCAL_TIMEOUT', user_id=user_id, default=45) or 45)
+        return int(AppConfig.get("AI_LOCAL_TIMEOUT", user_id=user_id, default=45) or 45)
 
     @classmethod
-    def _provider_order(cls, task: str = 'general', user_id: int = 1) -> List[str]:
+    def _provider_order(cls, task: str = "general", user_id: int = 1) -> list[str]:
         primary = cls._provider(user_id=user_id)
         fallback = cls._fallback_provider(user_id=user_id)
 
-        if primary == 'hybrid':
+        if primary == "hybrid":
             # 混合模式下仅对极低时延的轻任务优先走本地，大多数用户可感知任务优先云端。
-            local_first_tasks = {'scan_pulse', 'scan_fast'}
-            ordered = ['ollama', 'nvidia'] if task in local_first_tasks else ['nvidia', 'ollama']
+            local_first_tasks = {"scan_pulse", "scan_fast"}
+            ordered = ["ollama", "nvidia"] if task in local_first_tasks else ["nvidia", "ollama"]
         else:
             ordered = [primary]
             if fallback and fallback != primary:
@@ -623,134 +593,123 @@ class AIAnalyst:
             normalized = cls._normalize_provider(provider_name)
             if normalized and normalized not in deduped:
                 deduped.append(normalized)
-        return deduped or ['ollama']
+        return deduped or ["ollama"]
 
     @staticmethod
     def _timeout(user_id: int = 1) -> int:
         try:
-            return max(1, int(AppConfig.get('AI_TIMEOUT', user_id=user_id, default=8) or 8))
+            return max(1, int(AppConfig.get("AI_TIMEOUT", user_id=user_id, default=8) or 8))
         except (TypeError, ValueError):
             return 8
 
     @staticmethod
     def _temperature(user_id: int = 1) -> float:
-        return float(AppConfig.get('TEMPERATURE', user_id=user_id, default=0.2) or 0.2)
+        return float(AppConfig.get("TEMPERATURE", user_id=user_id, default=0.2) or 0.2)
 
     @classmethod
     def _reasoning_effort_for_task(cls, task: str, user_id: int = 1) -> str:
-        key = 'AI_SCAN_REASONING_EFFORT' if task in cls.SCAN_QUALITY_TASKS else 'AI_REASONING_EFFORT'
-        default_effort = 'high' if task in cls.SCAN_QUALITY_TASKS else 'medium'
+        key = "AI_SCAN_REASONING_EFFORT" if task in cls.SCAN_QUALITY_TASKS else "AI_REASONING_EFFORT"
+        default_effort = "high" if task in cls.SCAN_QUALITY_TASKS else "medium"
         configured = str(AppConfig.get(key, user_id=user_id, default=default_effort) or default_effort).strip().lower()
         return configured if configured in cls.REASONING_EFFORTS else default_effort
 
     @classmethod
     def _quality_label_for_task(cls, task: str, user_id: int = 1) -> str:
         effort = cls._reasoning_effort_for_task(task, user_id=user_id)
-        return {
-            "minimal": "最低质量",
-            "low": "低质量",
-            "medium": "标准质量",
-            "high": "最高质量"
-        }.get(effort, "标准质量")
+        return {"minimal": "最低质量", "low": "低质量", "medium": "标准质量", "high": "最高质量"}.get(
+            effort, "标准质量"
+        )
 
     @staticmethod
     def _max_tokens(user_id: int = 1) -> int:
-        return int(AppConfig.get('NUM_PREDICT', user_id=user_id, default=900) or 900)
+        return int(AppConfig.get("NUM_PREDICT", user_id=user_id, default=900) or 900)
 
     @classmethod
     def _max_tokens_for_task(cls, task: str, user_id: int = 1) -> int:
         base_tokens = cls._max_tokens(user_id=user_id)
-        if task in {'scan_pulse', 'scan_fast', 'scan_risk', 'recommend_brief'}:
+        if task in {"scan_pulse", "scan_fast", "scan_risk", "recommend_brief"}:
             return min(base_tokens, 180)
-        if task == 'trend_batch':
+        if task == "trend_batch":
             return min(max(base_tokens, 720), 1400)
-        if task in {'scan_final', 'recommend_summary'}:
+        if task in {"scan_final", "recommend_summary"}:
             return min(base_tokens, 320)
-        if task == 'vision':
+        if task == "vision":
             return min(base_tokens, 300)
-        if task == 'assistant':
+        if task == "assistant":
             return min(max(base_tokens, 900), 1400)
         return base_tokens
 
     @classmethod
-    def _request_timeout_for_task(
-        cls,
-        task: str,
-        user_id: int = 1,
-        provider: Optional[str] = None
-    ) -> int:
+    def _request_timeout_for_task(cls, task: str, user_id: int = 1, provider: str | None = None) -> int:
         base_timeout = cls._timeout(user_id=user_id)
         target_provider = cls._normalize_provider(provider) or cls._provider(user_id=user_id)
-        if target_provider == 'nvidia':
-            if task in {'scan_pulse', 'scan_fast', 'scan_risk', 'recommend_brief'}:
+        if target_provider == "nvidia":
+            if task in {"scan_pulse", "scan_fast", "scan_risk", "recommend_brief"}:
                 return min(base_timeout, 8)
-            if task == 'trend_batch':
+            if task == "trend_batch":
                 return min(max(base_timeout, 6), 12)
-            if task in {'scan_final', 'recommend_summary', 'vision', 'general'}:
+            if task in {"scan_final", "recommend_summary", "vision", "general"}:
                 return min(max(base_timeout, 6), 12)
-            if task == 'assistant':
+            if task == "assistant":
                 return min(max(base_timeout, 24), 45)
             return min(base_timeout, 8)
-        if task in {'scan_pulse', 'scan_fast', 'scan_risk', 'recommend_brief'}:
+        if task in {"scan_pulse", "scan_fast", "scan_risk", "recommend_brief"}:
             return min(base_timeout, 8)
-        if task == 'trend_batch':
+        if task == "trend_batch":
             return min(max(base_timeout, 16), 24)
-        if task in {'scan_final', 'recommend_summary'}:
+        if task in {"scan_final", "recommend_summary"}:
             return min(base_timeout, 12)
-        if task == 'vision':
+        if task == "vision":
             return min(base_timeout, 12)
-        if task == 'assistant':
+        if task == "assistant":
             return min(max(base_timeout, 24), 45)
         return base_timeout
 
     @staticmethod
-    def _nvidia_endpoints(user_id: int = 1) -> List[str]:
-        legacy_url = (AppConfig.get('AI_URL', user_id=user_id, default='') or '').strip()
-        base_url = (AppConfig.get('AI_BASE_URL', user_id=user_id, default='') or '').strip()
-        api_style = (AppConfig.get('AI_API_STYLE', user_id=user_id, default='openai-completions') or 'openai-completions').strip().lower()
-        is_official_nvidia = 'integrate.api.nvidia.com' in legacy_url.lower() or 'integrate.api.nvidia.com' in base_url.lower()
-        prefer_chat = is_official_nvidia or api_style not in {'openai-completions', 'completions'}
-        if legacy_url.endswith('/chat/completions'):
+    def _nvidia_endpoints(user_id: int = 1) -> list[str]:
+        legacy_url = (AppConfig.get("AI_URL", user_id=user_id, default="") or "").strip()
+        base_url = (AppConfig.get("AI_BASE_URL", user_id=user_id, default="") or "").strip()
+        api_style = (
+            (AppConfig.get("AI_API_STYLE", user_id=user_id, default="openai-completions") or "openai-completions")
+            .strip()
+            .lower()
+        )
+        is_official_nvidia = (
+            "integrate.api.nvidia.com" in legacy_url.lower() or "integrate.api.nvidia.com" in base_url.lower()
+        )
+        prefer_chat = is_official_nvidia or api_style not in {"openai-completions", "completions"}
+        if legacy_url.endswith("/chat/completions"):
             prefer_chat = True
-        elif legacy_url.endswith('/completions'):
+        elif legacy_url.endswith("/completions"):
             prefer_chat = True if is_official_nvidia else False
 
-        endpoints: List[str] = []
+        endpoints: list[str] = []
         if legacy_url:
-            if legacy_url.endswith('/chat/completions'):
+            if legacy_url.endswith("/chat/completions"):
                 endpoints.append(legacy_url)
-                if api_style in {'openai-completions', 'completions'}:
-                    endpoints.append(legacy_url.replace('/chat/completions', '/completions'))
-            elif legacy_url.endswith('/completions'):
+                if api_style in {"openai-completions", "completions"}:
+                    endpoints.append(legacy_url.replace("/chat/completions", "/completions"))
+            elif legacy_url.endswith("/completions"):
                 if prefer_chat:
-                    endpoints.extend([legacy_url.replace('/completions', '/chat/completions'), legacy_url])
+                    endpoints.extend([legacy_url.replace("/completions", "/chat/completions"), legacy_url])
                 else:
-                    endpoints.extend([legacy_url, legacy_url.replace('/completions', '/chat/completions')])
+                    endpoints.extend([legacy_url, legacy_url.replace("/completions", "/chat/completions")])
             else:
                 endpoints.append(legacy_url)
 
         if base_url:
-            normalized_base = base_url.rstrip('/')
+            normalized_base = base_url.rstrip("/")
             if prefer_chat:
-                endpoints.extend([
-                    f"{normalized_base}/chat/completions",
-                    f"{normalized_base}/completions"
-                ])
-            elif api_style in {'openai-completions', 'completions'}:
-                endpoints.extend([
-                    f"{normalized_base}/completions",
-                    f"{normalized_base}/chat/completions"
-                ])
+                endpoints.extend([f"{normalized_base}/chat/completions", f"{normalized_base}/completions"])
+            elif api_style in {"openai-completions", "completions"}:
+                endpoints.extend([f"{normalized_base}/completions", f"{normalized_base}/chat/completions"])
             else:
-                endpoints.extend([
-                    f"{normalized_base}/chat/completions",
-                    f"{normalized_base}/completions"
-                ])
+                endpoints.extend([f"{normalized_base}/chat/completions", f"{normalized_base}/completions"])
 
         if not endpoints:
             endpoints = [
                 "https://integrate.api.nvidia.com/v1/completions",
-                "https://integrate.api.nvidia.com/v1/chat/completions"
+                "https://integrate.api.nvidia.com/v1/chat/completions",
             ]
 
         deduped = []
@@ -774,46 +733,35 @@ class AIAnalyst:
 
     @classmethod
     def _resolve_model(
-        cls,
-        requested_model: Optional[str] = None,
-        task: str = 'general',
-        user_id: int = 1,
-        provider: Optional[str] = None
+        cls, requested_model: str | None = None, task: str = "general", user_id: int = 1, provider: str | None = None
     ) -> str:
         if requested_model:
             return cls._normalize_model_for_provider(str(requested_model).strip(), user_id=user_id, provider=provider)
 
-        config_keys = cls.TASK_MODEL_KEYS.get(task, 'AI_MODEL')
+        config_keys = cls.TASK_MODEL_KEYS.get(task, "AI_MODEL")
         if not isinstance(config_keys, (list, tuple)):
             config_keys = [config_keys]
 
         for config_key in config_keys:
-            configured = (AppConfig.get(config_key, user_id=user_id, default='') or '').strip()
+            configured = (AppConfig.get(config_key, user_id=user_id, default="") or "").strip()
             if configured:
                 return cls._normalize_model_for_provider(configured, user_id=user_id, provider=provider)
 
-        generic = (AppConfig.get('AI_MODEL', user_id=user_id, default='') or '').strip()
+        generic = (AppConfig.get("AI_MODEL", user_id=user_id, default="") or "").strip()
         if generic:
             return cls._normalize_model_for_provider(generic, user_id=user_id, provider=provider)
 
         return cls._normalize_model_for_provider(
-            cls.DEFAULT_TASK_MODELS.get(task) or cls.DEFAULT_MODEL,
-            user_id=user_id,
-            provider=provider
+            cls.DEFAULT_TASK_MODELS.get(task) or cls.DEFAULT_MODEL, user_id=user_id, provider=provider
         )
 
     @classmethod
-    def _normalize_model_for_provider(
-        cls,
-        model_id: str,
-        user_id: int = 1,
-        provider: Optional[str] = None
-    ) -> str:
-        resolved = str(model_id or '').strip()
+    def _normalize_model_for_provider(cls, model_id: str, user_id: int = 1, provider: str | None = None) -> str:
+        resolved = str(model_id or "").strip()
         target_provider = cls._normalize_provider(provider) or cls._provider(user_id=user_id)
 
-        if target_provider == 'ollama':
-            if not resolved or '/' in resolved:
+        if target_provider == "ollama":
+            if not resolved or "/" in resolved:
                 return cls._local_model(user_id=user_id)
             return resolved
 
@@ -822,95 +770,85 @@ class AIAnalyst:
             return cls.DEFAULT_MODEL
 
         provider = cls._provider(user_id=user_id)
-        base_url = (AppConfig.get('AI_BASE_URL', user_id=user_id, default='') or '').strip().lower()
+        base_url = (AppConfig.get("AI_BASE_URL", user_id=user_id, default="") or "").strip().lower()
 
-        if provider not in {'nvidia', 'hybrid'} and 'integrate.api.nvidia.com' not in base_url:
+        if provider not in {"nvidia", "hybrid"} and "integrate.api.nvidia.com" not in base_url:
             return resolved
 
-        if cls._uses_official_nvidia_catalog(user_id=user_id) and resolved.startswith('coordinator-agent/'):
-            return resolved.replace('coordinator-agent/', '', 1)
+        if cls._uses_official_nvidia_catalog(user_id=user_id) and resolved.startswith("coordinator-agent/"):
+            return resolved.replace("coordinator-agent/", "", 1)
 
         return resolved
 
     @classmethod
     def _model_candidates(
-        cls,
-        requested_model: Optional[str],
-        task: str = 'general',
-        user_id: int = 1,
-        provider: Optional[str] = None
-    ) -> List[str]:
-        candidates: List[str] = []
+        cls, requested_model: str | None, task: str = "general", user_id: int = 1, provider: str | None = None
+    ) -> list[str]:
+        candidates: list[str] = []
         target_provider = cls._normalize_provider(provider) or cls._provider(user_id=user_id)
 
-        def add_candidate(model_id: Optional[str]) -> None:
-            normalized = cls._normalize_model_for_provider(model_id or '', user_id=user_id, provider=target_provider)
+        def add_candidate(model_id: str | None) -> None:
+            normalized = cls._normalize_model_for_provider(model_id or "", user_id=user_id, provider=target_provider)
             if normalized and normalized not in candidates:
                 candidates.append(normalized)
 
         add_candidate(requested_model)
         add_candidate(cls._resolve_model(requested_model, task, user_id=user_id, provider=target_provider))
-        if target_provider == 'ollama':
+        if target_provider == "ollama":
             add_candidate(cls._local_model(user_id=user_id))
         else:
             for fallback in cls.TASK_FALLBACK_MODELS.get(task, []):
                 add_candidate(fallback)
-            add_candidate(cls._resolve_model(None, 'general', user_id=user_id, provider=target_provider))
-        if task in {'scan_pulse', 'scan_fast', 'scan_risk', 'recommend_brief'}:
+            add_candidate(cls._resolve_model(None, "general", user_id=user_id, provider=target_provider))
+        if task in {"scan_pulse", "scan_fast", "scan_risk", "recommend_brief"}:
             return candidates[:2]
-        if task == 'trend_batch':
+        if task == "trend_batch":
             return candidates[:3]
-        if task in {'scan_final', 'recommend_summary', 'vision'}:
+        if task in {"scan_final", "recommend_summary", "vision"}:
             return candidates[:3]
         return candidates[:2]
 
     @staticmethod
     def _extract_openai_content(payload: dict) -> str:
-        choices = payload.get('choices') or []
+        choices = payload.get("choices") or []
         if not choices:
             return ""
 
         first_choice = choices[0] or {}
-        message = first_choice.get('message') or {}
-        content = message.get('content')
+        message = first_choice.get("message") or {}
+        content = message.get("content")
         if isinstance(content, list):
             return "".join(
-                item.get('text') or item.get('content') or ''
-                for item in content
-                if isinstance(item, dict)
+                item.get("text") or item.get("content") or "" for item in content if isinstance(item, dict)
             ).strip()
         if isinstance(content, str):
             return content.strip()
         if isinstance(content, dict):
-            return str(content.get('text') or content.get('content') or '').strip()
+            return str(content.get("text") or content.get("content") or "").strip()
 
-        reasoning = message.get('reasoning_content') or message.get('reasoning')
+        reasoning = message.get("reasoning_content") or message.get("reasoning")
         if isinstance(reasoning, list):
             return "".join(
-                item.get('text') or item.get('content') or ''
-                for item in reasoning
-                if isinstance(item, dict)
+                item.get("text") or item.get("content") or "" for item in reasoning if isinstance(item, dict)
             ).strip()
         if isinstance(reasoning, dict):
-            return str(reasoning.get('text') or reasoning.get('content') or '').strip()
+            return str(reasoning.get("text") or reasoning.get("content") or "").strip()
         if isinstance(reasoning, str):
             return reasoning.strip()
 
-        text = first_choice.get('text')
+        text = first_choice.get("text")
         if isinstance(text, list):
             return "".join(
-                item.get('text') or item.get('content') or ''
-                for item in text
-                if isinstance(item, dict)
+                item.get("text") or item.get("content") or "" for item in text if isinstance(item, dict)
             ).strip()
         return text.strip() if isinstance(text, str) else ""
 
     @classmethod
-    def get_model_catalog(cls, user_id: int = 1) -> List[Dict[str, object]]:
+    def get_model_catalog(cls, user_id: int = 1) -> list[dict[str, object]]:
         provider = cls._provider(user_id=user_id)
         provider_order = cls._provider_order(user_id=user_id)
-        base_url = (AppConfig.get('AI_BASE_URL', user_id=user_id, default='') or '').strip().lower()
-        is_openai_gateway = provider == 'nvidia' or 'integrate.api.nvidia.com' in base_url or 'sub2api' in base_url
+        base_url = (AppConfig.get("AI_BASE_URL", user_id=user_id, default="") or "").strip().lower()
+        is_openai_gateway = provider == "nvidia" or "integrate.api.nvidia.com" in base_url or "sub2api" in base_url
         local_model = cls._local_model(user_id=user_id)
         catalog = []
         catalog_ids = list(cls.OFFICIAL_CLOUD_MODEL_IDS)
@@ -921,58 +859,56 @@ class AIAnalyst:
             meta = cls.MODEL_CATALOG.get(model_id, {})
             available = True
             availability_note = ""
-            if meta.get("provider") == 'ollama':
-                available = 'ollama' in provider_order
+            if meta.get("provider") == "ollama":
+                available = "ollama" in provider_order
                 if available:
                     availability_note = "本地 Ollama 通道可用，适合低时延任务。"
                 else:
                     availability_note = "当前未启用本地 Ollama 通道。"
             elif is_openai_gateway:
-                available = meta.get("provider") != 'ollama'
+                available = meta.get("provider") != "ollama"
                 if not available:
                     availability_note = "当前模型不在已登记的网关路由中。"
-            catalog.append({
-                "id": model_id,
-                "alias": meta.get("alias") or model_id,
-                "provider": meta.get("provider") or ('ollama' if model_id == local_model else 'unknown'),
-                "latency": meta.get("latency") or ('fast' if model_id == local_model else 'medium'),
-                "best_for": meta.get("best_for", []),
-                "available": available,
-                "availabilityNote": availability_note,
-                "official": model_id in cls.OFFICIAL_CLOUD_MODEL_IDS
-            })
+            catalog.append(
+                {
+                    "id": model_id,
+                    "alias": meta.get("alias") or model_id,
+                    "provider": meta.get("provider") or ("ollama" if model_id == local_model else "unknown"),
+                    "latency": meta.get("latency") or ("fast" if model_id == local_model else "medium"),
+                    "best_for": meta.get("best_for", []),
+                    "available": available,
+                    "availabilityNote": availability_note,
+                    "official": model_id in cls.OFFICIAL_CLOUD_MODEL_IDS,
+                }
+            )
         return catalog
 
     @classmethod
-    def _build_nvidia_payload(cls, endpoint: str, prompt: str, target_model: str, task: str = 'general', user_id: int = 1) -> dict:
+    def _build_nvidia_payload(
+        cls, endpoint: str, prompt: str, target_model: str, task: str = "general", user_id: int = 1
+    ) -> dict:
         reasoning_effort = cls._reasoning_effort_for_task(task, user_id=user_id)
         base_payload = {
             "model": target_model,
             "temperature": cls._temperature(user_id=user_id),
             "max_tokens": cls._max_tokens_for_task(task, user_id=user_id),
             "reasoning_effort": reasoning_effort,
-            "stream": False
+            "stream": False,
         }
-        if endpoint.endswith('/chat/completions'):
-            return {
-                **base_payload,
-                "messages": [{"role": "user", "content": prompt}]
-            }
-        return {
-            **base_payload,
-            "prompt": prompt
-        }
+        if endpoint.endswith("/chat/completions"):
+            return {**base_payload, "messages": [{"role": "user", "content": prompt}]}
+        return {**base_payload, "prompt": prompt}
 
     @classmethod
-    def get_model_meta(cls, model_id: Optional[str], user_id: int = 1) -> Dict[str, object]:
-        resolved_id = cls._canonical_cloud_model_id(str(model_id or '').strip())
+    def get_model_meta(cls, model_id: str | None, user_id: int = 1) -> dict[str, object]:
+        resolved_id = cls._canonical_cloud_model_id(str(model_id or "").strip())
         meta = cls.MODEL_CATALOG.get(resolved_id, {})
         if not meta and resolved_id == cls._local_model(user_id=user_id):
             meta = {
                 "alias": resolved_id,
                 "provider": "ollama",
                 "latency": "fast",
-                "best_for": ["本地模型", "低时延兜底"]
+                "best_for": ["本地模型", "低时延兜底"],
             }
         alias = meta.get("alias") or resolved_id or "unknown-model"
         return {
@@ -982,37 +918,36 @@ class AIAnalyst:
             "latency": meta.get("latency") or "medium",
             "quality": "标准质量",
             "reasoningEffort": "medium",
-            "best_for": meta.get("best_for", [])
+            "best_for": meta.get("best_for", []),
         }
 
     @classmethod
-    def get_task_model_plan(cls, user_id: int = 1) -> Dict[str, Dict[str, object]]:
-        def meta_for(task_name: str) -> Dict[str, object]:
+    def get_task_model_plan(cls, user_id: int = 1) -> dict[str, dict[str, object]]:
+        def meta_for(task_name: str) -> dict[str, object]:
             provider_name = cls._provider_order(task=task_name, user_id=user_id)[0]
             model_meta = cls.get_model_meta(
-                cls._resolve_model(task=task_name, user_id=user_id, provider=provider_name),
-                user_id=user_id
+                cls._resolve_model(task=task_name, user_id=user_id, provider=provider_name), user_id=user_id
             )
             return {
                 **model_meta,
                 "quality": cls._quality_label_for_task(task_name, user_id=user_id),
                 "reasoningEffort": cls._reasoning_effort_for_task(task_name, user_id=user_id),
-                "providerRoute": provider_name
+                "providerRoute": provider_name,
             }
 
         return {
-            "pulse": meta_for('scan_pulse'),
-            "trendBatch": meta_for('trend_batch'),
-            "risk": meta_for('scan_risk'),
-            "final": meta_for('scan_final'),
-            "recommendBrief": meta_for('recommend_brief'),
-            "recommendSummary": meta_for('recommend_summary'),
-            "vision": meta_for('vision'),
-            "general": meta_for('general')
+            "pulse": meta_for("scan_pulse"),
+            "trendBatch": meta_for("trend_batch"),
+            "risk": meta_for("scan_risk"),
+            "final": meta_for("scan_final"),
+            "recommendBrief": meta_for("recommend_brief"),
+            "recommendSummary": meta_for("recommend_summary"),
+            "vision": meta_for("vision"),
+            "general": meta_for("general"),
         }
 
     @classmethod
-    def get_task_provider_plan(cls, user_id: int = 1) -> Dict[str, Dict[str, object]]:
+    def get_task_provider_plan(cls, user_id: int = 1) -> dict[str, dict[str, object]]:
         tasks = {
             "pulse": "scan_pulse",
             "trendBatch": "trend_batch",
@@ -1021,45 +956,57 @@ class AIAnalyst:
             "recommendBrief": "recommend_brief",
             "recommendSummary": "recommend_summary",
             "vision": "vision",
-            "general": "general"
+            "general": "general",
         }
         return {
-            name: {
-                "primary": order[0],
-                "fallbacks": order[1:]
-            }
+            name: {"primary": order[0], "fallbacks": order[1:]}
             for name, task_name in tasks.items()
             for order in [cls._provider_order(task=task_name, user_id=user_id)]
         }
 
     @classmethod
-    def probe_connection(cls, config_map: Optional[Dict[str, object]] = None, user_id: int = 1) -> Dict[str, object]:
+    def probe_connection(cls, config_map: dict[str, object] | None = None, user_id: int = 1) -> dict[str, object]:
         config = cls.normalize_ai_config_map(config_map or {})
-        provider = cls._normalize_provider(config.get('ai_provider')) or cls._provider(user_id=user_id)
-        fallback_provider = cls._normalize_provider(config.get('ai_fallback_provider'))
-        provider_order = ['nvidia', 'ollama'] if provider == 'hybrid' else [provider]
+        provider = cls._normalize_provider(config.get("ai_provider")) or cls._provider(user_id=user_id)
+        fallback_provider = cls._normalize_provider(config.get("ai_fallback_provider"))
+        provider_order = ["nvidia", "ollama"] if provider == "hybrid" else [provider]
         if fallback_provider and fallback_provider not in provider_order:
             provider_order.append(fallback_provider)
 
-        api_key = str(config.get('ai_api_key') or AppConfig.get('AI_API_KEY', user_id=user_id, default='') or '').strip()
-        base_url = str(config.get('ai_base_url') or AppConfig.get('AI_BASE_URL', user_id=user_id, default='') or '').strip().rstrip('/')
-        local_url = str(config.get('ai_local_url') or AppConfig.get('AI_LOCAL_URL', user_id=user_id, default='') or '').strip()
-        cloud_model = cls._canonical_cloud_model_id(str(config.get('ai_model') or AppConfig.get('AI_MODEL', user_id=user_id, default=cls.DEFAULT_MODEL) or cls.DEFAULT_MODEL))
-        local_model = str(config.get('ai_local_model') or AppConfig.get('AI_LOCAL_MODEL', user_id=user_id, default=cls._preferred_local_model(user_id=user_id)) or '').strip() or cls._preferred_local_model(user_id=user_id)
+        api_key = str(
+            config.get("ai_api_key") or AppConfig.get("AI_API_KEY", user_id=user_id, default="") or ""
+        ).strip()
+        base_url = (
+            str(config.get("ai_base_url") or AppConfig.get("AI_BASE_URL", user_id=user_id, default="") or "")
+            .strip()
+            .rstrip("/")
+        )
+        local_url = str(
+            config.get("ai_local_url") or AppConfig.get("AI_LOCAL_URL", user_id=user_id, default="") or ""
+        ).strip()
+        cloud_model = cls._canonical_cloud_model_id(
+            str(
+                config.get("ai_model")
+                or AppConfig.get("AI_MODEL", user_id=user_id, default=cls.DEFAULT_MODEL)
+                or cls.DEFAULT_MODEL
+            )
+        )
+        local_model = str(
+            config.get("ai_local_model")
+            or AppConfig.get("AI_LOCAL_MODEL", user_id=user_id, default=cls._preferred_local_model(user_id=user_id))
+            or ""
+        ).strip() or cls._preferred_local_model(user_id=user_id)
         session = requests.Session()
         session.trust_env = False
-        last_error = '未执行连接测试'
+        last_error = "未执行连接测试"
 
         for target_provider in provider_order:
-            if target_provider == 'nvidia':
+            if target_provider == "nvidia":
                 if not base_url or not cloud_model:
-                    last_error = '缺少 Base URL 或默认模型'
+                    last_error = "缺少 Base URL 或默认模型"
                     continue
 
-                headers = {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                }
+                headers = {"Content-Type": "application/json", "Accept": "application/json"}
                 if api_key:
                     headers["Authorization"] = f"Bearer {api_key}"
 
@@ -1070,7 +1017,7 @@ class AIAnalyst:
                     "max_tokens": 12,
                     "temperature": 0,
                     "stream": False,
-                    "reasoning_effort": "low"
+                    "reasoning_effort": "low",
                 }
                 try:
                     response = session.post(endpoint, json=payload, headers=headers, timeout=20)
@@ -1081,29 +1028,28 @@ class AIAnalyst:
                             "provider": "nvidia",
                             "endpoint": endpoint,
                             "model": cloud_model,
-                            "message": content or "Sub2API 路由连接成功"
+                            "message": content or "Sub2API 路由连接成功",
                         }
                     last_error = f"OpenAI-compatible 请求失败: {response.status_code} {response.text[:180]}"
                 except Exception as exc:
                     last_error = cls._build_business_error(str(exc))
                 continue
 
-            if target_provider == 'ollama':
+            if target_provider == "ollama":
                 if not local_url or not local_model:
-                    last_error = '缺少本地模型地址或本地模型名称'
+                    last_error = "缺少本地模型地址或本地模型名称"
                     continue
 
                 payload = {
                     "model": local_model,
                     "prompt": "Reply with OK.",
                     "stream": False,
-                    "options": {
-                        "num_predict": 12,
-                        "temperature": 0
-                    }
+                    "options": {"num_predict": 12, "temperature": 0},
                 }
                 try:
-                    response = session.post(local_url, json=payload, timeout=min(cls._local_timeout(user_id=user_id), 20))
+                    response = session.post(
+                        local_url, json=payload, timeout=min(cls._local_timeout(user_id=user_id), 20)
+                    )
                     if response.status_code == 200:
                         body = response.json() or {}
                         return {
@@ -1111,7 +1057,7 @@ class AIAnalyst:
                             "provider": "ollama",
                             "endpoint": local_url,
                             "model": local_model,
-                            "message": (body.get('response') or '').strip() or "本地模型连接成功"
+                            "message": (body.get("response") or "").strip() or "本地模型连接成功",
                         }
                     last_error = f"Ollama 请求失败: {response.status_code} {response.text[:180]}"
                 except Exception as exc:
@@ -1121,24 +1067,24 @@ class AIAnalyst:
             "success": False,
             "provider": provider_order[0] if provider_order else provider,
             "endpoint": f"{base_url}/chat/completions" if base_url else local_url,
-            "model": cloud_model if provider_order and provider_order[0] == 'nvidia' else local_model,
-            "message": last_error or "AI 连接测试失败"
+            "model": cloud_model if provider_order and provider_order[0] == "nvidia" else local_model,
+            "message": last_error or "AI 连接测试失败",
         }
 
     @classmethod
-    def _request_nvidia(cls, prompt: str, model: Optional[str], task: str = 'general', user_id: int = 1) -> str:
-        api_key = (AppConfig.get('AI_API_KEY', user_id=user_id, default='') or '').strip()
+    def _request_nvidia(cls, prompt: str, model: str | None, task: str = "general", user_id: int = 1) -> str:
+        api_key = (AppConfig.get("AI_API_KEY", user_id=user_id, default="") or "").strip()
         if not api_key:
             MonitorLink.log("⚠️ [AI] 未配置 AI_API_KEY，无法调用 OpenAI-compatible 网关")
             return "ERROR: 未配置 AI_API_KEY"
 
         endpoints = cls._nvidia_endpoints(user_id=user_id)
-        model_candidates = cls._model_candidates(model, task=task, user_id=user_id, provider='nvidia')
+        model_candidates = cls._model_candidates(model, task=task, user_id=user_id, provider="nvidia")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
         }
 
         session = requests.Session()
@@ -1161,7 +1107,7 @@ class AIAnalyst:
                             url,
                             json=payload,
                             headers=headers,
-                            timeout=cls._request_timeout_for_task(task, user_id=user_id, provider='nvidia')
+                            timeout=cls._request_timeout_for_task(task, user_id=user_id, provider="nvidia"),
                         )
                         if response.status_code == 200:
                             response_payload = response.json()
@@ -1180,7 +1126,7 @@ class AIAnalyst:
                         MonitorLink.log(
                             f"⚠️ [AI] OpenAI-compatible 请求失败: {response.status_code} {response.text[:240]}"
                         )
-                        if response.status_code == 404 and 'page not found' in response.text.lower():
+                        if response.status_code == 404 and "page not found" in response.text.lower():
                             not_found_count += 1
                             break
                         if response.status_code in {404, 405, 408, 429}:
@@ -1213,17 +1159,17 @@ class AIAnalyst:
         return f"ERROR: {cls._build_business_error('OpenAI-compatible 请求失败，请检查模型配置或接口地址')}"
 
     @classmethod
-    def _request_ollama(cls, prompt: str, model: Optional[str], task: str = 'general', user_id: int = 1) -> str:
-        target_model = cls._resolve_model(model, task, user_id=user_id, provider='ollama')
+    def _request_ollama(cls, prompt: str, model: str | None, task: str = "general", user_id: int = 1) -> str:
+        target_model = cls._resolve_model(model, task, user_id=user_id, provider="ollama")
         payload = {
             "model": target_model,
             "prompt": prompt,
             "stream": False,
             "options": {
-                "num_thread": int(AppConfig.get('NUM_THREAD', user_id=user_id, default=4) or 4),
+                "num_thread": int(AppConfig.get("NUM_THREAD", user_id=user_id, default=4) or 4),
                 "temperature": cls._temperature(user_id=user_id),
-                "num_predict": cls._max_tokens_for_task(task, user_id=user_id)
-            }
+                "num_predict": cls._max_tokens_for_task(task, user_id=user_id),
+            },
         }
 
         url = cls._local_url(user_id=user_id)
@@ -1236,7 +1182,7 @@ class AIAnalyst:
             try:
                 response = session.post(url, json=payload, timeout=cls._local_timeout(user_id=user_id))
                 if response.status_code == 200:
-                    result = (response.json() or {}).get('response', '').strip()
+                    result = (response.json() or {}).get("response", "").strip()
                     if result:
                         return result
                 else:
@@ -1248,7 +1194,7 @@ class AIAnalyst:
         return "ERROR"
 
     @classmethod
-    def get_decision(cls, model: Optional[str], prompt: str, task: str = 'general', user_id: int = 1) -> str:
+    def get_decision(cls, model: str | None, prompt: str, task: str = "general", user_id: int = 1) -> str:
         """统一 AI 调用接口，支持按任务路由模型。"""
         last_error = "ERROR"
         for provider_name in cls._provider_order(task=task, user_id=user_id):
@@ -1267,7 +1213,7 @@ class AIAnalyst:
                 continue
 
             try:
-                if provider_name == 'nvidia':
+                if provider_name == "nvidia":
                     result = cls._request_nvidia(prompt, model, task=task, user_id=user_id)
                 else:
                     result = cls._request_ollama(prompt, model, task=task, user_id=user_id)

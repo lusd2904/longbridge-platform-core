@@ -2,13 +2,13 @@
 券商接口抽象层
 提供统一的券商接口，支持多券商切换
 """
-import logging
+
 import importlib
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from utils.DbUtil import DbUtil
 from utils.LoggerUtil import get_logger
@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 
 class BrokerType(Enum):
     """券商类型"""
+
     LONGBRIDGE = "longbridge"
     TIGER = "tiger"
     INTERACTIVE_BROKERS = "interactive_brokers"
@@ -29,18 +30,20 @@ class BrokerType(Enum):
 @dataclass(frozen=True)
 class BrokerProviderSpec:
     """券商适配器注册信息。"""
+
     broker_type: str
     display_name: str
-    adapter_path: Optional[str] = None
+    adapter_path: str | None = None
     implemented: bool = True
-    capabilities: List[str] = field(default_factory=list)
-    markets: List[str] = field(default_factory=list)
+    capabilities: list[str] = field(default_factory=list)
+    markets: list[str] = field(default_factory=list)
     notes: str = ""
 
 
 @dataclass
 class Position:
     """统一持仓数据结构"""
+
     symbol: str
     quantity: int
     average_cost: float
@@ -48,12 +51,13 @@ class Position:
     market_value: float
     unrealized_pnl: float
     realized_pnl: float = 0.0
-    name: str = ''
+    name: str = ""
 
 
 @dataclass
 class Order:
     """统一订单数据结构"""
+
     order_id: str
     symbol: str
     action: str  # BUY/SELL
@@ -68,6 +72,7 @@ class Order:
 @dataclass
 class AccountInfo:
     """统一账户信息结构"""
+
     account_id: str
     currency: str
     cash: float
@@ -80,6 +85,7 @@ class AccountInfo:
 @dataclass
 class Quote:
     """统一行情数据结构"""
+
     symbol: str
     last_price: float
     prev_close: float
@@ -94,61 +100,67 @@ class Quote:
 
 class BaseBrokerAPI(ABC):
     """券商API基类"""
-    
+
     def __init__(self, account_id: int):
         """
         初始化券商API
-        
+
         Args:
             account_id: 券商账户ID
         """
         self.account_id = account_id
         self.db = DbUtil()
         self.is_connected = False
-    
+
     @abstractmethod
     def connect(self) -> bool:
         """连接API"""
         pass
-    
+
     @abstractmethod
     def disconnect(self):
         """断开连接"""
         pass
-    
+
     @abstractmethod
-    def get_quote(self, symbols: List[str]) -> Dict[str, Quote]:
+    def get_quote(self, symbols: list[str]) -> dict[str, Quote]:
         """获取行情"""
         pass
-    
+
     @abstractmethod
-    def get_positions(self) -> List[Position]:
+    def get_positions(self) -> list[Position]:
         """获取持仓"""
         pass
-    
+
     @abstractmethod
     def get_account_info(self) -> AccountInfo:
         """获取账户信息"""
         pass
-    
+
     @abstractmethod
-    def place_order(self, symbol: str, action: str, quantity: int,
-                   order_type: str = 'LIMIT', price: Optional[float] = None,
-                   time_in_force: str = 'DAY') -> Dict[str, Any]:
+    def place_order(
+        self,
+        symbol: str,
+        action: str,
+        quantity: int,
+        order_type: str = "LIMIT",
+        price: float | None = None,
+        time_in_force: str = "DAY",
+    ) -> dict[str, Any]:
         """下单"""
         pass
-    
+
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
         """撤单"""
         pass
-    
+
     @abstractmethod
-    def get_orders(self, status: Optional[str] = None) -> List[Order]:
+    def get_orders(self, status: str | None = None) -> list[Order]:
         """获取订单列表"""
         pass
-    
-    def _log_connection(self, action: str, status: str, message: str = ''):
+
+    def _log_connection(self, action: str, status: str, message: str = ""):
         """记录连接日志"""
         try:
             sql = """
@@ -164,14 +176,14 @@ class BaseBrokerAPI(ABC):
 class BrokerManager:
     """券商管理器"""
 
-    PROVIDER_REGISTRY: Dict[str, BrokerProviderSpec] = {
+    PROVIDER_REGISTRY: dict[str, BrokerProviderSpec] = {
         BrokerType.LONGBRIDGE.value: BrokerProviderSpec(
             broker_type=BrokerType.LONGBRIDGE.value,
             display_name="长桥证券",
             adapter_path="core.broker.LongbridgeAPI:LongbridgeAPI",
             capabilities=["quote", "positions", "orders", "account"],
             markets=["US", "HK", "CN"],
-            notes="当前主通道，已支持实时持仓和交易。"
+            notes="当前主通道，已支持实时持仓和交易。",
         ),
         BrokerType.TIGER.value: BrokerProviderSpec(
             broker_type=BrokerType.TIGER.value,
@@ -179,7 +191,7 @@ class BrokerManager:
             adapter_path="core.broker.TigerBrokerAPI:TigerBrokerAPI",
             capabilities=["quote", "positions", "orders", "account"],
             markets=["US", "HK", "CN"],
-            notes="已接入账号与行情能力。"
+            notes="已接入账号与行情能力。",
         ),
         BrokerType.INTERACTIVE_BROKERS.value: BrokerProviderSpec(
             broker_type=BrokerType.INTERACTIVE_BROKERS.value,
@@ -187,7 +199,7 @@ class BrokerManager:
             implemented=False,
             capabilities=["quote", "positions", "orders", "account"],
             markets=["US", "HK", "CN"],
-            notes="已预留适配器注册位。"
+            notes="已预留适配器注册位。",
         ),
         BrokerType.EASTMONEY.value: BrokerProviderSpec(
             broker_type=BrokerType.EASTMONEY.value,
@@ -195,7 +207,7 @@ class BrokerManager:
             implemented=False,
             capabilities=["quote"],
             markets=["CN"],
-            notes="作为国内券商接入预留，待补充认证和委托适配。"
+            notes="作为国内券商接入预留，待补充认证和委托适配。",
         ),
         BrokerType.SOOCHOW.value: BrokerProviderSpec(
             broker_type=BrokerType.SOOCHOW.value,
@@ -203,57 +215,58 @@ class BrokerManager:
             implemented=False,
             capabilities=["quote"],
             markets=["CN"],
-            notes="作为国内券商接入预留，待补充交易接口适配。"
-        )
+            notes="作为国内券商接入预留，待补充交易接口适配。",
+        ),
     }
-    
+
     def __init__(self):
         """初始化券商管理器"""
         self.db = DbUtil()
-        self._brokers: Dict[int, BaseBrokerAPI] = {}
-        self._default_broker_ids: Dict[int, Optional[int]] = {}
+        self._brokers: dict[int, BaseBrokerAPI] = {}
+        self._default_broker_ids: dict[int, int | None] = {}
 
     @classmethod
-    def list_supported_brokers(cls) -> List[Dict[str, Any]]:
+    def list_supported_brokers(cls) -> list[dict[str, Any]]:
         """返回当前系统已登记的券商适配器。"""
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         for broker_type, spec in cls.PROVIDER_REGISTRY.items():
             breaker = circuit_breakers.setdefault(
-                f"broker:{broker_type}",
-                CircuitBreaker(failure_threshold=4, recovery_timeout=45, half_open_max_calls=2)
+                f"broker:{broker_type}", CircuitBreaker(failure_threshold=4, recovery_timeout=45, half_open_max_calls=2)
             )
-            items.append({
-                "brokerType": broker_type,
-                "name": spec.display_name,
-                "implemented": spec.implemented,
-                "capabilities": spec.capabilities,
-                "markets": spec.markets,
-                "notes": spec.notes,
-                "circuitState": breaker.get_state()
-            })
+            items.append(
+                {
+                    "brokerType": broker_type,
+                    "name": spec.display_name,
+                    "implemented": spec.implemented,
+                    "capabilities": spec.capabilities,
+                    "markets": spec.markets,
+                    "notes": spec.notes,
+                    "circuitState": breaker.get_state(),
+                }
+            )
         return items
 
     @staticmethod
     def _import_adapter(adapter_path: str):
-        module_name, _, class_name = adapter_path.partition(':')
+        module_name, _, class_name = adapter_path.partition(":")
         module = importlib.import_module(module_name)
         return getattr(module, class_name)
-    
-    def get_broker(self, account_id: Optional[int] = None, user_id: Optional[int] = None) -> Optional[BaseBrokerAPI]:
+
+    def get_broker(self, account_id: int | None = None, user_id: int | None = None) -> BaseBrokerAPI | None:
         """
         获取券商API实例
-        
+
         Args:
             account_id: 券商账户ID，None则使用默认账户
             user_id: 用户ID，指定后会校验账户归属
-            
+
         Returns:
             券商API实例
         """
         # 如果未指定账户ID，使用默认账户
         if account_id is None:
             account_id = self._get_default_account_id(user_id=user_id)
-        
+
         if account_id is None:
             logger.error("未找到可用的券商账户")
             return None
@@ -261,23 +274,23 @@ class BrokerManager:
         if user_id is not None and not self.account_belongs_to_user(account_id, user_id):
             logger.error("账户不属于当前用户: account_id=%s user_id=%s", account_id, user_id)
             return None
-        
+
         # 检查缓存
         if account_id in self._brokers:
             return self._brokers[account_id]
-        
+
         # 创建新的API实例
         broker = self._create_broker(account_id, user_id=user_id)
         if broker:
             self._brokers[account_id] = broker
-        
+
         return broker
-    
-    def _get_default_account_id(self, user_id: Optional[int] = None) -> Optional[int]:
+
+    def _get_default_account_id(self, user_id: int | None = None) -> int | None:
         """获取默认账户ID"""
         if user_id is not None and self._default_broker_ids.get(user_id):
             return self._default_broker_ids.get(user_id)
-        
+
         try:
             if user_id is not None:
                 sql = """
@@ -296,8 +309,8 @@ class BrokerManager:
 
             if record:
                 if user_id is not None:
-                    self._default_broker_ids[user_id] = record['id']
-                return record['id']
+                    self._default_broker_ids[user_id] = record["id"]
+                return record["id"]
 
             # 如果没有默认账户，使用第一个激活账户
             if user_id is not None:
@@ -319,22 +332,22 @@ class BrokerManager:
 
             if record:
                 if user_id is not None:
-                    self._default_broker_ids[user_id] = record['id']
-                return record['id']
-                
+                    self._default_broker_ids[user_id] = record["id"]
+                return record["id"]
+
         except Exception as e:
             logger.error(f"获取默认账户失败: {e}")
-        
+
         return None
-    
-    def _create_broker(self, account_id: int, user_id: Optional[int] = None) -> Optional[BaseBrokerAPI]:
+
+    def _create_broker(self, account_id: int, user_id: int | None = None) -> BaseBrokerAPI | None:
         """
         创建券商API实例
-        
+
         Args:
             account_id: 账户ID
             user_id: 用户ID
-            
+
         Returns:
             券商API实例
         """
@@ -357,7 +370,7 @@ class BrokerManager:
                 logger.error(f"未找到券商账户: {account_id}")
                 return None
 
-            broker_type = record['broker_type']
+            broker_type = record["broker_type"]
             spec = self.PROVIDER_REGISTRY.get(broker_type)
             if not spec:
                 logger.error(f"未知的券商类型: {broker_type}")
@@ -368,8 +381,7 @@ class BrokerManager:
                 return None
 
             breaker = circuit_breakers.setdefault(
-                f"broker:{broker_type}",
-                CircuitBreaker(failure_threshold=4, recovery_timeout=45, half_open_max_calls=2)
+                f"broker:{broker_type}", CircuitBreaker(failure_threshold=4, recovery_timeout=45, half_open_max_calls=2)
             )
             if not breaker.can_execute():
                 logger.warning("券商适配器处于熔断状态: %s", broker_type)
@@ -379,12 +391,12 @@ class BrokerManager:
             broker = adapter_cls(account_id)
             breaker.record_success()
             return broker
-                
+
         except Exception as e:
-            if 'broker_type' in locals():
+            if "broker_type" in locals():
                 breaker = circuit_breakers.setdefault(
                     f"broker:{broker_type}",
-                    CircuitBreaker(failure_threshold=4, recovery_timeout=45, half_open_max_calls=2)
+                    CircuitBreaker(failure_threshold=4, recovery_timeout=45, half_open_max_calls=2),
                 )
                 breaker.record_failure()
             logger.error(f"创建券商API失败: {e}")
@@ -400,14 +412,14 @@ class BrokerManager:
                 WHERE id = %s AND user_id = %s AND is_active = 1
                 LIMIT 1
                 """,
-                (account_id, user_id)
+                (account_id, user_id),
             )
             return bool(row)
         except Exception as e:
             logger.error(f"校验账户归属失败: {e}")
             return False
 
-    def list_user_ids_with_accounts(self) -> List[int]:
+    def list_user_ids_with_accounts(self) -> list[int]:
         """列出拥有激活券商账户的用户。"""
         try:
             rows = self.db.query_all(
@@ -422,15 +434,15 @@ class BrokerManager:
         except Exception as e:
             logger.error(f"列出券商账户用户失败: {e}")
             return []
-    
-    def list_accounts(self, user_id: int = 1, include_inactive: bool = False) -> List[Dict[str, Any]]:
+
+    def list_accounts(self, user_id: int = 1, include_inactive: bool = False) -> list[dict[str, Any]]:
         """
         列出券商账户
-        
+
         Args:
             user_id: 用户ID
             include_inactive: 是否包含已删除/停用账户
-            
+
         Returns:
             账户列表
         """
@@ -447,28 +459,30 @@ class BrokerManager:
             # 将元组转换为字典
             accounts = []
             for row in rows:
-                accounts.append({
-                    'id': row[0],
-                    'broker_type': row[1],
-                    'broker_name': row[2],
-                    'account_id': row[3],
-                    'is_default': row[4],
-                    'is_active': row[5],
-                    'created_at': row[6]
-                })
+                accounts.append(
+                    {
+                        "id": row[0],
+                        "broker_type": row[1],
+                        "broker_name": row[2],
+                        "account_id": row[3],
+                        "is_default": row[4],
+                        "is_active": row[5],
+                        "created_at": row[6],
+                    }
+                )
             return accounts
         except Exception as e:
             logger.error(f"列出券商账户失败: {e}")
             return []
-    
-    def set_default_account(self, account_id: int, user_id: Optional[int] = None) -> bool:
+
+    def set_default_account(self, account_id: int, user_id: int | None = None) -> bool:
         """
         设置默认账户
-        
+
         Args:
             account_id: 账户ID
             user_id: 用户ID
-            
+
         Returns:
             是否成功
         """
@@ -492,7 +506,7 @@ class BrokerManager:
                 WHERE is_default = 1
                 """
                 self.db.execute(sql1)
-            
+
             # 设置新的默认账户
             if user_id is not None:
                 sql2 = """
@@ -509,21 +523,21 @@ class BrokerManager:
                 WHERE id = %s
                 """
                 self.db.execute(sql2, (account_id,))
-            
+
             logger.info(f"默认券商账户已设置为: {account_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"设置默认账户失败: {e}")
             return False
-    
-    def switch_broker(self, account_id: int) -> Optional[BaseBrokerAPI]:
+
+    def switch_broker(self, account_id: int) -> BaseBrokerAPI | None:
         """
         切换券商
-        
+
         Args:
             account_id: 目标账户ID
-            
+
         Returns:
             新的券商API实例
         """
@@ -531,13 +545,14 @@ class BrokerManager:
         if account_id in self._brokers:
             self._brokers[account_id].disconnect()
             del self._brokers[account_id]
-        
+
         # 创建新连接
         return self.get_broker(account_id)
 
 
 # 全局券商管理器实例
 _broker_manager = None
+
 
 def get_broker_manager() -> BrokerManager:
     """获取全局券商管理器"""
@@ -547,6 +562,6 @@ def get_broker_manager() -> BrokerManager:
     return _broker_manager
 
 
-def get_broker(account_id: Optional[int] = None, user_id: Optional[int] = None) -> Optional[BaseBrokerAPI]:
+def get_broker(account_id: int | None = None, user_id: int | None = None) -> BaseBrokerAPI | None:
     """便捷函数：获取券商API"""
     return get_broker_manager().get_broker(account_id, user_id=user_id)

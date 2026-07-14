@@ -4,14 +4,13 @@ import asyncio
 import json
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
 
 REFACTOR_ROOT = Path(__file__).resolve().parents[3]
 if str(REFACTOR_ROOT) not in sys.path:
@@ -51,7 +50,7 @@ bootstrap_runtime()
 PORT = service_port("REF_TRADE_SERVICE_PORT", 8105)
 
 
-def _build_longbridge_connectivity_status(longbridge_status: Dict[str, Any]) -> Dict[str, Any]:
+def _build_longbridge_connectivity_status(longbridge_status: dict[str, Any]) -> dict[str, Any]:
     configured = bool(longbridge_status.get("configured"))
     enabled = bool(longbridge_status.get("enabled"))
     last_error = str(longbridge_status.get("lastError") or "").strip()
@@ -73,7 +72,7 @@ def _build_longbridge_connectivity_status(longbridge_status: Dict[str, Any]) -> 
     }
 
 
-def _serialize_datetime(value: Any) -> Optional[str]:
+def _serialize_datetime(value: Any) -> str | None:
     if value is None:
         return None
     if hasattr(value, "isoformat"):
@@ -81,12 +80,12 @@ def _serialize_datetime(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _ensure_admin_session(session: Dict[str, Any]) -> None:
+def _ensure_admin_session(session: dict[str, Any]) -> None:
     if str(session.get("role") or "").strip().lower() != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可执行该操作")
 
 
-def _extract_event_ids(payload: Dict[str, Any]) -> List[str]:
+def _extract_event_ids(payload: dict[str, Any]) -> list[str]:
     event_ids = payload.get("event_ids") or payload.get("eventIds") or []
     normalized_ids = [str(event_id or "").strip() for event_id in event_ids if str(event_id or "").strip()]
     if not normalized_ids:
@@ -94,7 +93,7 @@ def _extract_event_ids(payload: Dict[str, Any]) -> List[str]:
     return normalized_ids
 
 
-def _extract_saga_ids(payload: Dict[str, Any]) -> List[str]:
+def _extract_saga_ids(payload: dict[str, Any]) -> list[str]:
     saga_ids = payload.get("saga_ids") or payload.get("sagaIds") or []
     normalized_ids = [str(saga_id or "").strip() for saga_id in saga_ids if str(saga_id or "").strip()]
     if not normalized_ids:
@@ -111,13 +110,13 @@ def _mask_account_id(account_id: Any) -> str:
     return f"{raw[:2]}{'*' * max(len(raw) - 4, 0)}{raw[-2:]}"
 
 
-def _display_account_name(account: Dict[str, Any]) -> str:
+def _display_account_name(account: dict[str, Any]) -> str:
     broker_name = account.get("broker_name") or account.get("broker_type") or "账户"
     masked_id = _mask_account_id(account.get("account_id"))
     return f"{broker_name} - {masked_id or account.get('id')}"
 
 
-def _serialize_account(account: Dict[str, Any]) -> Dict[str, Any]:
+def _serialize_account(account: dict[str, Any]) -> dict[str, Any]:
     payload = dict(account)
     payload["account_id_masked"] = _mask_account_id(payload.get("account_id"))
     payload["display_name"] = _display_account_name(payload)
@@ -125,7 +124,7 @@ def _serialize_account(account: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _build_account_runtime_hints(account: Dict[str, Any], row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _build_account_runtime_hints(account: dict[str, Any], row: dict[str, Any] | None = None) -> dict[str, Any]:
     broker_type = str((row or {}).get("broker_type") or account.get("broker_type") or "").strip().lower()
     display_name = " ".join(
         [
@@ -193,10 +192,10 @@ def _build_account_runtime_hints(account: Dict[str, Any], row: Optional[Dict[str
     }
 
 
-def _get_accounts(user_id: int) -> List[Dict[str, Any]]:
+def _get_accounts(user_id: int) -> list[dict[str, Any]]:
     manager = get_broker_manager()
-    accounts: List[Dict[str, Any]] = []
-    for item in (manager.list_accounts(user_id) or []):
+    accounts: list[dict[str, Any]] = []
+    for item in manager.list_accounts(user_id) or []:
         payload = _serialize_account(item)
         row = None
         account_row_id = int(payload.get("id") or 0)
@@ -210,14 +209,14 @@ def _get_accounts(user_id: int) -> List[Dict[str, Any]]:
     return accounts
 
 
-def _get_account_or_404(user_id: int, account_id: int) -> Dict[str, Any]:
+def _get_account_or_404(user_id: int, account_id: int) -> dict[str, Any]:
     account = next((item for item in _get_accounts(user_id) if int(item.get("id") or 0) == account_id), None)
     if not account:
         raise HTTPException(status_code=404, detail="券商账户不存在")
     return account
 
 
-def _get_default_account(user_id: int) -> Optional[Dict[str, Any]]:
+def _get_default_account(user_id: int) -> dict[str, Any] | None:
     accounts = _get_accounts(user_id)
     if not accounts:
         return None
@@ -228,9 +227,9 @@ def _build_account_state(
     *,
     user_id: int,
     account_id: int,
-    status: Optional[str] = None,
+    status: str | None = None,
     limit: int = 30,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     account = _get_account_or_404(user_id, account_id)
     trade_user = legacy_trade_service.AuthUser(user_id=user_id, username="", role="user")
     try:
@@ -286,12 +285,9 @@ def _build_account_state(
         return snapshot_state
 
 
-def _build_account_snapshot_summary(account_info: Dict[str, Any], positions: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_account_snapshot_summary(account_info: dict[str, Any], positions: list[dict[str, Any]]) -> dict[str, Any]:
     total_pnl = sum(float(item.get("unrealized_pnl") or 0) for item in positions)
-    total_cost = sum(
-        float(item.get("average_cost") or 0) * float(item.get("quantity") or 0)
-        for item in positions
-    )
+    total_cost = sum(float(item.get("average_cost") or 0) * float(item.get("quantity") or 0) for item in positions)
     pnl_ratio = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
     return {
         "currency": account_info.get("currency") or "USD",
@@ -305,7 +301,7 @@ def _build_account_snapshot_summary(account_info: Dict[str, Any], positions: Lis
     }
 
 
-def _persist_snapshot_state(*, user_id: int, account_id: int, account: Dict[str, Any], state: Dict[str, Any]) -> None:
+def _persist_snapshot_state(*, user_id: int, account_id: int, account: dict[str, Any], state: dict[str, Any]) -> None:
     try:
         account_info = state.get("accountInfo") or {}
         positions = state.get("positions") or []
@@ -337,14 +333,14 @@ def _persist_snapshot_state(*, user_id: int, account_id: int, account: Dict[str,
 
 def _build_trade_snapshot_meta(
     *,
-    account_snapshot: Dict[str, Any],
-    positions_snapshot: List[Dict[str, Any]],
+    account_snapshot: dict[str, Any],
+    positions_snapshot: list[dict[str, Any]],
     order_count: int,
-    snapshot_at: Optional[str],
+    snapshot_at: str | None,
     data_source: str = "snapshot",
-    warnings: Optional[List[str]] = None,
+    warnings: list[str] | None = None,
     degraded: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     account_snapshot_at = account_snapshot.get("snapshotAt") if isinstance(account_snapshot, dict) else None
     position_snapshot_at = positions_snapshot[0].get("snapshotAt") if positions_snapshot else None
     return {
@@ -368,12 +364,14 @@ def _build_trade_snapshot_meta(
     }
 
 
-def _build_snapshot_state(*, user_id: int, account_id: int) -> Dict[str, Any]:
+def _build_snapshot_state(*, user_id: int, account_id: int) -> dict[str, Any]:
     account = _get_account_or_404(user_id, account_id)
     account_snapshot = AccountAssetSnapshotService.get_latest(user_id=user_id, account_id=account_id) or {}
     positions_snapshot = PositionSnapshotService.get_latest(user_id=user_id, account_id=account_id)
     snapshot_payload = account_snapshot.get("payload") if isinstance(account_snapshot.get("payload"), dict) else {}
-    snapshot_orders = snapshot_payload.get("recentOrders") if isinstance(snapshot_payload.get("recentOrders"), list) else []
+    snapshot_orders = (
+        snapshot_payload.get("recentOrders") if isinstance(snapshot_payload.get("recentOrders"), list) else []
+    )
     snapshot_order_count = int(snapshot_payload.get("orderCount") or len(snapshot_orders) or 0)
     account_info = {
         "account_id": account.get("account_id") or "",
@@ -384,9 +382,8 @@ def _build_snapshot_state(*, user_id: int, account_id: int) -> Dict[str, Any]:
         "buying_power": float(account_snapshot.get("buyingPower") or 0),
         "maintenance_margin": float(account_snapshot.get("maintenanceMargin") or 0),
     }
-    snapshot_at = (
-        account_snapshot.get("snapshotAt")
-        or (positions_snapshot[0].get("snapshotAt") if positions_snapshot else None)
+    snapshot_at = account_snapshot.get("snapshotAt") or (
+        positions_snapshot[0].get("snapshotAt") if positions_snapshot else None
     )
 
     return {
@@ -410,11 +407,13 @@ def _build_snapshot_state(*, user_id: int, account_id: int) -> Dict[str, Any]:
     }
 
 
-def _build_snapshot_summary_state(*, user_id: int, account_id: int) -> Dict[str, Any]:
+def _build_snapshot_summary_state(*, user_id: int, account_id: int) -> dict[str, Any]:
     account = _get_account_or_404(user_id, account_id)
     account_snapshot = AccountAssetSnapshotService.get_latest(user_id=user_id, account_id=account_id) or {}
     snapshot_payload = account_snapshot.get("payload") if isinstance(account_snapshot.get("payload"), dict) else {}
-    snapshot_orders = snapshot_payload.get("recentOrders") if isinstance(snapshot_payload.get("recentOrders"), list) else []
+    snapshot_orders = (
+        snapshot_payload.get("recentOrders") if isinstance(snapshot_payload.get("recentOrders"), list) else []
+    )
     snapshot_order_count = int(snapshot_payload.get("orderCount") or len(snapshot_orders) or 0)
     position_count = PositionSnapshotService.get_latest_count(user_id=user_id, account_id=account_id)
     snapshot_at = account_snapshot.get("snapshotAt")
@@ -452,18 +451,14 @@ def _build_snapshot_summary_state(*, user_id: int, account_id: int) -> Dict[str,
 
 def _build_positions_meta(
     *,
-    state: Dict[str, Any],
+    state: dict[str, Any],
     data_source: str,
     default_mode: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     is_live_source = str(data_source or "").startswith("live")
     state_meta = state.get("meta") if isinstance(state.get("meta"), dict) else {}
     sources = state_meta.get("sources") if isinstance(state_meta.get("sources"), dict) else {}
-    snapshot_at = (
-        state_meta.get("positionSnapshotAt")
-        or state.get("snapshotAt")
-        or state_meta.get("snapshotAt")
-    )
+    snapshot_at = state_meta.get("positionSnapshotAt") or state.get("snapshotAt") or state_meta.get("snapshotAt")
     return {
         "readModel": "trade-positions",
         "defaultMode": default_mode,
@@ -480,10 +475,10 @@ def _build_positions_meta(
 
 def _build_dashboard_summary_payload(
     *,
-    state: Dict[str, Any],
+    state: dict[str, Any],
     data_source: str,
     default_mode: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     is_live_source = str(data_source or "").startswith("live")
     account_info = state.get("accountInfo") if isinstance(state.get("accountInfo"), dict) else {}
     positions = state.get("positions") if isinstance(state.get("positions"), list) else []
@@ -496,7 +491,8 @@ def _build_dashboard_summary_payload(
     pnl_ratio = float(account_info.get("today_pnl_percent") or account_info.get("todayPnLPercent") or 0)
     if not pnl_ratio and positions:
         total_cost = sum(
-            float(item.get("avgPrice") or item.get("avg_price") or item.get("average_cost") or 0) * float(item.get("quantity") or 0)
+            float(item.get("avgPrice") or item.get("avg_price") or item.get("average_cost") or 0)
+            * float(item.get("quantity") or 0)
             for item in positions
         )
         pnl_ratio = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
@@ -514,8 +510,12 @@ def _build_dashboard_summary_payload(
         "pnl_ratio": round(pnl_ratio, 4),
         "cash": float(account_info.get("cash") or 0),
         "market_value": float(account_info.get("market_value") or account_info.get("marketValue") or 0),
-        "buying_power": float(account_info.get("buying_power") or account_info.get("buyingPower") or account_info.get("cash") or 0),
-        "maintenance_margin": float(account_info.get("maintenance_margin") or account_info.get("maintenanceMargin") or 0),
+        "buying_power": float(
+            account_info.get("buying_power") or account_info.get("buyingPower") or account_info.get("cash") or 0
+        ),
+        "maintenance_margin": float(
+            account_info.get("maintenance_margin") or account_info.get("maintenanceMargin") or 0
+        ),
         "source": data_source,
         "snapshot_at": snapshot_at,
         "meta": {
@@ -526,7 +526,8 @@ def _build_dashboard_summary_payload(
             "sources": {
                 "account": sources.get("account") or ("broker" if is_live_source else "account_asset_snapshots"),
                 "positions": sources.get("positions") or ("broker" if is_live_source else "position_snapshots"),
-                "orders": sources.get("orders") or ("broker" if is_live_source else "account_asset_snapshots.payload.recentOrders"),
+                "orders": sources.get("orders")
+                or ("broker" if is_live_source else "account_asset_snapshots.payload.recentOrders"),
                 "summary": "trade-dashboard-summary",
             },
             "accountSnapshotAt": state_meta.get("accountSnapshotAt") or snapshot_at,
@@ -534,14 +535,15 @@ def _build_dashboard_summary_payload(
             "orderSnapshotAt": state_meta.get("orderSnapshotAt") or snapshot_at,
             "positionCount": int(state.get("positionCount") or len(positions)),
             "orderCount": int(state.get("orderCount") or len(orders)),
-            "realtimeOverlay": state_meta.get("realtimeOverlay") or (["broker"] if is_live_source else ["quotes", "order-stream"]),
+            "realtimeOverlay": state_meta.get("realtimeOverlay")
+            or (["broker"] if is_live_source else ["quotes", "order-stream"]),
             "warnings": list(state_meta.get("warnings") or []),
             "degraded": bool(state_meta.get("degraded") or str(data_source or "").endswith("fallback")),
         },
     }
 
 
-def _extract_websocket_session(websocket: WebSocket) -> Dict[str, Any]:
+def _extract_websocket_session(websocket: WebSocket) -> dict[str, Any]:
     raw_token = (
         str(websocket.query_params.get("token") or "").strip()
         or str(websocket.headers.get("authorization") or "").strip()
@@ -553,7 +555,7 @@ def _extract_websocket_session(websocket: WebSocket) -> Dict[str, Any]:
     return decode_token(raw_token)
 
 
-def _normalize_projection_status(status: Optional[str]) -> Optional[str]:
+def _normalize_projection_status(status: str | None) -> str | None:
     value = str(status or "").strip().lower()
     return value or None
 
@@ -571,7 +573,7 @@ def _normalize_projection_order_type(order_type: Any) -> str:
     return str(order_type or "").strip().upper()
 
 
-def _positive_float(value: Any) -> Optional[float]:
+def _positive_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
     try:
@@ -581,7 +583,7 @@ def _positive_float(value: Any) -> Optional[float]:
     return number if number > 0 else None
 
 
-def _resolve_order_price_value(payload: Dict[str, Any]) -> Optional[float]:
+def _resolve_order_price_value(payload: dict[str, Any]) -> float | None:
     for key in (
         "price",
         "submitted_price",
@@ -616,7 +618,7 @@ def _upsert_order_projection(
     action: str,
     order_type: str,
     quantity: float,
-    price: Optional[float],
+    price: float | None,
     status: str,
 ) -> None:
     legacy_trade_service._upsert_projection(
@@ -632,7 +634,7 @@ def _upsert_order_projection(
     )
 
 
-def _serialize_projected_order(row: Dict[str, Any], account_map: Dict[int, Dict[str, Any]]) -> Dict[str, Any]:
+def _serialize_projected_order(row: dict[str, Any], account_map: dict[int, dict[str, Any]]) -> dict[str, Any]:
     account_id = int(row.get("account_id") or 0)
     account = account_map.get(account_id) or {}
     created_at = row.get("created_at")
@@ -669,12 +671,12 @@ def _serialize_projected_order(row: Dict[str, Any], account_map: Dict[int, Dict[
 def _query_projected_orders(
     *,
     user_id: int,
-    account_id: Optional[int],
-    status: Optional[str],
+    account_id: int | None,
+    status: str | None,
     limit: int,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     where_clauses = ["p.user_id = %s"]
-    params: List[Any] = [user_id]
+    params: list[Any] = [user_id]
 
     if account_id is not None:
         where_clauses.append("p.account_id = %s")
@@ -719,12 +721,12 @@ def _query_projected_orders(
 def _backfill_order_projections(
     *,
     user_id: int,
-    account_id: Optional[int],
-    status: Optional[str],
+    account_id: int | None,
+    status: str | None,
     limit: int,
-) -> Dict[str, Any]:
-    warnings: List[str] = []
-    live_rows: List[Dict[str, Any]] = []
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    live_rows: list[dict[str, Any]] = []
     targets = [_get_account_or_404(user_id, int(account_id))] if account_id is not None else _get_accounts(user_id)
 
     for account in targets:
@@ -784,11 +786,11 @@ def _backfill_order_projections(
 def _list_projected_orders(
     *,
     user_id: int,
-    account_id: Optional[int],
-    status: Optional[str],
+    account_id: int | None,
+    status: str | None,
     limit: int,
     allow_fallback: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     accounts = _get_accounts(user_id)
     account_map = {int(item.get("id") or 0): item for item in accounts if int(item.get("id") or 0) > 0}
     rows = _query_projected_orders(
@@ -798,7 +800,9 @@ def _list_projected_orders(
         limit=limit,
     )
 
-    def build_projection_meta(data_source: str, snapshot_at: Optional[str], count: int, warnings: List[str]) -> Dict[str, Any]:
+    def build_projection_meta(
+        data_source: str, snapshot_at: str | None, count: int, warnings: list[str]
+    ) -> dict[str, Any]:
         return {
             "readModel": "order-projection",
             "defaultMode": "database",
@@ -820,7 +824,7 @@ def _list_projected_orders(
     if rows:
         items = [_serialize_projected_order(row, account_map) for row in rows]
         snapshot_at = max((item.get("updateTime") or item.get("createTime") or "") for item in items) if items else None
-        warnings: List[str] = []
+        warnings: list[str] = []
         return {
             "list": items,
             "count": len(items),
@@ -859,39 +863,16 @@ def _list_projected_orders(
         "warnings": warnings,
         "meta": build_projection_meta(data_source, snapshot_at, len(items), warnings),
     }
-    positions = [
-        {
-            "symbol": item.get("symbol") or "",
-            "name": item.get("name") or item.get("symbol") or "",
-            "quantity": float(item.get("quantity") or 0),
-            "average_cost": float(item.get("avgPrice") or 0),
-            "market_price": float(item.get("currentPrice") or 0),
-            "market_value": float(item.get("marketValue") or 0),
-            "unrealized_pnl": float(item.get("pnl") or 0),
-            "realized_pnl": 0.0,
-        }
-        for item in positions_snapshot
-    ]
-    return {
-        "account": account,
-        "accountInfo": account_info,
-        "positions": positions,
-        "orders": snapshot_orders,
-        "positionCount": len(positions),
-        "orderCount": snapshot_order_count,
-        "dataSource": "snapshot",
-        "snapshotAt": account_snapshot.get("snapshotAt") or (positions_snapshot[0].get("snapshotAt") if positions_snapshot else None),
-    }
 
 
-def _get_account_record(user_id: int, account_id: int) -> Dict[str, Any]:
+def _get_account_record(user_id: int, account_id: int) -> dict[str, Any]:
     row = get_user_broker_account(account_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="券商账户不存在")
     return row
 
 
-def _build_account_detail(user_id: int, account_id: int) -> Dict[str, Any]:
+def _build_account_detail(user_id: int, account_id: int) -> dict[str, Any]:
     row = _get_account_record(user_id, account_id)
     account = {
         "id": row.get("id"),
@@ -929,7 +910,7 @@ def _build_account_detail(user_id: int, account_id: int) -> Dict[str, Any]:
     return enrich_broker_account(account)
 
 
-def _save_longbridge_config(user_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _save_longbridge_config(user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     account_row_id = payload.get("account_id")
     existing = None
     if account_row_id not in (None, ""):
@@ -956,7 +937,7 @@ def _save_longbridge_config(user_id: int, payload: Dict[str, Any]) -> Dict[str, 
     }
 
 
-def _save_tiger_config(user_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _save_tiger_config(user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     account_row_id = payload.get("account_id")
     existing = None
     if account_row_id not in (None, ""):
@@ -994,7 +975,7 @@ def _save_tiger_config(user_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _test_broker_connection(user_id: int, account_id: int) -> Dict[str, Any]:
+def _test_broker_connection(user_id: int, account_id: int) -> dict[str, Any]:
     record = _get_account_record(user_id, account_id)
     broker_type = str(record.get("broker_type") or "").strip().lower()
     if broker_type == "longbridge":
@@ -1081,10 +1062,14 @@ async def health():
     else:
         event_stream_status = "disabled"
     deps = {
-        "mysql": build_dependency_status("mysql", "healthy" if mysql_ok else "degraded", detail="订单、投影和审计读写数据库"),
+        "mysql": build_dependency_status(
+            "mysql", "healthy" if mysql_ok else "degraded", detail="订单、投影和审计读写数据库"
+        ),
         "kafka": build_dependency_status(
             "kafka",
-            "healthy" if kafka_enabled and not has_failed_delivery else ("disabled" if not kafka_enabled else "degraded"),
+            "healthy"
+            if kafka_enabled and not has_failed_delivery
+            else ("disabled" if not kafka_enabled else "degraded"),
             detail="订单事件发布总线",
             observed=kafka_status,
         ),
@@ -1097,14 +1082,33 @@ async def health():
     }
     alerts = []
     if has_pending_backlog:
-        alerts.append(build_alert("trade-outbox-backlog", "warning", "交易 outbox 存在待发布积压", action="检查 outbox/requeue 或 outbox/repair"))
+        alerts.append(
+            build_alert(
+                "trade-outbox-backlog",
+                "warning",
+                "交易 outbox 存在待发布积压",
+                action="检查 outbox/requeue 或 outbox/repair",
+            )
+        )
     if has_dead_letters:
-        alerts.append(build_alert("trade-outbox-dead-letter", "critical", "交易事件已进入死信队列", action="检查 dead-letter 并决定 purge/requeue"))
+        alerts.append(
+            build_alert(
+                "trade-outbox-dead-letter",
+                "critical",
+                "交易事件已进入死信队列",
+                action="检查 dead-letter 并决定 purge/requeue",
+            )
+        )
     if has_failed_delivery:
-        alerts.append(build_alert("trade-event-delivery-failed", "critical", "事件总线存在投递失败", action="检查 Kafka 连接与 outbox relay 日志"))
-    broker_connectivity = {
-        "longbridge": _build_longbridge_connectivity_status(longbridge_status)
-    }
+        alerts.append(
+            build_alert(
+                "trade-event-delivery-failed",
+                "critical",
+                "事件总线存在投递失败",
+                action="检查 Kafka 连接与 outbox relay 日志",
+            )
+        )
+    broker_connectivity = {"longbridge": _build_longbridge_connectivity_status(longbridge_status)}
     return build_health_payload(
         service="trade-service",
         version=app.version,
@@ -1147,9 +1151,9 @@ async def repair_trade_outbox(session: dict = Depends(get_current_session)):
 
 @app.get("/api/v1/trade/outbox/events")
 async def list_trade_outbox_events(
-    status: List[str] = Query(default=[]),
-    saga_id: Optional[str] = Query(default=None),
-    event_type: Optional[str] = Query(default=None),
+    status: list[str] = Query(default=[]),
+    saga_id: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     include_payload: bool = Query(default=False),
     session: dict = Depends(get_current_session),
@@ -1178,7 +1182,7 @@ async def list_trade_outbox_events(
 
 @app.get("/api/v1/trade/outbox/sagas")
 async def list_trade_outbox_sagas(
-    status: List[str] = Query(default=[]),
+    status: list[str] = Query(default=[]),
     limit: int = Query(default=50, ge=1, le=200),
     session: dict = Depends(get_current_session),
 ):
@@ -1272,7 +1276,7 @@ async def purge_trade_dead_letters_by_saga(
 
 @app.get("/api/v1/trade/bootstrap")
 async def bootstrap_trade(
-    status: Optional[str] = Query(default=None),
+    status: str | None = Query(default=None),
     limit: int = Query(default=12, ge=1, le=60),
     session: dict = Depends(get_current_session),
 ):
@@ -1280,7 +1284,7 @@ async def bootstrap_trade(
     accounts = _get_accounts(user_id)
     default_account = _get_default_account(user_id)
     default_state = None
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     if default_account:
         try:
@@ -1400,7 +1404,7 @@ async def broker_account_test(account_id: int, session: dict = Depends(get_curre
 
 @app.post("/api/v1/trade/brokers/longbridge")
 async def save_longbridge_broker(
-    payload: Dict[str, Any] = Body(default={}),
+    payload: dict[str, Any] = Body(default={}),
     session: dict = Depends(get_current_session),
 ):
     result = _save_longbridge_config(int(session["user_id"]), payload)
@@ -1409,7 +1413,7 @@ async def save_longbridge_broker(
 
 @app.post("/api/v1/trade/brokers/tiger")
 async def save_tiger_broker(
-    payload: Dict[str, Any] = Body(default={}),
+    payload: dict[str, Any] = Body(default={}),
     session: dict = Depends(get_current_session),
 ):
     result = _save_tiger_config(int(session["user_id"]), payload)
@@ -1497,7 +1501,11 @@ async def get_positions(
     session: dict = Depends(get_current_session),
 ):
     user_id = int(session["user_id"])
-    state = _build_account_state(user_id=user_id, account_id=account_id, limit=1) if realtime else _build_snapshot_state(user_id=user_id, account_id=account_id)
+    state = (
+        _build_account_state(user_id=user_id, account_id=account_id, limit=1)
+        if realtime
+        else _build_snapshot_state(user_id=user_id, account_id=account_id)
+    )
     return {
         "success": True,
         "data": state["positions"],
@@ -1512,7 +1520,7 @@ async def get_positions(
 @app.get("/api/v1/trade/accounts/{account_id}/state")
 async def get_account_state(
     account_id: int,
-    status: Optional[str] = Query(default=None),
+    status: str | None = Query(default=None),
     limit: int = Query(default=30, ge=1, le=200),
     realtime: bool = Query(default=False),
     session: dict = Depends(get_current_session),
@@ -1552,15 +1560,17 @@ async def get_account_snapshot_state(account_id: int, session: dict = Depends(ge
 
 @app.get("/api/v1/trade/orders")
 async def get_orders(
-    account_id: Optional[int] = Query(default=None),
-    status: Optional[str] = Query(default=None),
+    account_id: int | None = Query(default=None),
+    status: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
     realtime: bool = Query(default=False),
     session: dict = Depends(get_current_session),
 ):
     user_id = int(session["user_id"])
     if realtime:
-        trade_user = legacy_trade_service.AuthUser(user_id=user_id, username="", role=str(session.get("role") or "user"))
+        trade_user = legacy_trade_service.AuthUser(
+            user_id=user_id, username="", role=str(session.get("role") or "user")
+        )
         return legacy_trade_service._list_orders(trade_user, account_id, status, limit)
 
     payload = _list_projected_orders(
@@ -1575,8 +1585,8 @@ async def get_orders(
 
 @app.get("/api/v1/trade/orders/projection")
 async def get_order_projection(
-    account_id: Optional[int] = Query(default=None),
-    status: Optional[str] = Query(default=None),
+    account_id: int | None = Query(default=None),
+    status: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
     session: dict = Depends(get_current_session),
 ):
@@ -1601,7 +1611,7 @@ async def order_projection_socket(websocket: WebSocket):
     user_id = int(session["user_id"])
     await websocket.accept()
 
-    subscription: Dict[str, Any] = {
+    subscription: dict[str, Any] = {
         "account_id": None,
         "status": None,
         "limit": 200,
@@ -1632,7 +1642,7 @@ async def order_projection_socket(websocket: WebSocket):
                 "dataSource": payload.get("dataSource") or "order-projection",
                 "snapshotAt": payload.get("snapshotAt"),
                 "meta": payload.get("meta") or {},
-                "receivedAt": datetime.now(timezone.utc).isoformat(),
+                "receivedAt": datetime.now(UTC).isoformat(),
             }
         )
 
@@ -1640,7 +1650,7 @@ async def order_projection_socket(websocket: WebSocket):
         while True:
             try:
                 message = await asyncio.wait_for(websocket.receive_text(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await push_orders()
                 continue
 
@@ -1657,7 +1667,7 @@ async def order_projection_socket(websocket: WebSocket):
                     {
                         "type": "pong",
                         "channel": "trade.orders.system",
-                        "receivedAt": datetime.now(timezone.utc).isoformat(),
+                        "receivedAt": datetime.now(UTC).isoformat(),
                         "userId": user_id,
                     }
                 )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Dict, Iterable, Optional
+from collections.abc import Iterable
 
 from utils.DbUtil import DbUtil
 
@@ -17,7 +17,7 @@ class SystemSettingsService:
         "language": {"value": "zh-CN", "type": "string", "description": "默认语言"},
         "timezone": {"value": "Asia/Shanghai", "type": "string", "description": "默认时区"},
         "dashboard_refresh_seconds": {"value": "15", "type": "int", "description": "首页数据刷新间隔"},
-        "finance_news_refresh_seconds": {"value": "900", "type": "int", "description": "财经资讯刷新间隔"}
+        "finance_news_refresh_seconds": {"value": "900", "type": "int", "description": "财经资讯刷新间隔"},
     }
 
     @classmethod
@@ -53,33 +53,33 @@ class SystemSettingsService:
                         description = VALUES(description),
                         updated_at = CURRENT_TIMESTAMP
                     """,
-                    (key, str(meta.get("value", "")), meta.get("type", "string"), meta.get("description"))
+                    (key, str(meta.get("value", "")), meta.get("type", "string"), meta.get("description")),
                 )
 
             cls._schema_ready = True
 
     @classmethod
-    def get_all(cls) -> Dict[str, object]:
+    def get_all(cls) -> dict[str, object]:
         cls.ensure_schema()
-        rows = DbUtil.fetch_all(
-            """
+        rows = (
+            DbUtil.fetch_all(
+                """
             SELECT setting_key, setting_value, value_type, description, updated_at
             FROM platform_system_settings
             ORDER BY setting_key ASC
             """
-        ) or []
-        payload: Dict[str, object] = {}
+            )
+            or []
+        )
+        payload: dict[str, object] = {}
         for row in rows:
             payload[row.get("setting_key")] = cls._coerce_value(row.get("setting_value"), row.get("value_type"))
         return payload
 
     @classmethod
     def update_many(
-        cls,
-        updates: Dict[str, object],
-        user_id: Optional[int] = None,
-        allowed_keys: Optional[Iterable[str]] = None
-    ) -> Dict[str, object]:
+        cls, updates: dict[str, object], user_id: int | None = None, allowed_keys: Iterable[str] | None = None
+    ) -> dict[str, object]:
         cls.ensure_schema()
         allowed = set(allowed_keys or cls.DEFAULTS.keys())
         for key, value in (updates or {}).items():
@@ -102,8 +102,8 @@ class SystemSettingsService:
                     cls._serialize_value(value),
                     default_meta.get("type", "string"),
                     default_meta.get("description"),
-                    user_id
-                )
+                    user_id,
+                ),
             )
         return cls.get_all()
 

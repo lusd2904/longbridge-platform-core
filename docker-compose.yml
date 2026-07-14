@@ -60,6 +60,8 @@ services:
     container_name: refactor-v2-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
+    mem_limit: 256m
+    cpus: 0.25
     networks:
       - refactor-v2
     volumes:
@@ -78,12 +80,15 @@ services:
       context: .
     container_name: refactor-v2-user
     command: ["scripts/docker_service_entrypoint.sh", "apps/platform/user-center/src"]
+    mem_limit: 256m
+    cpus: 0.25
     environment:
       <<: *backend-env
       SERVICE_PORT: "8101"
       REF_USER_CENTER_PORT: "8101"
-    ports:
-      - "127.0.0.1:${REF_USER_CENTER_PORT:-8101}:8101"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8101/health"]
       interval: 30s
@@ -96,15 +101,17 @@ services:
     container_name: refactor-v2-market
     command: ["scripts/docker_service_entrypoint.sh", "apps/market/market-service/src"]
     volumes: *longbridge-cli-volumes
+    mem_limit: 512m
+    cpus: 0.5
     depends_on:
+      redis:
+        condition: service_healthy
       user-center:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "8102"
       REF_MARKET_SERVICE_PORT: "8102"
-    ports:
-      - "127.0.0.1:${REF_MARKET_SERVICE_PORT:-8102}:8102"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8102/health"]
       interval: 30s
@@ -116,17 +123,19 @@ services:
     <<: *backend-service
     container_name: refactor-v2-analysis
     command: ["scripts/docker_service_entrypoint.sh", "apps/intelligence/analysis-service/src"]
+    mem_limit: 1024m
+    cpus: 1.0
     depends_on:
+      redis:
+        condition: service_healthy
       market-service:
-        condition: service_started
+        condition: service_healthy
       agno-sidecar:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "8103"
       REF_ANALYSIS_SERVICE_PORT: "8103"
-    ports:
-      - "127.0.0.1:${REF_ANALYSIS_SERVICE_PORT:-8103}:8103"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8103/health"]
       interval: 30s
@@ -138,12 +147,15 @@ services:
     <<: *backend-service
     container_name: refactor-v2-agno-sidecar
     command: ["scripts/docker_service_entrypoint.sh", "apps/intelligence/agno-sidecar/src"]
+    mem_limit: 512m
+    cpus: 0.5
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "3200"
       REF_AGNO_SIDECAR_PORT: "3200"
-    ports:
-      - "127.0.0.1:${REF_AGNO_SIDECAR_PORT:-3200}:3200"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3200/health"]
       interval: 30s
@@ -155,15 +167,17 @@ services:
     <<: *backend-service
     container_name: refactor-v2-strategy
     command: ["scripts/docker_service_entrypoint.sh", "apps/intelligence/strategy-service/src"]
+    mem_limit: 512m
+    cpus: 0.5
     depends_on:
+      redis:
+        condition: service_healthy
       analysis-service:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "8104"
       REF_STRATEGY_SERVICE_PORT: "8104"
-    ports:
-      - "127.0.0.1:${REF_STRATEGY_SERVICE_PORT:-8104}:8104"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8104/health"]
       interval: 30s
@@ -176,17 +190,19 @@ services:
     container_name: refactor-v2-trade
     command: ["scripts/docker_service_entrypoint.sh", "apps/trading/trade-service/src"]
     volumes: *longbridge-cli-volumes
+    mem_limit: 256m
+    cpus: 0.25
     depends_on:
+      redis:
+        condition: service_healthy
       user-center:
-        condition: service_started
+        condition: service_healthy
       market-service:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "8105"
       REF_TRADE_SERVICE_PORT: "8105"
-    ports:
-      - "127.0.0.1:${REF_TRADE_SERVICE_PORT:-8105}:8105"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8105/health"]
       interval: 30s
@@ -198,12 +214,15 @@ services:
     <<: *backend-service
     container_name: refactor-v2-sentiment
     command: ["scripts/docker_service_entrypoint.sh", "apps/market/sentiment-service/src"]
+    mem_limit: 256m
+    cpus: 0.25
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "8106"
       REF_SENTIMENT_SERVICE_PORT: "8106"
-    ports:
-      - "127.0.0.1:${REF_SENTIMENT_SERVICE_PORT:-8106}:8106"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8106/health"]
       interval: 30s
@@ -216,20 +235,22 @@ services:
     container_name: refactor-v2-scheduler
     command: ["scripts/docker_service_entrypoint.sh", "apps/operations/scheduler-service/src"]
     volumes: *longbridge-cli-volumes
+    mem_limit: 256m
+    cpus: 0.25
     depends_on:
+      redis:
+        condition: service_healthy
       user-center:
-        condition: service_started
+        condition: service_healthy
       market-service:
-        condition: service_started
+        condition: service_healthy
       analysis-service:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "8107"
       REF_SCHEDULER_SERVICE_PORT: "8107"
       REF_ANALYSIS_SERVICE_URL: http://analysis-service:8103
-    ports:
-      - "127.0.0.1:${REF_SCHEDULER_SERVICE_PORT:-8107}:8107"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8107/health"]
       interval: 30s
@@ -241,17 +262,19 @@ services:
     <<: *backend-service
     container_name: refactor-v2-risk
     command: ["scripts/docker_service_entrypoint.sh", "apps/governance/risk-service/src"]
+    mem_limit: 256m
+    cpus: 0.25
     depends_on:
+      redis:
+        condition: service_healthy
       user-center:
-        condition: service_started
+        condition: service_healthy
       trade-service:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "8108"
       REF_RISK_SERVICE_PORT: "8108"
-    ports:
-      - "127.0.0.1:${REF_RISK_SERVICE_PORT:-8108}:8108"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8108/health"]
       interval: 30s
@@ -263,25 +286,29 @@ services:
     <<: *backend-service
     container_name: refactor-v2-gateway
     command: ["scripts/docker_service_entrypoint.sh", "apps/platform/api-gateway/src"]
+    mem_limit: 256m
+    cpus: 0.25
     depends_on:
+      redis:
+        condition: service_healthy
       user-center:
-        condition: service_started
+        condition: service_healthy
       market-service:
-        condition: service_started
+        condition: service_healthy
       analysis-service:
-        condition: service_started
+        condition: service_healthy
       strategy-service:
-        condition: service_started
+        condition: service_healthy
       trade-service:
-        condition: service_started
+        condition: service_healthy
       sentiment-service:
-        condition: service_started
+        condition: service_healthy
       scheduler-service:
-        condition: service_started
+        condition: service_healthy
       risk-service:
-        condition: service_started
+        condition: service_healthy
       agno-sidecar:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *backend-env
       SERVICE_PORT: "5101"
@@ -311,25 +338,29 @@ services:
     container_name: refactor-v2-web
     restart: unless-stopped
     logging: *default-logging
+    mem_limit: 128m
+    cpus: 0.1
     depends_on:
+      redis:
+        condition: service_healthy
       api-gateway:
-        condition: service_started
+        condition: service_healthy
       user-center:
-        condition: service_started
+        condition: service_healthy
       market-service:
-        condition: service_started
+        condition: service_healthy
       analysis-service:
-        condition: service_started
+        condition: service_healthy
       strategy-service:
-        condition: service_started
+        condition: service_healthy
       trade-service:
-        condition: service_started
+        condition: service_healthy
       sentiment-service:
-        condition: service_started
+        condition: service_healthy
       scheduler-service:
-        condition: service_started
+        condition: service_healthy
       risk-service:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "${REF_WEB_PORTAL_PORT:-3100}:3100"
     networks:
@@ -340,6 +371,29 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: refactor-v2-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - refactor-v2
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: refactor-v2-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - refactor-v2
 
 networks:
   refactor-v2:

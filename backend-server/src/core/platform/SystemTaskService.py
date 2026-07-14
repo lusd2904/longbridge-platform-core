@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Dict, List, Optional
 
 from utils.DbUtil import DbUtil
 
@@ -11,7 +10,7 @@ class SystemTaskService:
     _schema_ready = False
     _lock = threading.Lock()
 
-    DEFAULT_POLICIES: Dict[str, Dict[str, object]] = {
+    DEFAULT_POLICIES: dict[str, dict[str, object]] = {
         "recommendation_refresh": {
             "taskName": "智能推荐刷新",
             "category": "analysis",
@@ -25,7 +24,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "后台定期刷新推荐结果。"
+            "description": "后台定期刷新推荐结果。",
         },
         "market_universe_daily_sync": {
             "taskName": "市场底库全量同步",
@@ -40,7 +39,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "每天同步股票与 ETF 标的清单和基础快照。"
+            "description": "每天同步股票与 ETF 标的清单和基础快照。",
         },
         "market_insight_refresh": {
             "taskName": "市场动态扫描",
@@ -55,7 +54,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "工作台大盘动态和基准指数快照。"
+            "description": "工作台大盘动态和基准指数快照。",
         },
         "historical_market_data_daily_sync": {
             "taskName": "历史行情增量同步",
@@ -70,7 +69,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "每天增量同步重点标的历史日线。"
+            "description": "每天增量同步重点标的历史日线。",
         },
         "market_history_universe_backfill": {
             "taskName": "全市场历史慢补数",
@@ -85,7 +84,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "后台慢速补全全市场股票与 ETF 历史行情和技术指标。"
+            "description": "后台慢速补全全市场股票与 ETF 历史行情和技术指标。",
         },
         "symbol_indicator_daily_refresh": {
             "taskName": "技术指标日刷新",
@@ -100,7 +99,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "基于历史行情生成日/周/月/季技术指标快照。"
+            "description": "基于历史行情生成日/周/月/季技术指标快照。",
         },
         "daily_market_ai_scan": {
             "taskName": "市场 AI 技术扫描",
@@ -115,7 +114,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "每天对美股、A股、港股做市场级 AI 技术扫描。"
+            "description": "每天对美股、A股、港股做市场级 AI 技术扫描。",
         },
         "watchlist_pre_open_review": {
             "taskName": "自选股盘前复核",
@@ -135,9 +134,9 @@ class SystemTaskService:
                 "autoBuyMaxSymbols": 2,
                 "autoBuyMaxAmount": 2000,
                 "autoBuyMaxPositionRatio": 0.08,
-                "autoBuyMinConfidence": 72
+                "autoBuyMinConfidence": 72,
             },
-            "description": "每天盘前生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。"
+            "description": "每天盘前生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。",
         },
         "watchlist_midday_review": {
             "taskName": "自选股盘中复核",
@@ -157,9 +156,9 @@ class SystemTaskService:
                 "autoBuyMaxSymbols": 2,
                 "autoBuyMaxAmount": 2000,
                 "autoBuyMaxPositionRatio": 0.08,
-                "autoBuyMinConfidence": 72
+                "autoBuyMinConfidence": 72,
             },
-            "description": "盘中补充生成自选股 AI 复核建议，用于风险、趋势和仓位线索更新；默认只复核不交易。"
+            "description": "盘中补充生成自选股 AI 复核建议，用于风险、趋势和仓位线索更新；默认只复核不交易。",
         },
         "watchlist_post_close_review": {
             "taskName": "自选股盘后复核",
@@ -179,9 +178,9 @@ class SystemTaskService:
                 "autoBuyMaxSymbols": 2,
                 "autoBuyMaxAmount": 2000,
                 "autoBuyMaxPositionRatio": 0.08,
-                "autoBuyMinConfidence": 72
+                "autoBuyMinConfidence": 72,
             },
-            "description": "每天盘后生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。"
+            "description": "每天盘后生成自选股 AI 复核建议；可在任务中心显式开启机会股自动买入，并受仓位控制。",
         },
         "watchlist_us_open_ai_trade": {
             "taskName": "美股开盘 AI 自动交易",
@@ -207,9 +206,9 @@ class SystemTaskService:
                 "refreshRealtimePrice": True,
                 "requireRealtimePrice": True,
                 "maxDailySubmittedOrders": 10,
-                "maxDailyNotionalRatio": 0.70
+                "maxDailyNotionalRatio": 0.70,
             },
-            "description": "美股常规开盘期间每 15 分钟扫描自选股池并触发 AI 自动交易，默认买入最多 5 只、总持仓占总资金 70%，下单前刷新券商实时价，并受纸账户、日内预算与交易边界保护。"
+            "description": "美股常规开盘期间每 15 分钟扫描自选股池并触发 AI 自动交易，默认买入最多 5 只、总持仓占总资金 70%，下单前刷新券商实时价，并受纸账户、日内预算与交易边界保护。",
         },
         "daily_symbol_trend_ai_scan": {
             "taskName": "逐股 AI 趋势扫描",
@@ -224,7 +223,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "每天按批次扫描全市场股票和 ETF 截止昨日的趋势结果并落库。"
+            "description": "每天按批次扫描全市场股票和 ETF 截止昨日的趋势结果并落库。",
         },
         "finance_briefing_refresh": {
             "taskName": "财经信息刷新",
@@ -239,7 +238,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "定期生成财经信息和市场简报。"
+            "description": "定期生成财经信息和市场简报。",
         },
         "account_asset_snapshot_refresh": {
             "taskName": "账户资产快照刷新",
@@ -254,7 +253,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "按账户固化总资产、现金、买力等展示快照，供工作台和个人中心默认读库。"
+            "description": "按账户固化总资产、现金、买力等展示快照，供工作台和个人中心默认读库。",
         },
         "position_snapshot_refresh": {
             "taskName": "持仓快照刷新",
@@ -269,7 +268,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "按账户固化持仓、权重与盈亏快照，供持仓页与风控页优先读取。"
+            "description": "按账户固化持仓、权重与盈亏快照，供持仓页与风控页优先读取。",
         },
         "risk_overview_snapshot_refresh": {
             "taskName": "风控总览快照刷新",
@@ -284,7 +283,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "固化风险评分、事件摘要与保护单统计。"
+            "description": "固化风险评分、事件摘要与保护单统计。",
         },
         "quote_snapshot_refresh": {
             "taskName": "展示行情快照刷新",
@@ -299,7 +298,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "为市场页、股票池、标的详情固化展示型最新价快照，前端默认读库，再由 WebSocket 覆盖。"
+            "description": "为市场页、股票池、标的详情固化展示型最新价快照，前端默认读库，再由 WebSocket 覆盖。",
         },
         "symbol_content_cache_refresh": {
             "taskName": "标的内容缓存预热",
@@ -314,7 +313,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "预热热门标的公告、资讯与讨论缓存，减少页面直拉外部内容。"
+            "description": "预热热门标的公告、资讯与讨论缓存，减少页面直拉外部内容。",
         },
         "websocket_quote_stream": {
             "taskName": "WebSocket 行情推送",
@@ -329,7 +328,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": False,
-            "description": "为行情页推送实时行情，支持后台限速与批量控制。"
+            "description": "为行情页推送实时行情，支持后台限速与批量控制。",
         },
         "position_monitor": {
             "taskName": "持仓规则监控",
@@ -344,7 +343,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "user",
             "singleRun": False,
-            "description": "按用户规则监控持仓与告警。"
+            "description": "按用户规则监控持仓与告警。",
         },
         "quant_trading": {
             "taskName": "自选池量化交易",
@@ -359,7 +358,7 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "user",
             "singleRun": False,
-            "description": "只对用户自选股池做多因子策略扫描；自动执行仍受量化开关、账户权限、仓位和长桥模拟账户约束。"
+            "description": "只对用户自选股池做多因子策略扫描；自动执行仍受量化开关、账户权限、仓位和长桥模拟账户约束。",
         },
         "bootstrap_market_history_2024": {
             "taskName": "2024起全量历史回补",
@@ -374,8 +373,8 @@ class SystemTaskService:
             "allowAdminToggle": True,
             "userScope": "system",
             "singleRun": True,
-            "description": "一次性回补 2024 年以来股票和 ETF 历史数据，完成后自动关闭。"
-        }
+            "description": "一次性回补 2024 年以来股票和 ETF 历史数据，完成后自动关闭。",
+        },
     }
 
     @classmethod
@@ -448,16 +447,17 @@ class SystemTaskService:
                     policy["userScope"],
                     1 if policy["singleRun"] else 0,
                     json.dumps(policy.get("settings", {}) or {}, ensure_ascii=False),
-                    policy["description"]
-                )
+                    policy["description"],
+                ),
             )
 
     @classmethod
-    def get_policy(cls, task_key: str) -> Dict[str, object]:
+    def get_policy(cls, task_key: str) -> dict[str, object]:
         cls.ensure_schema()
         base = dict(cls.DEFAULT_POLICIES.get(task_key, {}))
-        row = DbUtil.fetch_one(
-            """
+        row = (
+            DbUtil.fetch_one(
+                """
             SELECT task_key, task_name, category, schedule_type, enabled, interval_seconds,
                    run_hour, run_minute, max_requests_per_minute, batch_size,
                    allow_admin_toggle, user_scope, single_run, last_cursor,
@@ -466,8 +466,10 @@ class SystemTaskService:
             WHERE task_key = %s
             LIMIT 1
             """,
-            (task_key,)
-        ) or {}
+                (task_key,),
+            )
+            or {}
+        )
 
         if not row and not base:
             return {}
@@ -483,7 +485,10 @@ class SystemTaskService:
             "intervalSeconds": cls._safe_int(row.get("interval_seconds"), base.get("intervalSeconds")),
             "runHour": cls._safe_int(row.get("run_hour"), base.get("runHour")),
             "runMinute": cls._safe_int(row.get("run_minute"), base.get("runMinute")),
-            "maxRequestsPerMinute": cls._safe_int(row.get("max_requests_per_minute"), base.get("maxRequestsPerMinute", 0)) or 0,
+            "maxRequestsPerMinute": cls._safe_int(
+                row.get("max_requests_per_minute"), base.get("maxRequestsPerMinute", 0)
+            )
+            or 0,
             "batchSize": cls._safe_int(row.get("batch_size"), base.get("batchSize", 0)) or 0,
             "allowAdminToggle": bool(row.get("allow_admin_toggle") if row else base.get("allowAdminToggle", True)),
             "userScope": row.get("user_scope") or base.get("userScope") or "system",
@@ -493,37 +498,44 @@ class SystemTaskService:
                 **base_settings,
                 **stored_settings,
             },
-            "description": row.get("description") or base.get("description") or ""
+            "description": row.get("description") or base.get("description") or "",
         }
         return merged
 
     @classmethod
-    def list_policies(cls) -> List[Dict[str, object]]:
+    def list_policies(cls) -> list[dict[str, object]]:
         cls.ensure_schema()
         policies = []
         for task_key in cls.DEFAULT_POLICIES.keys():
             policy = cls.get_policy(task_key)
-            status = DbUtil.fetch_one(
-                """
+            status = (
+                DbUtil.fetch_one(
+                    """
                 SELECT job_name, last_run_date, last_run_at, status, message
                 FROM scheduled_jobs
                 WHERE job_name = %s
                 LIMIT 1
                 """,
-                (task_key,)
-            ) or {}
+                    (task_key,),
+                )
+                or {}
+            )
             policy["status"] = {
                 "jobName": status.get("job_name") or task_key,
-                "lastRunDate": status.get("last_run_date").strftime('%Y-%m-%d') if status.get("last_run_date") else None,
-                "lastRunAt": status.get("last_run_at").strftime('%Y-%m-%d %H:%M:%S') if status.get("last_run_at") else None,
+                "lastRunDate": status.get("last_run_date").strftime("%Y-%m-%d")
+                if status.get("last_run_date")
+                else None,
+                "lastRunAt": status.get("last_run_at").strftime("%Y-%m-%d %H:%M:%S")
+                if status.get("last_run_at")
+                else None,
                 "state": status.get("status") or "idle",
-                "message": status.get("message") or ""
+                "message": status.get("message") or "",
             }
             policies.append(policy)
         return policies
 
     @classmethod
-    def update_policy(cls, task_key: str, payload: Dict[str, object]) -> Dict[str, object]:
+    def update_policy(cls, task_key: str, payload: dict[str, object]) -> dict[str, object]:
         cls.ensure_schema()
         current = cls.get_policy(task_key)
         if not current:
@@ -535,10 +547,13 @@ class SystemTaskService:
             "intervalSeconds": cls._safe_int(payload.get("intervalSeconds"), current.get("intervalSeconds")),
             "runHour": cls._safe_int(payload.get("runHour"), current.get("runHour")),
             "runMinute": cls._safe_int(payload.get("runMinute"), current.get("runMinute")),
-            "maxRequestsPerMinute": cls._safe_int(payload.get("maxRequestsPerMinute"), current.get("maxRequestsPerMinute")) or 0,
+            "maxRequestsPerMinute": cls._safe_int(
+                payload.get("maxRequestsPerMinute"), current.get("maxRequestsPerMinute")
+            )
+            or 0,
             "batchSize": cls._safe_int(payload.get("batchSize"), current.get("batchSize")) or 0,
             "settings": payload.get("settings", current.get("settings") or {}),
-            "description": payload.get("description", current.get("description") or "")
+            "description": payload.get("description", current.get("description") or ""),
         }
 
         DbUtil.execute_sql(
@@ -564,17 +579,17 @@ class SystemTaskService:
                 next_policy["batchSize"],
                 json.dumps(next_policy["settings"] or {}, ensure_ascii=False),
                 next_policy["description"],
-                task_key
-            )
+                task_key,
+            ),
         )
         return cls.get_policy(task_key)
 
     @classmethod
-    def set_last_cursor(cls, task_key: str, cursor_value: Optional[str]) -> None:
+    def set_last_cursor(cls, task_key: str, cursor_value: str | None) -> None:
         cls.ensure_schema()
         DbUtil.execute_sql(
             "UPDATE system_task_policies SET last_cursor = %s, updated_at = CURRENT_TIMESTAMP WHERE task_key = %s",
-            (cursor_value, task_key)
+            (cursor_value, task_key),
         )
 
     @classmethod
@@ -588,7 +603,7 @@ class SystemTaskService:
                 updated_at = CURRENT_TIMESTAMP
             WHERE task_key = %s
             """,
-            (message, task_key)
+            (message, task_key),
         )
 
     @classmethod

@@ -2,17 +2,20 @@
 Kafka 事件总线封装。
 本地开发环境优先保证可用性，连接失败时自动降级但保留状态。
 """
+
 from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Dict, Iterable, Optional
+from typing import Any
 
 from config.settings import settings
 
 try:
     from kafka import KafkaProducer
+
     KAFKA_AVAILABLE = True
 except Exception:  # pragma: no cover - 兼容本地未安装依赖
     KafkaProducer = None
@@ -23,8 +26,8 @@ class KafkaBus:
     def __init__(self) -> None:
         self._producer = None
         self._lock = threading.Lock()
-        self._last_error: Optional[str] = None
-        self._last_published_at: Optional[str] = None
+        self._last_error: str | None = None
+        self._last_published_at: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -49,7 +52,7 @@ class KafkaBus:
                     acks=1,
                     retries=1,
                     request_timeout_ms=5000,
-                    api_version_auto_timeout_ms=3000
+                    api_version_auto_timeout_ms=3000,
                 )
                 self._last_error = None
             except Exception as exc:
@@ -57,7 +60,7 @@ class KafkaBus:
                 self._last_error = str(exc)
             return self._producer
 
-    def publish(self, topic: str, payload: Dict[str, Any], *, key: Optional[str] = None) -> bool:
+    def publish(self, topic: str, payload: dict[str, Any], *, key: str | None = None) -> bool:
         producer = self._ensure_producer()
         if producer is None:
             return False
@@ -72,16 +75,16 @@ class KafkaBus:
             self._last_error = str(exc)
             return False
 
-    def publish_market_quotes(self, *, account_id: int, quotes: Iterable[Dict[str, Any]]) -> bool:
+    def publish_market_quotes(self, *, account_id: int, quotes: Iterable[dict[str, Any]]) -> bool:
         payload = {
             "eventType": "market.quotes.snapshot",
             "accountId": int(account_id),
             "quotes": list(quotes),
-            "publishedAt": datetime.now().isoformat()
+            "publishedAt": datetime.now().isoformat(),
         }
         return self.publish(settings.KAFKA_MARKET_TOPIC, payload, key=f"account:{account_id}")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         producer = self._ensure_producer()
         connected = False
         if producer is not None:
@@ -101,7 +104,7 @@ class KafkaBus:
             "tradeCommandTopic": settings.KAFKA_TRADE_COMMAND_TOPIC,
             "tradeEventTopic": settings.KAFKA_TRADE_EVENT_TOPIC,
             "lastPublishedAt": self._last_published_at,
-            "lastError": self._last_error
+            "lastError": self._last_error,
         }
 
     def close(self) -> None:

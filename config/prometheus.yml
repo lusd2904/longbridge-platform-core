@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'platform-core'
+    static_configs:
+      - targets: 
+        - 'api-gateway:5101'
+        - 'user-center:8101'
+        - 'market-service:8102'
+        - 'analysis-service:8103'
+        - 'strategy-service:8104'
+        - 'trade-service:8105'
+        - 'sentiment-service:8106'
+        - 'scheduler-service:8107'
+        - 'risk-service:8108'

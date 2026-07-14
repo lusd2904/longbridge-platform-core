@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.platform.SystemTaskService import SystemTaskService
 from utils.DbUtil import DbUtil
 
 
-def coerce_positive_int(value: Any) -> Optional[int]:
+def coerce_positive_int(value: Any) -> int | None:
     try:
         parsed = int(str(value).strip())
     except (TypeError, ValueError):
@@ -15,7 +15,7 @@ def coerce_positive_int(value: Any) -> Optional[int]:
     return parsed if parsed > 0 else None
 
 
-def load_active_user(user_id: Any) -> Optional[Dict[str, Any]]:
+def load_active_user(user_id: Any) -> dict[str, Any] | None:
     normalized_user_id = coerce_positive_int(user_id)
     if normalized_user_id is None:
         return None
@@ -38,8 +38,8 @@ def load_active_user(user_id: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def resolve_task_execution_user(task_key: str, requested_user_id: Any = None) -> Optional[Dict[str, Any]]:
-    policy_settings: Dict[str, Any] = {}
+def resolve_task_execution_user(task_key: str, requested_user_id: Any = None) -> dict[str, Any] | None:
+    policy_settings: dict[str, Any] = {}
     try:
         policy_settings = (SystemTaskService.get_policy(task_key) or {}).get("settings") or {}
     except Exception:
@@ -77,4 +77,3 @@ def resolve_task_execution_user(task_key: str, requested_user_id: Any = None) ->
         "role": row.get("role") or "user",
         "reason": "active-user-fallback",
     }
-

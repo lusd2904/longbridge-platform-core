@@ -2,14 +2,13 @@
 JSON Logger Configuration
 提供统一的JSON格式日志输出
 """
-import os
-import logging
+
 import json
-import time
-import traceback
-from datetime import datetime
-from typing import Dict, Any, Optional
+import logging
+import os
 import threading
+from datetime import datetime
+from typing import Any
 
 # 线程本地存储，用于跟踪traceID
 _thread_local = threading.local()
@@ -42,7 +41,7 @@ class JSONFormatter(logging.Formatter):
             JSON字符串
         """
         # 创建日志字典
-        log_entry: Dict[str, Any] = {
+        log_entry: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created).isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
@@ -63,11 +62,11 @@ class JSONFormatter(logging.Formatter):
             log_entry["exception"] = {
                 "type": record.exc_info[0].__name__,
                 "message": str(record.exc_info[1]),
-                "traceback": self.formatException(record.exc_info)
+                "traceback": self.formatException(record.exc_info),
             }
 
         # 添加额外字段
-        if hasattr(record, 'extra_fields'):
+        if hasattr(record, "extra_fields"):
             log_entry.update(record.extra_fields)
 
         return json.dumps(log_entry, ensure_ascii=False)
@@ -78,7 +77,7 @@ def setup_json_logger(
     level: int = logging.INFO,
     service_name: str = None,
     enable_console: bool = True,
-    log_file: Optional[str] = None
+    log_file: str | None = None,
 ) -> logging.Logger:
     """
     配置JSON格式的日志记录器
@@ -114,7 +113,7 @@ def setup_json_logger(
         log_dir = os.path.dirname(log_file)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
@@ -135,19 +134,19 @@ def set_trace_id(trace_id: str):
     _thread_local.trace_id = trace_id
 
 
-def get_trace_id() -> Optional[str]:
+def get_trace_id() -> str | None:
     """
     获取当前线程的traceID
 
     Returns:
         traceID字符串，如果未设置则返回None
     """
-    return getattr(_thread_local, 'trace_id', None)
+    return getattr(_thread_local, "trace_id", None)
 
 
 def clear_trace_id():
     """清除当前线程的traceID"""
-    if hasattr(_thread_local, 'trace_id'):
+    if hasattr(_thread_local, "trace_id"):
         del _thread_local.trace_id
 
 
@@ -172,6 +171,7 @@ def with_trace_id(trace_id_func=None):
     Args:
         trace_id_func: 返回traceID的函数，如果未提供则使用第一个参数作为trace_id
     """
+
     def decorator(func):
         def wrapper(*args, **kwargs):
             # 尝试获取trace_id
@@ -180,7 +180,7 @@ def with_trace_id(trace_id_func=None):
                 trace_id = trace_id_func(*args, **kwargs)
             elif args:
                 # 使用第一个参数作为trace_id（假设是请求对象）
-                trace_id = getattr(args[0], 'trace_id', None) or getattr(args[0], 'id', None)
+                trace_id = getattr(args[0], "trace_id", None) or getattr(args[0], "id", None)
 
             if trace_id:
                 set_trace_id(trace_id)
@@ -191,6 +191,7 @@ def with_trace_id(trace_id_func=None):
                 clear_trace_id()
 
         return wrapper
+
     return decorator
 
 
@@ -207,18 +208,18 @@ def colorize_json_log(json_str: str) -> str:
     """
     try:
         data = json.loads(json_str)
-        level = data.get('level', 'INFO')
+        level = data.get("level", "INFO")
 
         # 不同级别的颜色
         colors = {
-            'DEBUG': '\033[36m',      # 青色
-            'INFO': '\033[32m',       # 绿色
-            'WARNING': '\033[33m',    # 黄色
-            'ERROR': '\033[31m',      # 红色
-            'CRITICAL': '\033[35m',   # 紫色
+            "DEBUG": "\033[36m",  # 青色
+            "INFO": "\033[32m",  # 绿色
+            "WARNING": "\033[33m",  # 黄色
+            "ERROR": "\033[31m",  # 红色
+            "CRITICAL": "\033[35m",  # 紫色
         }
-        reset = '\033[0m'
-        color = colors.get(level, '')
+        reset = "\033[0m"
+        color = colors.get(level, "")
 
         return color + json_str + reset
     except:

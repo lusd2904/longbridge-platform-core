@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from utils.DbUtil import DbUtil
@@ -43,10 +44,10 @@ class QuoteSnapshotService:
     @classmethod
     def save_quotes(
         cls,
-        quotes: Iterable[Dict[str, Any]],
+        quotes: Iterable[dict[str, Any]],
         *,
         source: str = "scheduler",
-        snapshot_at: Optional[datetime] = None,
+        snapshot_at: datetime | None = None,
     ) -> int:
         cls.ensure_schema()
         safe_snapshot_at = snapshot_at or datetime.now()
@@ -102,8 +103,8 @@ class QuoteSnapshotService:
         symbol: str,
         *,
         use_primary: bool = False,
-        max_age_minutes: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        max_age_minutes: int | None = None,
+    ) -> dict[str, Any] | None:
         snapshot_map = cls.get_latest_map([symbol], use_primary=use_primary, max_age_minutes=max_age_minutes)
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         return snapshot_map.get(normalized_symbol)
@@ -114,10 +115,10 @@ class QuoteSnapshotService:
         symbols: Iterable[str],
         *,
         use_primary: bool = False,
-        max_age_minutes: Optional[int] = None,
-    ) -> Dict[str, Dict[str, Any]]:
+        max_age_minutes: int | None = None,
+    ) -> dict[str, dict[str, Any]]:
         cls.ensure_schema()
-        normalized_symbols: List[str] = []
+        normalized_symbols: list[str] = []
         for raw_symbol in symbols or []:
             symbol = HistoricalMarketDataService.normalize_symbol(raw_symbol)
             if symbol and symbol not in normalized_symbols:
@@ -131,18 +132,19 @@ class QuoteSnapshotService:
 
         placeholders = ", ".join(["%s"] * len(normalized_symbols))
         fetch_all = DbUtil.fetch_all_primary if use_primary else DbUtil.fetch_all
-        params: List[Any] = list(normalized_symbols)
+        params: list[Any] = list(normalized_symbols)
         latest_filters = [f"symbol IN ({placeholders})"]
         outer_filters = [f"snap.symbol IN ({placeholders})"]
-        outer_params: List[Any] = list(normalized_symbols)
+        outer_params: list[Any] = list(normalized_symbols)
         if cutoff is not None:
             latest_filters.append("snapshot_at >= %s")
             params.append(cutoff)
             outer_filters.append("snap.snapshot_at >= %s")
             outer_params.append(cutoff)
 
-        rows = fetch_all(
-            f"""
+        rows = (
+            fetch_all(
+                f"""
             SELECT snap.*
             FROM {cls.TABLE_NAME} snap
             INNER JOIN (
@@ -156,10 +158,12 @@ class QuoteSnapshotService:
             WHERE {' AND '.join(outer_filters)}
             ORDER BY snap.snapshot_at DESC, snap.id DESC
             """,
-            tuple(params + outer_params),
-        ) or []
+                tuple(params + outer_params),
+            )
+            or []
+        )
 
-        deduped: Dict[str, Dict[str, Any]] = {}
+        deduped: dict[str, dict[str, Any]] = {}
         for row in rows:
             symbol = HistoricalMarketDataService.normalize_symbol(row.get("symbol"))
             if not symbol or symbol in deduped:
@@ -170,11 +174,11 @@ class QuoteSnapshotService:
     @classmethod
     def _normalize_quote(
         cls,
-        quote: Dict[str, Any],
+        quote: dict[str, Any],
         *,
         snapshot_at: datetime,
         source: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         symbol = HistoricalMarketDataService.normalize_symbol(quote.get("symbol"))
         if not symbol:
             return None
@@ -232,7 +236,7 @@ class QuoteSnapshotService:
         }
 
     @classmethod
-    def _normalize_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_row(cls, row: dict[str, Any]) -> dict[str, Any]:
         payload = row.get("payload_json")
         if isinstance(payload, str):
             try:
@@ -271,15 +275,19 @@ class QuoteSnapshotService:
             "changeAmount": change,
             "change_percent": change_percent,
             "changePercent": change_percent,
-            "snapshot_at": snapshot_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(snapshot_at, "strftime") else snapshot_at,
-            "snapshotAt": snapshot_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(snapshot_at, "strftime") else snapshot_at,
+            "snapshot_at": snapshot_at.strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(snapshot_at, "strftime")
+            else snapshot_at,
+            "snapshotAt": snapshot_at.strftime("%Y-%m-%d %H:%M:%S")
+            if hasattr(snapshot_at, "strftime")
+            else snapshot_at,
             "source": row.get("source") or "snapshot",
             "quoteReady": bool(last_price or prev_close or change_percent is not None or volume is not None),
             "payload": payload,
         }
 
     @staticmethod
-    def _safe_float(*values: Any, default: Optional[float] = None) -> Optional[float]:
+    def _safe_float(*values: Any, default: float | None = None) -> float | None:
         for value in values:
             if value in (None, ""):
                 continue

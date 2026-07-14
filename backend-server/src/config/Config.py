@@ -1,5 +1,6 @@
 import os
 from typing import Any
+
 from utils.ConfigUtil import ConfigUtil
 
 
@@ -24,21 +25,18 @@ class AppConfig:
         "HISTORICAL_DATA_SYNC_HOUR",
         "HISTORICAL_DATA_SYNC_MINUTE",
         "HISTORICAL_DATA_LOOKBACK_DAYS",
-        "HISTORICAL_DATA_MAX_SYMBOLS"
+        "HISTORICAL_DATA_MAX_SYMBOLS",
     }
     _FLOAT_KEYS = {"TEMPERATURE"}
-    _STRING_KEYS = {
-        "AI_REASONING_EFFORT",
-        "AI_SCAN_REASONING_EFFORT"
-    }
+    _STRING_KEYS = {"AI_REASONING_EFFORT", "AI_SCAN_REASONING_EFFORT"}
     _BOOL_KEYS = {
         "ENABLE_CANCEL_STRATEGY",
         "MARKET_INSIGHT_ENABLED",
         "AI_QUANT_TRADING_ENABLED",
         "AI_QUANT_AUTO_EXECUTE",
-        "HISTORICAL_DATA_SYNC_ENABLED"
+        "HISTORICAL_DATA_SYNC_ENABLED",
     }
-    
+
     # 默认配置（当数据库中不存在时使用）
     _default_config = {
         # Longbridge API 配置
@@ -91,28 +89,28 @@ class AppConfig:
         "HISTORICAL_BACKFILL_START_DATE": "2020-01-01",
         # 撤单策略配置
         "ENABLE_CANCEL_STRATEGY": True,
-        "CANCEL_ORDER_THRESHOLD_SECONDS": 300
+        "CANCEL_ORDER_THRESHOLD_SECONDS": 300,
     }
-    
+
     @classmethod
     def get(cls, key: str, user_id: int = 1, default: Any = None) -> Any:
         """
         获取配置值
-        
+
         优先级：环境变量 > 数据库 > 默认值
-        
+
         Args:
             key: 配置键
             user_id: 用户ID，默认为管理员
             default: 默认值
-            
+
         Returns:
             配置值
         """
         # 1. 从环境变量获取（优先级最高）
         env_key = f"LONGBRIDGE_{key.upper()}"
         value = os.environ.get(env_key)
-        
+
         if value is not None:
             # 环境变量存在，进行类型转换
             if key in cls._INT_KEYS:
@@ -129,14 +127,14 @@ class AppConfig:
                 if isinstance(value, str):
                     value = value.lower() == "true"
             return value
-        
+
         # 2. 从数据库获取
         value = ConfigUtil.get_config(user_id, key.lower(), None)
-        
+
         # 3. 如果数据库中不存在，使用默认值
         if value is None:
             value = cls._default_config.get(key, default)
-        
+
         # 类型转换
         if key in cls._INT_KEYS:
             try:
@@ -151,50 +149,50 @@ class AppConfig:
         elif key in cls._BOOL_KEYS:
             if isinstance(value, str):
                 value = value.lower() == "true"
-        
+
         return value
-    
+
     @classmethod
     def set(cls, key: str, value: Any, user_id: int = 1, description: str = None) -> bool:
         """
         设置配置值
-        
+
         Args:
             key: 配置键
             value: 配置值
             user_id: 用户ID，默认为管理员
             description: 配置描述
-            
+
         Returns:
             是否成功
         """
         return ConfigUtil.set_config(user_id, key.lower(), value, description)
-    
+
     @classmethod
     def get_all(cls, user_id: int = 1) -> dict:
         """
         获取所有配置
-        
+
         Args:
             user_id: 用户ID，默认为管理员
-            
+
         Returns:
             配置字典
         """
         configs = ConfigUtil.get_all_configs(user_id)
-        
+
         # 合并默认配置
         for key, default_value in cls._default_config.items():
             if key.lower() not in configs:
                 configs[key.lower()] = default_value
-        
+
         # 检查环境变量，覆盖配置
         for key in cls._default_config:
             env_key = f"LONGBRIDGE_{key.upper()}"
             env_value = os.environ.get(env_key)
             if env_value is not None:
                 configs[key.lower()] = env_value
-        
+
         return configs
 
 

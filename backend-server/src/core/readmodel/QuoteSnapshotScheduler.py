@@ -1,7 +1,7 @@
 import threading
 from collections import OrderedDict
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable, List
 
 from api import data_routes as legacy_data_routes
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
@@ -84,7 +84,7 @@ class QuoteSnapshotScheduler:
             interval = max(60, SystemTaskService.get_interval(self.JOB_NAME, 300))
             self._stop_event.wait(interval)
 
-    def _collect_target_symbols(self, *, limit: int) -> List[str]:
+    def _collect_target_symbols(self, *, limit: int) -> list[str]:
         unique_symbols: OrderedDict[str, bool] = OrderedDict()
 
         def add_symbols(items: Iterable[str]) -> None:
@@ -101,21 +101,26 @@ class QuoteSnapshotScheduler:
             return list(unique_symbols.keys())
 
         table_limit = max(4, min(self.UNIVERSE_TABLE_LIMIT, max(1, limit // 12)))
-        table_configs = list(legacy_data_routes.STOCK_TABLE_BY_MARKET.values()) + list(legacy_data_routes.ETF_TABLE_BY_MARKET.values())
+        table_configs = list(legacy_data_routes.STOCK_TABLE_BY_MARKET.values()) + list(
+            legacy_data_routes.ETF_TABLE_BY_MARKET.values()
+        )
         for table_config in table_configs:
             table_name = table_config["table"]
             if not legacy_data_routes._table_exists(table_name):  # noqa: SLF001
                 continue
-            rows = DbUtil.fetch_all(
-                f"""
+            rows = (
+                DbUtil.fetch_all(
+                    f"""
                 SELECT symbol
                 FROM {table_name}
                 WHERE is_active = 1
                 ORDER BY COALESCE(market_cap, 0) DESC, COALESCE(current_price, 0) DESC, symbol ASC
                 LIMIT %s
                 """,
-                (table_limit,),
-            ) or []
+                    (table_limit,),
+                )
+                or []
+            )
             add_symbols(row.get("symbol") for row in rows if row.get("symbol"))
             if len(unique_symbols) >= limit:
                 break

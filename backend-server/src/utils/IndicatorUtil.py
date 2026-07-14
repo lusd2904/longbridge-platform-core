@@ -1,14 +1,17 @@
 import pandas as pd
 import pandas_ta_classic as ta
 
+
 class IndicatorUtil:
     @staticmethod
     def calculate_rsi(prices, period=14):
         """物理计算 RSI 指标 (已切换至 pandas-ta)"""
-        if len(prices) <= period: return 50.0
+        if len(prices) <= period:
+            return 50.0
         s = pd.Series(prices)
         rsi = ta.rsi(s, length=period)
-        if rsi is None or rsi.dropna().empty: return 50.0
+        if rsi is None or rsi.dropna().empty:
+            return 50.0
         return float(rsi.iloc[-1])
 
     @staticmethod

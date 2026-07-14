@@ -1,5 +1,6 @@
-from utils.IndicatorUtil import IndicatorUtil
 from config.Config import AppConfig
+from utils.IndicatorUtil import IndicatorUtil
+
 
 class StrategyLayer:
     @staticmethod
@@ -8,7 +9,7 @@ class StrategyLayer:
         prices = [float(c.close) for c in candles]
         rsi = IndicatorUtil.calculate_rsi(prices)
         curr_p = prices[-1]
-        
+
         buy_line = getattr(AppConfig, "RSI_OVER_SELL", 30)
         sell_line = getattr(AppConfig, "RSI_OVER_BUY", 70)
 

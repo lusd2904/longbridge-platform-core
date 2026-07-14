@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Dict, List
 from urllib.parse import quote_plus
 from xml.etree import ElementTree
 
 import requests
+
 from core.analysis.DailyMarketScanService import DailyMarketScanService
 from core.analysis.MarketInsightService import MarketInsightService
 from core.analysis.RecommendationService import RecommendationService
@@ -20,7 +20,7 @@ class FinanceBriefingService:
     EXTERNAL_NEWS_QUERIES = {
         "US": "US stock market OR Nasdaq OR S&P 500 OR Federal Reserve",
         "CN": "A-share market OR China stocks OR CSI 300 OR Shanghai Composite",
-        "HK": "Hong Kong stocks OR Hang Seng OR China Hong Kong market"
+        "HK": "Hong Kong stocks OR Hang Seng OR China Hong Kong market",
     }
 
     @classmethod
@@ -63,7 +63,7 @@ class FinanceBriefingService:
             pass
 
     @classmethod
-    def refresh_all_markets(cls, user_id: int = 1) -> Dict[str, object]:
+    def refresh_all_markets(cls, user_id: int = 1) -> dict[str, object]:
         cls.ensure_schema()
         insights = {item["market"]: item for item in MarketInsightService.get_latest_snapshots(user_id=user_id)}
         market_scans = {item["market"]: item for item in DailyMarketScanService.get_latest_scans()}
@@ -75,47 +75,43 @@ class FinanceBriefingService:
                 market=market,
                 insight=insights.get(market) or {},
                 market_scan=market_scans.get(market) or {},
-                recommendation=recommendation
+                recommendation=recommendation,
             )
             generated_items.extend(market_items)
             generated_items.extend(cls._fetch_external_news_items(market))
 
         cls._prune_old()
-        return {
-            "generatedAt": cls._db_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "items": generated_items
-        }
+        return {"generatedAt": cls._db_now().strftime("%Y-%m-%d %H:%M:%S"), "items": generated_items}
 
     @classmethod
-    def get_latest(cls, limit: int = 18, market: str | None = None) -> List[Dict[str, object]]:
+    def get_latest(cls, limit: int = 18, market: str | None = None) -> list[dict[str, object]]:
         cls.ensure_schema()
         conditions = ["(expires_at IS NULL OR expires_at >= %s)"]
-        params: List[object] = []
+        params: list[object] = []
         params.append(cls._db_now())
         if market:
             conditions.append("market = %s")
             params.append(str(market).upper())
         params.append(int(limit))
-        rows = DbUtil.fetch_all(
-            f"""
+        rows = (
+            DbUtil.fetch_all(
+                f"""
             SELECT id, market, briefing_type, headline, summary, source_name, source_link, payload_json, generated_at, expires_at
             FROM {cls.TABLE_NAME}
             WHERE {' AND '.join(conditions)}
             ORDER BY generated_at DESC, id DESC
             LIMIT %s
             """,
-            tuple(params)
-        ) or []
+                tuple(params),
+            )
+            or []
+        )
         return [cls._normalize_row(row) for row in rows]
 
     @classmethod
     def _build_market_items(
-        cls,
-        market: str,
-        insight: Dict[str, object],
-        market_scan: Dict[str, object],
-        recommendation: Dict[str, object]
-    ) -> List[Dict[str, object]]:
+        cls, market: str, insight: dict[str, object], market_scan: dict[str, object], recommendation: dict[str, object]
+    ) -> list[dict[str, object]]:
         label = cls.MARKET_LABELS.get(market, market)
         generated_at = cls._db_now()
         expires_at = generated_at + timedelta(minutes=30)
@@ -129,8 +125,8 @@ class FinanceBriefingService:
             "payload": {
                 "marketScore": insight.get("marketScore"),
                 "regime": insight.get("regime"),
-                "benchmarks": insight.get("benchmarks", [])
-            }
+                "benchmarks": insight.get("benchmarks", []),
+            },
         }
         items.append(cls._save_item(market, market_payload, generated_at, expires_at))
 
@@ -143,8 +139,8 @@ class FinanceBriefingService:
                 "payload": {
                     "technicalScore": market_scan.get("technicalScore"),
                     "breadthRatio": market_scan.get("breadthRatio"),
-                    "benchmarks": market_scan.get("benchmarks", [])
-                }
+                    "benchmarks": market_scan.get("benchmarks", []),
+                },
             }
             items.append(cls._save_item(market, scan_payload, generated_at, expires_at))
 
@@ -160,37 +156,30 @@ class FinanceBriefingService:
                     "symbol": candidate.get("symbol"),
                     "name": candidate.get("name"),
                     "aiScore": candidate.get("ai_score"),
-                    "confidence": candidate.get("confidence")
-                }
+                    "confidence": candidate.get("confidence"),
+                },
             }
             items.append(cls._save_item(market, recommendation_payload, generated_at, expires_at))
 
         return items
 
     @classmethod
-    def _fetch_external_news_items(cls, market: str) -> List[Dict[str, object]]:
+    def _fetch_external_news_items(cls, market: str) -> list[dict[str, object]]:
         query = cls.EXTERNAL_NEWS_QUERIES.get(market)
         if not query:
             return []
 
         try:
-            url = (
-                "https://news.google.com/rss/search"
-                f"?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
-            )
+            url = "https://news.google.com/rss/search" f"?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
             session = requests.Session()
             session.trust_env = False
-            response = session.get(
-                url,
-                timeout=12,
-                headers={"User-Agent": "Mozilla/5.0 LongbridgeTrade/1.0"}
-            )
+            response = session.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0 LongbridgeTrade/1.0"})
             response.raise_for_status()
             root = ElementTree.fromstring(response.text)
         except Exception:
             return []
 
-        generated_items: List[Dict[str, object]] = []
+        generated_items: list[dict[str, object]] = []
         for item in root.findall(".//channel/item")[:3]:
             headline = (item.findtext("title") or "").strip()
             summary = cls._strip_html((item.findtext("description") or "").strip())
@@ -211,25 +200,18 @@ class FinanceBriefingService:
                         "briefingType": "market-news",
                         "sourceName": "Google News RSS",
                         "sourceLink": source_link,
-                        "payload": {
-                            "kind": "external-news",
-                            "source": "google-news-rss"
-                        }
+                        "payload": {"kind": "external-news", "source": "google-news-rss"},
                     },
                     generated_at,
-                    expires_at
+                    expires_at,
                 )
             )
         return generated_items
 
     @classmethod
     def _save_item(
-        cls,
-        market: str,
-        payload: Dict[str, object],
-        generated_at: datetime,
-        expires_at: datetime
-    ) -> Dict[str, object]:
+        cls, market: str, payload: dict[str, object], generated_at: datetime, expires_at: datetime
+    ) -> dict[str, object]:
         source_link = cls._truncate_text(payload.get("sourceLink"), cls.SOURCE_LINK_MAX_LENGTH)
         DbUtil.execute_sql(
             f"""
@@ -247,8 +229,8 @@ class FinanceBriefingService:
                 source_link,
                 json.dumps(payload.get("payload") or {}, ensure_ascii=False),
                 generated_at,
-                expires_at
-            )
+                expires_at,
+            ),
         )
         return {
             "market": market,
@@ -259,14 +241,13 @@ class FinanceBriefingService:
             "sourceLink": source_link,
             "payload": payload.get("payload") or {},
             "generatedAt": generated_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "expiresAt": expires_at.strftime("%Y-%m-%d %H:%M:%S")
+            "expiresAt": expires_at.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     @classmethod
     def _prune_old(cls) -> None:
         DbUtil.execute_sql(
-            f"DELETE FROM {cls.TABLE_NAME} WHERE generated_at < %s",
-            (cls._db_now() - timedelta(days=5),)
+            f"DELETE FROM {cls.TABLE_NAME} WHERE generated_at < %s", (cls._db_now() - timedelta(days=5),)
         )
 
     @classmethod
@@ -279,13 +260,14 @@ class FinanceBriefingService:
               AND generated_at >= DATE_SUB(NOW(), INTERVAL 6 HOUR)
             LIMIT 1
             """,
-            (market, headline[:190])
+            (market, headline[:190]),
         )
         return bool(row)
 
     @staticmethod
     def _strip_html(text: str) -> str:
         import re
+
         return re.sub(r"<[^>]+>", "", text or "").strip()
 
     @staticmethod
@@ -304,7 +286,7 @@ class FinanceBriefingService:
         return text[:max_length]
 
     @classmethod
-    def _normalize_row(cls, row: Dict[str, object]) -> Dict[str, object]:
+    def _normalize_row(cls, row: dict[str, object]) -> dict[str, object]:
         return {
             "id": int(row.get("id") or 0),
             "market": row.get("market") or "",
@@ -315,7 +297,7 @@ class FinanceBriefingService:
             "sourceLink": row.get("source_link"),
             "payload": cls._json_load(row.get("payload_json")),
             "generatedAt": row.get("generated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("generated_at") else None,
-            "expiresAt": row.get("expires_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("expires_at") else None
+            "expiresAt": row.get("expires_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("expires_at") else None,
         }
 
     @staticmethod

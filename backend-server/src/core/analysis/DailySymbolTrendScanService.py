@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional
 
+from core.analysis.ai_analyst import AIAnalyst
 from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from core.analysis.IndicatorSnapshotService import IndicatorSnapshotService
-from core.analysis.ai_analyst import AIAnalyst
 from utils.DbUtil import DbUtil
 
 
@@ -46,12 +45,8 @@ class DailySymbolTrendScanService:
 
     @classmethod
     def run_batch(
-        cls,
-        analysis_date=None,
-        batch_size: int = 24,
-        cursor: int = 0,
-        user_id: int = 1
-    ) -> Dict[str, object]:
+        cls, analysis_date=None, batch_size: int = 24, cursor: int = 0, user_id: int = 1
+    ) -> dict[str, object]:
         cls.ensure_schema()
         target_date = cls._coerce_date(analysis_date) or (date.today() - timedelta(days=1))
         safe_cursor = max(0, int(cursor or 0))
@@ -66,22 +61,26 @@ class DailySymbolTrendScanService:
                 "nextCursor": 0,
                 "completed": True,
                 "symbols": [],
-                "fallbackCount": 0
+                "fallbackCount": 0,
             }
 
         metrics_batch = [
-            cls._build_symbol_metrics(
-                symbol=item.get("symbol"),
-                market=item.get("market"),
-                analysis_date=target_date
-            )
+            cls._build_symbol_metrics(symbol=item.get("symbol"), market=item.get("market"), analysis_date=target_date)
             for item in universe
             if item.get("symbol")
         ]
 
-        ai_ready_batch = [item for item in metrics_batch if item.get("historyCount", 0) >= 40 and item.get("dataTradeDate")]
-        ai_result_map = cls._request_batch_analysis(ai_ready_batch, target_date, user_id=user_id) if ai_ready_batch else {}
-        model_plan = AIAnalyst.get_task_model_plan(user_id=user_id).get("trendBatch") or AIAnalyst.get_task_model_plan(user_id=user_id).get("pulse") or {}
+        ai_ready_batch = [
+            item for item in metrics_batch if item.get("historyCount", 0) >= 40 and item.get("dataTradeDate")
+        ]
+        ai_result_map = (
+            cls._request_batch_analysis(ai_ready_batch, target_date, user_id=user_id) if ai_ready_batch else {}
+        )
+        model_plan = (
+            AIAnalyst.get_task_model_plan(user_id=user_id).get("trendBatch")
+            or AIAnalyst.get_task_model_plan(user_id=user_id).get("pulse")
+            or {}
+        )
 
         saved = 0
         fallback_count = 0
@@ -92,11 +91,7 @@ class DailySymbolTrendScanService:
             if source == "rule":
                 fallback_count += 1
             result = cls._compose_result(
-                metric=metric,
-                analysis_date=target_date,
-                ai_payload=ai_payload,
-                model_plan=model_plan,
-                source=source
+                metric=metric, analysis_date=target_date, ai_payload=ai_payload, model_plan=model_plan, source=source
             )
             cls._save_result(result)
             results.append(result)
@@ -120,14 +115,14 @@ class DailySymbolTrendScanService:
                     "riskLevel": item["riskLevel"],
                     "technicalScore": item["technicalScore"],
                     "summary": item["summary"],
-                    "source": item.get("meta", {}).get("source", "rule")
+                    "source": item.get("meta", {}).get("source", "rule"),
                 }
                 for item in results[:10]
-            ]
+            ],
         }
 
     @classmethod
-    def get_latest_for_symbol(cls, symbol: str) -> Optional[Dict[str, object]]:
+    def get_latest_for_symbol(cls, symbol: str) -> dict[str, object] | None:
         cls.ensure_schema()
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         row = DbUtil.fetch_one(
@@ -138,7 +133,7 @@ class DailySymbolTrendScanService:
             ORDER BY analysis_date DESC, id DESC
             LIMIT 1
             """,
-            (normalized_symbol,)
+            (normalized_symbol,),
         )
         if not row:
             return None
@@ -146,16 +141,13 @@ class DailySymbolTrendScanService:
 
     @classmethod
     def get_latest_batch(
-        cls,
-        symbols: Optional[List[str]] = None,
-        market: Optional[str] = None,
-        limit: int = 24
-    ) -> List[Dict[str, object]]:
+        cls, symbols: list[str] | None = None, market: str | None = None, limit: int = 24
+    ) -> list[dict[str, object]]:
         cls.ensure_schema()
         conditions = []
-        params: List[object] = []
+        params: list[object] = []
 
-        normalized_symbols: List[str] = []
+        normalized_symbols: list[str] = []
         for raw_symbol in symbols or []:
             normalized_symbol = HistoricalMarketDataService.normalize_symbol(raw_symbol)
             if normalized_symbol and normalized_symbol not in normalized_symbols:
@@ -174,18 +166,21 @@ class DailySymbolTrendScanService:
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         fetch_limit = max(limit * 6, len(normalized_symbols) * 4 if normalized_symbols else 0, 60)
 
-        rows = DbUtil.fetch_all(
-            f"""
+        rows = (
+            DbUtil.fetch_all(
+                f"""
             SELECT *
             FROM {cls.TABLE_NAME}
             WHERE {where_clause}
             ORDER BY analysis_date DESC, updated_at DESC, id DESC
             LIMIT %s
             """,
-            tuple(params + [fetch_limit])
-        ) or []
+                tuple(params + [fetch_limit]),
+            )
+            or []
+        )
 
-        results: List[Dict[str, object]] = []
+        results: list[dict[str, object]] = []
         seen_symbols = set()
         for row in rows:
             symbol = str(row.get("symbol") or "").upper()
@@ -199,10 +194,12 @@ class DailySymbolTrendScanService:
         return results
 
     @classmethod
-    def _build_symbol_metrics(cls, symbol: str, market: Optional[str], analysis_date: date) -> Dict[str, object]:
+    def _build_symbol_metrics(cls, symbol: str, market: str | None, analysis_date: date) -> dict[str, object]:
         normalized_symbol = HistoricalMarketDataService.normalize_symbol(symbol)
         safe_market = str(market or HistoricalMarketDataService.detect_market(normalized_symbol)).upper()
-        series = HistoricalMarketDataService.get_daily_series_until(normalized_symbol, end_date=analysis_date, limit=260)
+        series = HistoricalMarketDataService.get_daily_series_until(
+            normalized_symbol, end_date=analysis_date, limit=260
+        )
         closes = [float(item.get("close") or 0) for item in series]
         highs = [float(item.get("high") or 0) for item in series]
         lows = [float(item.get("low") or 0) for item in series]
@@ -229,7 +226,11 @@ class DailySymbolTrendScanService:
         low20 = min(lows[-20:]) if lows else 0.0
         distance_high20 = round(((latest_close - high20) / high20) * 100, 2) if latest_close and high20 else 0.0
         distance_low20 = round(((latest_close - low20) / low20) * 100, 2) if latest_close and low20 else 0.0
-        day_change_percent = round(((latest_close - previous_close) / previous_close) * 100, 2) if latest_close and previous_close else 0.0
+        day_change_percent = (
+            round(((latest_close - previous_close) / previous_close) * 100, 2)
+            if latest_close and previous_close
+            else 0.0
+        )
 
         trend_hint = cls._trend_hint(latest_close, ma20, ma60, return20, return60, rsi14)
         trend_direction = cls._direction_from_hint(trend_hint)
@@ -262,16 +263,13 @@ class DailySymbolTrendScanService:
             "trendDirection": trend_direction,
             "technicalScore": technical_score,
             "riskLevel": risk_level,
-            "trendStrength": trend_strength
+            "trendStrength": trend_strength,
         }
 
     @classmethod
     def _request_batch_analysis(
-        cls,
-        metrics_batch: List[Dict[str, object]],
-        analysis_date: date,
-        user_id: int = 1
-    ) -> Dict[str, Dict[str, object]]:
+        cls, metrics_batch: list[dict[str, object]], analysis_date: date, user_id: int = 1
+    ) -> dict[str, dict[str, object]]:
         if not metrics_batch:
             return {}
 
@@ -283,7 +281,7 @@ class DailySymbolTrendScanService:
             return {}
 
         parsed_items = cls._parse_ai_items(text)
-        normalized: Dict[str, Dict[str, object]] = {}
+        normalized: dict[str, dict[str, object]] = {}
         for item in parsed_items:
             symbol = HistoricalMarketDataService.normalize_symbol(item.get("symbol") or "")
             if not symbol:
@@ -292,7 +290,7 @@ class DailySymbolTrendScanService:
         return normalized
 
     @classmethod
-    def _build_batch_prompt(cls, metrics_batch: List[Dict[str, object]], analysis_date: date) -> str:
+    def _build_batch_prompt(cls, metrics_batch: list[dict[str, object]], analysis_date: date) -> str:
         lines = []
         for item in metrics_batch:
             lines.append(
@@ -324,16 +322,20 @@ class DailySymbolTrendScanService:
     @classmethod
     def _compose_result(
         cls,
-        metric: Dict[str, object],
+        metric: dict[str, object],
         analysis_date: date,
-        ai_payload: Optional[Dict[str, object]],
-        model_plan: Dict[str, object],
-        source: str = "rule"
-    ) -> Dict[str, object]:
+        ai_payload: dict[str, object] | None,
+        model_plan: dict[str, object],
+        source: str = "rule",
+    ) -> dict[str, object]:
         fallback = cls._fallback_payload(metric)
         merged = {**fallback, **(ai_payload or {})}
-        trend_direction = cls._normalize_direction(merged.get("trendDirection") or merged.get("trend_direction") or metric.get("trendDirection"))
-        risk_level = cls._normalize_risk_level(merged.get("riskLevel") or merged.get("risk_level") or metric.get("riskLevel"))
+        trend_direction = cls._normalize_direction(
+            merged.get("trendDirection") or merged.get("trend_direction") or metric.get("trendDirection")
+        )
+        risk_level = cls._normalize_risk_level(
+            merged.get("riskLevel") or merged.get("risk_level") or metric.get("riskLevel")
+        )
         technical_score = cls._clamp_number(merged.get("technicalScore"), fallback["technicalScore"])
         trend_strength = cls._clamp_number(merged.get("trendStrength"), fallback["trendStrength"])
         headline = str(fallback["headline"]).strip()[:180]
@@ -357,9 +359,9 @@ class DailySymbolTrendScanService:
                     "trendDirection": trend_direction,
                     "trendStrength": trend_strength,
                     "riskLevel": risk_level,
-                    "technicalScore": technical_score
+                    "technicalScore": technical_score,
                 },
-                ensure_ascii=False
+                ensure_ascii=False,
             ),
             "modelId": model_plan.get("id"),
             "modelAlias": model_plan.get("alias"),
@@ -378,19 +380,19 @@ class DailySymbolTrendScanService:
                 "volumeRatio20": metric.get("volumeRatio20"),
                 "distanceHigh20": metric.get("distanceHigh20"),
                 "distanceLow20": metric.get("distanceLow20"),
-                "trendHint": metric.get("trendHint")
+                "trendHint": metric.get("trendHint"),
             },
             "meta": {
                 "source": source,
                 "historyCount": int(metric.get("historyCount") or 0),
                 "providerRoute": model_plan.get("providerRoute"),
                 "analysisDate": analysis_date.strftime("%Y-%m-%d"),
-                "aiPayload": ai_payload or {}
-            }
+                "aiPayload": ai_payload or {},
+            },
         }
 
     @classmethod
-    def _save_result(cls, result: Dict[str, object]) -> None:
+    def _save_result(cls, result: dict[str, object]) -> None:
         DbUtil.execute_sql(
             f"""
             INSERT INTO {cls.TABLE_NAME} (
@@ -430,12 +432,12 @@ class DailySymbolTrendScanService:
                 result.get("modelId"),
                 result.get("modelAlias"),
                 json.dumps(result.get("indicators") or {}, ensure_ascii=False),
-                json.dumps(result.get("meta") or {}, ensure_ascii=False)
-            )
+                json.dumps(result.get("meta") or {}, ensure_ascii=False),
+            ),
         )
 
     @classmethod
-    def _normalize_row(cls, row: Dict[str, object]) -> Dict[str, object]:
+    def _normalize_row(cls, row: dict[str, object]) -> dict[str, object]:
         return {
             "symbol": row.get("symbol"),
             "market": row.get("market"),
@@ -452,11 +454,11 @@ class DailySymbolTrendScanService:
             "modelAlias": row.get("model_alias") or "",
             "indicators": cls._json_load(row.get("indicators_json")),
             "meta": cls._json_load(row.get("meta_json")),
-            "generatedAt": row.get("updated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else None
+            "generatedAt": row.get("updated_at").strftime("%Y-%m-%d %H:%M:%S") if row.get("updated_at") else None,
         }
 
     @classmethod
-    def _fallback_payload(cls, metric: Dict[str, object]) -> Dict[str, object]:
+    def _fallback_payload(cls, metric: dict[str, object]) -> dict[str, object]:
         data_trade_date = metric.get("dataTradeDate") or metric.get("analysisDate")
         if not metric.get("dataTradeDate"):
             return {
@@ -465,7 +467,7 @@ class DailySymbolTrendScanService:
                 "riskLevel": "high",
                 "technicalScore": 0.0,
                 "headline": f"{metric['symbol']} 数据不足",
-                "summary": f"截至 {metric.get('analysisDate')} 暂无足够日线数据，等待历史补数完成。"
+                "summary": f"截至 {metric.get('analysisDate')} 暂无足够日线数据，等待历史补数完成。",
             }
 
         return {
@@ -477,11 +479,11 @@ class DailySymbolTrendScanService:
             "summary": (
                 f"截至 {data_trade_date}，20日收益 {float(metric.get('return20') or 0):+.2f}%，"
                 f"RSI {float(metric.get('rsi14') or 0):.1f}，趋势偏向 {metric.get('trendHint') or '震荡整理'}。"
-            )[:255]
+            )[:255],
         }
 
     @staticmethod
-    def _moving_average(values: List[float], window: int) -> float:
+    def _moving_average(values: list[float], window: int) -> float:
         if not values:
             return 0.0
         sample = values[-window:] if len(values) >= window else values
@@ -490,7 +492,7 @@ class DailySymbolTrendScanService:
         return round(sum(sample) / len(sample), 4)
 
     @staticmethod
-    def _period_return(values: List[float], periods: int) -> float:
+    def _period_return(values: list[float], periods: int) -> float:
         if len(values) <= periods:
             return 0.0
         base = float(values[-periods - 1] or 0)
@@ -500,7 +502,7 @@ class DailySymbolTrendScanService:
         return round(((latest - base) / base) * 100, 2)
 
     @staticmethod
-    def _rsi(values: List[float], periods: int = 14) -> float:
+    def _rsi(values: list[float], periods: int = 14) -> float:
         if len(values) <= periods:
             return 50.0
         changes = [values[index] - values[index - 1] for index in range(1, len(values))]
@@ -515,11 +517,11 @@ class DailySymbolTrendScanService:
         return round(100 - (100 / (1 + rs)), 2)
 
     @staticmethod
-    def _volatility(values: List[float], periods: int = 20) -> float:
+    def _volatility(values: list[float], periods: int = 20) -> float:
         if len(values) <= periods:
             return 0.0
         returns = []
-        sample = values[-periods - 1:]
+        sample = values[-periods - 1 :]
         for index in range(1, len(sample)):
             base = float(sample[index - 1] or 0)
             current = float(sample[index] or 0)
@@ -530,16 +532,11 @@ class DailySymbolTrendScanService:
             return 0.0
         mean = sum(returns) / len(returns)
         variance = sum((item - mean) ** 2 for item in returns) / len(returns)
-        return round(variance ** 0.5, 2)
+        return round(variance**0.5, 2)
 
     @staticmethod
     def _trend_hint(
-        latest_close: float,
-        ma20: float,
-        ma60: float,
-        return20: float,
-        return60: float,
-        rsi14: float
+        latest_close: float, ma20: float, ma60: float, return20: float, return60: float, rsi14: float
     ) -> str:
         if latest_close and latest_close >= ma20 >= ma60 and return20 >= 0 and return60 >= 0 and rsi14 >= 55:
             return "多头强化"
@@ -565,7 +562,7 @@ class DailySymbolTrendScanService:
         return20: float,
         return60: float,
         rsi14: float,
-        volatility20: float
+        volatility20: float,
     ) -> float:
         score = 50.0
         if latest_close and ma20:
@@ -588,12 +585,7 @@ class DailySymbolTrendScanService:
 
     @staticmethod
     def _trend_strength(
-        latest_close: float,
-        ma20: float,
-        ma60: float,
-        return20: float,
-        return60: float,
-        rsi14: float
+        latest_close: float, ma20: float, ma60: float, return20: float, return60: float, rsi14: float
     ) -> float:
         strength = 48.0
         if latest_close and ma20:
@@ -606,7 +598,7 @@ class DailySymbolTrendScanService:
         return round(max(0.0, min(100.0, strength)), 2)
 
     @staticmethod
-    def _parse_ai_items(raw_text: str) -> List[Dict[str, object]]:
+    def _parse_ai_items(raw_text: str) -> list[dict[str, object]]:
         text = str(raw_text or "").strip()
         if not text:
             return []
@@ -616,7 +608,7 @@ class DailySymbolTrendScanService:
                 text = text.split("\n", 1)[1]
         start_index = text.find("[")
         end_index = text.rfind("]")
-        candidate = text[start_index:end_index + 1] if start_index >= 0 and end_index > start_index else text
+        candidate = text[start_index : end_index + 1] if start_index >= 0 and end_index > start_index else text
         try:
             parsed = json.loads(candidate)
         except Exception:

@@ -18,3 +18,5 @@ numpy>=2.0.0
 akshare==1.18.30
 yfinance==0.2.54
 pandas-ta-classic==0.6.52
+quantstats==0.0.62
+alphalens-reloaded==0.4.6
