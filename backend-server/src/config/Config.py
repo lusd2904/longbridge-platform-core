@@ -46,8 +46,8 @@ class AppConfig:
         # AI 配置
         "AI_PROVIDER": "nvidia",
         "AI_FALLBACK_PROVIDER": "",
-        "AI_BASE_URL": "https://lucen.cc/v1",
-        "AI_URL": "https://lucen.cc/v1/chat/completions",
+        "AI_BASE_URL": "https://integrate.api.nvidia.com/v1",
+        "AI_URL": "https://integrate.api.nvidia.com/v1/chat/completions",
         "AI_API_STYLE": "openai-chat-completions",
         "AI_LOCAL_URL": "http://127.0.0.1:11434/api/generate",
         "AI_LOCAL_MODEL": "gemma3:12b",

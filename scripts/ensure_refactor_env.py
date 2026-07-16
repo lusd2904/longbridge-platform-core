@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from collections import OrderedDict
-from pathlib import Path
 import re
 import secrets
 import subprocess
-from typing import Dict
+from collections import OrderedDict
+from pathlib import Path
 
 from dotenv import dotenv_values
-
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 EXAMPLE_ENV = ROOT_DIR / ".env.example"
@@ -77,7 +75,7 @@ PASSTHROUGH_KEYS = [
 ]
 
 
-def _read_env(path: Path) -> Dict[str, str]:
+def _read_env(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     raw = dotenv_values(path)
@@ -91,7 +89,7 @@ def _coalesce(*values: str | None, default: str = "") -> str:
     return default
 
 
-def _render_env(payload: "OrderedDict[str, str]") -> str:
+def _render_env(payload: OrderedDict[str, str]) -> str:
     lines = [
         "# Refactor V2 runtime environment",
         "# This file is auto-generated and safe to edit for local overrides.",
@@ -162,9 +160,7 @@ def _render_env(payload: "OrderedDict[str, str]") -> str:
     )
 
     passthrough_rendered = [
-        f"{key}={payload[key]}"
-        for key in PASSTHROUGH_KEYS
-        if key in payload and payload[key] not in (None, "")
+        f"{key}={payload[key]}" for key in PASSTHROUGH_KEYS if key in payload and payload[key] not in (None, "")
     ]
     if passthrough_rendered:
         lines.extend(["", "# Additional local passthrough settings", *passthrough_rendered])
@@ -230,30 +226,42 @@ def ensure_longbridge_cli_runtime_files(
     return alias_path
 
 
-def ensure_refactor_env() -> Dict[str, str]:
+def ensure_refactor_env() -> dict[str, str]:
     example = _read_env(EXAMPLE_ENV)
     current = _read_env(TARGET_ENV)
 
-    payload: "OrderedDict[str, str]" = OrderedDict()
+    payload: OrderedDict[str, str] = OrderedDict()
     for key, default in REF_PORT_DEFAULTS.items():
         payload[key] = _coalesce(current.get(key), example.get(key), default=default)
 
-    source_db_name = _coalesce(current.get("REF_SOURCE_DB_NAME"), example.get("REF_SOURCE_DB_NAME"), default="quant_trade")
-    target_db_name = _coalesce(current.get("REF_DB_NAME"), example.get("REF_DB_NAME"), default=f"{source_db_name}_refactor")
+    source_db_name = _coalesce(
+        current.get("REF_SOURCE_DB_NAME"), example.get("REF_SOURCE_DB_NAME"), default="quant_trade"
+    )
+    target_db_name = _coalesce(
+        current.get("REF_DB_NAME"), example.get("REF_DB_NAME"), default=f"{source_db_name}_refactor"
+    )
     db_host = _coalesce(current.get("REF_DB_HOST"), example.get("REF_DB_HOST"), default="127.0.0.1")
     db_port = _coalesce(current.get("REF_DB_PORT"), example.get("REF_DB_PORT"), default="3306")
     db_user = _coalesce(current.get("REF_DB_USER"), example.get("REF_DB_USER"), default="root")
     db_password = _coalesce(current.get("REF_DB_PASSWORD"), example.get("REF_DB_PASSWORD"), default="")
     db_charset = _coalesce(current.get("REF_DB_CHARSET"), example.get("REF_DB_CHARSET"), default="utf8mb4")
-    db_read_enabled = _coalesce(current.get("REF_DB_READ_ENABLED"), example.get("REF_DB_READ_ENABLED"), default="false").lower()
+    db_read_enabled = _coalesce(
+        current.get("REF_DB_READ_ENABLED"), example.get("REF_DB_READ_ENABLED"), default="false"
+    ).lower()
     if db_read_enabled not in {"true", "false"}:
         db_read_enabled = "false"
     db_read_host = _coalesce(current.get("REF_DB_READ_HOST"), example.get("REF_DB_READ_HOST"), db_host, default=db_host)
     db_read_port = _coalesce(current.get("REF_DB_READ_PORT"), example.get("REF_DB_READ_PORT"), db_port, default=db_port)
     db_read_user = _coalesce(current.get("REF_DB_READ_USER"), example.get("REF_DB_READ_USER"), db_user, default=db_user)
-    db_read_password = _coalesce(current.get("REF_DB_READ_PASSWORD"), example.get("REF_DB_READ_PASSWORD"), db_password, default=db_password)
-    db_read_name = _coalesce(current.get("REF_DB_READ_NAME"), example.get("REF_DB_READ_NAME"), target_db_name, default=target_db_name)
-    db_read_charset = _coalesce(current.get("REF_DB_READ_CHARSET"), example.get("REF_DB_READ_CHARSET"), db_charset, default=db_charset)
+    db_read_password = _coalesce(
+        current.get("REF_DB_READ_PASSWORD"), example.get("REF_DB_READ_PASSWORD"), db_password, default=db_password
+    )
+    db_read_name = _coalesce(
+        current.get("REF_DB_READ_NAME"), example.get("REF_DB_READ_NAME"), target_db_name, default=target_db_name
+    )
+    db_read_charset = _coalesce(
+        current.get("REF_DB_READ_CHARSET"), example.get("REF_DB_READ_CHARSET"), db_charset, default=db_charset
+    )
 
     redis_host = _coalesce(current.get("REF_REDIS_HOST"), example.get("REF_REDIS_HOST"), default="127.0.0.1")
     redis_port = _coalesce(current.get("REF_REDIS_PORT"), example.get("REF_REDIS_PORT"), default="6379")
@@ -263,15 +271,17 @@ def ensure_refactor_env() -> Dict[str, str]:
     jwt_secret = _coalesce(current.get("REF_JWT_SECRET_KEY"), default="your-secret-key-here")
     if len(jwt_secret) < 32:
         jwt_secret = secrets.token_urlsafe(48)
-    ollama_base = _coalesce(current.get("REF_OLLAMA_BASE_URL"), example.get("REF_OLLAMA_BASE_URL"), default="http://127.0.0.1:11434")
+    ollama_base = _coalesce(
+        current.get("REF_OLLAMA_BASE_URL"), example.get("REF_OLLAMA_BASE_URL"), default="http://127.0.0.1:11434"
+    )
     ollama_model = _coalesce(current.get("REF_OLLAMA_MODEL"), example.get("REF_OLLAMA_MODEL"), default="gemma3:12b")
     ai_url = _coalesce(
         current.get("REF_LONGBRIDGE_AI_URL"),
         example.get("REF_LONGBRIDGE_AI_URL"),
-        default="https://lucen.cc/v1/chat/completions",
+        default="https://integrate.api.nvidia.com/v1/chat/completions",
     )
     if "localhost:5005" in ai_url.lower():
-        ai_url = "https://lucen.cc/v1/chat/completions"
+        ai_url = "https://integrate.api.nvidia.com/v1/chat/completions"
     skshare_base = _coalesce(
         current.get("REF_SKSHARE_BASE_URL"),
         current.get("SKSHARE_BASE_URL"),
@@ -324,7 +334,9 @@ def ensure_refactor_env() -> Dict[str, str]:
                 current.get("LONGPORT_REGION"),
                 example.get("REF_LONGBRIDGE_REGION"),
                 default="cn",
-            ).strip().lower()
+            )
+            .strip()
+            .lower()
             or "cn",
             "DB_HOST": db_host,
             "DB_PORT": db_port,
@@ -351,7 +363,9 @@ def ensure_refactor_env() -> Dict[str, str]:
                 current.get("REF_LONGBRIDGE_REGION"),
                 example.get("REF_LONGBRIDGE_REGION"),
                 default="cn",
-            ).strip().lower()
+            )
+            .strip()
+            .lower()
             or "cn",
             "LONGPORT_REGION": _coalesce(
                 current.get("LONGPORT_REGION"),
@@ -359,7 +373,9 @@ def ensure_refactor_env() -> Dict[str, str]:
                 current.get("REF_LONGBRIDGE_REGION"),
                 example.get("REF_LONGBRIDGE_REGION"),
                 default="cn",
-            ).strip().lower()
+            )
+            .strip()
+            .lower()
             or "cn",
             "TRADE_SERVICE_ENABLED": "true",
             "TRADE_SERVICE_URL": f"http://127.0.0.1:{payload['REF_TRADE_SERVICE_PORT']}",
@@ -367,24 +383,84 @@ def ensure_refactor_env() -> Dict[str, str]:
             "KAFKA_ENABLED": kafka_enabled,
             "SKSHARE_BASE_URL": skshare_base,
             "SKSHARE_TIMEOUT": skshare_timeout,
-            "LONGBRIDGE_AI_PROVIDER": _coalesce(current.get("LONGBRIDGE_AI_PROVIDER"), example.get("LONGBRIDGE_AI_PROVIDER"), default="nvidia"),
-            "LONGBRIDGE_AI_FALLBACK_PROVIDER": _coalesce(current.get("LONGBRIDGE_AI_FALLBACK_PROVIDER"), example.get("LONGBRIDGE_AI_FALLBACK_PROVIDER"), default=""),
-            "LONGBRIDGE_AI_BASE_URL": _coalesce(current.get("LONGBRIDGE_AI_BASE_URL"), example.get("LONGBRIDGE_AI_BASE_URL"), default="https://lucen.cc/v1"),
-            "LONGBRIDGE_AI_URL": _coalesce(current.get("LONGBRIDGE_AI_URL"), example.get("LONGBRIDGE_AI_URL"), ai_url, default=ai_url),
-            "LONGBRIDGE_AI_API_STYLE": _coalesce(current.get("LONGBRIDGE_AI_API_STYLE"), example.get("LONGBRIDGE_AI_API_STYLE"), default="openai-chat-completions"),
-            "LONGBRIDGE_AI_API_KEY": _coalesce(current.get("LONGBRIDGE_AI_API_KEY"), example.get("LONGBRIDGE_AI_API_KEY"), default=""),
-            "LONGBRIDGE_AI_MODEL": _coalesce(current.get("LONGBRIDGE_AI_MODEL"), example.get("LONGBRIDGE_AI_MODEL"), default="gpt-5.5"),
-            "LONGBRIDGE_AI_MODEL_SCAN_PULSE": _coalesce(current.get("LONGBRIDGE_AI_MODEL_SCAN_PULSE"), example.get("LONGBRIDGE_AI_MODEL_SCAN_PULSE"), default="gpt-5.4"),
-            "LONGBRIDGE_AI_MODEL_SCAN_FAST": _coalesce(current.get("LONGBRIDGE_AI_MODEL_SCAN_FAST"), example.get("LONGBRIDGE_AI_MODEL_SCAN_FAST"), default="gpt-5.4"),
-            "LONGBRIDGE_AI_MODEL_SCAN_RISK": _coalesce(current.get("LONGBRIDGE_AI_MODEL_SCAN_RISK"), example.get("LONGBRIDGE_AI_MODEL_SCAN_RISK"), default="gpt-5.4"),
-            "LONGBRIDGE_AI_MODEL_SCAN_FINAL": _coalesce(current.get("LONGBRIDGE_AI_MODEL_SCAN_FINAL"), example.get("LONGBRIDGE_AI_MODEL_SCAN_FINAL"), default="gpt-5.5"),
-            "LONGBRIDGE_AI_MODEL_TREND_BATCH": _coalesce(current.get("LONGBRIDGE_AI_MODEL_TREND_BATCH"), example.get("LONGBRIDGE_AI_MODEL_TREND_BATCH"), default="gpt-5.4"),
-            "LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF": _coalesce(current.get("LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF"), example.get("LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF"), default="gpt-5.4"),
-            "LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY": _coalesce(current.get("LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY"), example.get("LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY"), default="gpt-5.5"),
-            "LONGBRIDGE_AI_MODEL_VISION": _coalesce(current.get("LONGBRIDGE_AI_MODEL_VISION"), example.get("LONGBRIDGE_AI_MODEL_VISION"), default="gpt-5.4"),
-            "LONGBRIDGE_AI_REASONING_EFFORT": _coalesce(current.get("LONGBRIDGE_AI_REASONING_EFFORT"), example.get("LONGBRIDGE_AI_REASONING_EFFORT"), default="medium"),
-            "LONGBRIDGE_AI_SCAN_REASONING_EFFORT": _coalesce(current.get("LONGBRIDGE_AI_SCAN_REASONING_EFFORT"), example.get("LONGBRIDGE_AI_SCAN_REASONING_EFFORT"), default="high"),
-            "REF_SENTIMENT_ENABLED": _coalesce(current.get("REF_SENTIMENT_ENABLED"), example.get("REF_SENTIMENT_ENABLED"), default="false"),
+            "LONGBRIDGE_AI_PROVIDER": _coalesce(
+                current.get("LONGBRIDGE_AI_PROVIDER"), example.get("LONGBRIDGE_AI_PROVIDER"), default="nvidia"
+            ),
+            "LONGBRIDGE_AI_FALLBACK_PROVIDER": _coalesce(
+                current.get("LONGBRIDGE_AI_FALLBACK_PROVIDER"),
+                example.get("LONGBRIDGE_AI_FALLBACK_PROVIDER"),
+                default="",
+            ),
+            "LONGBRIDGE_AI_BASE_URL": _coalesce(
+                current.get("LONGBRIDGE_AI_BASE_URL"),
+                example.get("LONGBRIDGE_AI_BASE_URL"),
+                default="https://integrate.api.nvidia.com/v1",
+            ),
+            "LONGBRIDGE_AI_URL": _coalesce(
+                current.get("LONGBRIDGE_AI_URL"), example.get("LONGBRIDGE_AI_URL"), ai_url, default=ai_url
+            ),
+            "LONGBRIDGE_AI_API_STYLE": _coalesce(
+                current.get("LONGBRIDGE_AI_API_STYLE"),
+                example.get("LONGBRIDGE_AI_API_STYLE"),
+                default="openai-chat-completions",
+            ),
+            "LONGBRIDGE_AI_API_KEY": _coalesce(
+                current.get("LONGBRIDGE_AI_API_KEY"), example.get("LONGBRIDGE_AI_API_KEY"), default=""
+            ),
+            "LONGBRIDGE_AI_MODEL": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL"), example.get("LONGBRIDGE_AI_MODEL"), default="gpt-5.5"
+            ),
+            "LONGBRIDGE_AI_MODEL_SCAN_PULSE": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_SCAN_PULSE"),
+                example.get("LONGBRIDGE_AI_MODEL_SCAN_PULSE"),
+                default="gpt-5.4",
+            ),
+            "LONGBRIDGE_AI_MODEL_SCAN_FAST": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_SCAN_FAST"),
+                example.get("LONGBRIDGE_AI_MODEL_SCAN_FAST"),
+                default="gpt-5.4",
+            ),
+            "LONGBRIDGE_AI_MODEL_SCAN_RISK": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_SCAN_RISK"),
+                example.get("LONGBRIDGE_AI_MODEL_SCAN_RISK"),
+                default="gpt-5.4",
+            ),
+            "LONGBRIDGE_AI_MODEL_SCAN_FINAL": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_SCAN_FINAL"),
+                example.get("LONGBRIDGE_AI_MODEL_SCAN_FINAL"),
+                default="gpt-5.5",
+            ),
+            "LONGBRIDGE_AI_MODEL_TREND_BATCH": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_TREND_BATCH"),
+                example.get("LONGBRIDGE_AI_MODEL_TREND_BATCH"),
+                default="gpt-5.4",
+            ),
+            "LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF"),
+                example.get("LONGBRIDGE_AI_MODEL_RECOMMEND_BRIEF"),
+                default="gpt-5.4",
+            ),
+            "LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY"),
+                example.get("LONGBRIDGE_AI_MODEL_RECOMMEND_SUMMARY"),
+                default="gpt-5.5",
+            ),
+            "LONGBRIDGE_AI_MODEL_VISION": _coalesce(
+                current.get("LONGBRIDGE_AI_MODEL_VISION"), example.get("LONGBRIDGE_AI_MODEL_VISION"), default="gpt-5.4"
+            ),
+            "LONGBRIDGE_AI_REASONING_EFFORT": _coalesce(
+                current.get("LONGBRIDGE_AI_REASONING_EFFORT"),
+                example.get("LONGBRIDGE_AI_REASONING_EFFORT"),
+                default="medium",
+            ),
+            "LONGBRIDGE_AI_SCAN_REASONING_EFFORT": _coalesce(
+                current.get("LONGBRIDGE_AI_SCAN_REASONING_EFFORT"),
+                example.get("LONGBRIDGE_AI_SCAN_REASONING_EFFORT"),
+                default="high",
+            ),
+            "REF_SENTIMENT_ENABLED": _coalesce(
+                current.get("REF_SENTIMENT_ENABLED"), example.get("REF_SENTIMENT_ENABLED"), default="false"
+            ),
         }
     )
 

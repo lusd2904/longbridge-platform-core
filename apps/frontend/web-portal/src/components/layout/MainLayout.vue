@@ -1,5 +1,6 @@
 <template>
   <div class="layout" :class="{ compact: isCompactLayout }">
+    <CyberBackground />
     <div class="shell-grid" aria-hidden="true"></div>
     <Sidebar v-if="!isCompactLayout" />
     <div class="main-content" :class="{ compact: isCompactLayout }">
@@ -11,7 +12,6 @@
             <button type="button" class="mobile-header-button" @click="openMobileCommand">
               <el-icon :size="18"><Menu /></el-icon>
             </button>
-            <ThemeSwitcher compact />
             <button type="button" class="mobile-header-button" @click="router.push({ name: 'Notifications' })">
               <el-icon :size="18"><Bell /></el-icon>
             </button>
@@ -48,10 +48,10 @@ import { computed, Suspense } from 'vue'
 import { Bell, Menu } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import AiAssistantFloat from './AiAssistantFloat.vue'
+import CyberBackground from './CyberBackground.vue'
 import Header from './Header.vue'
 import RouteTabs from './RouteTabs.vue'
 import Sidebar from './Sidebar.vue'
-import ThemeSwitcher from './ThemeSwitcher.vue'
 import RouteSkeleton from '../common/RouteSkeleton.vue'
 import { useWorkbenchTabs } from '../../composables/useWorkbenchTabs.js'
 import { useAdaptiveLayout } from '../../composables/useAdaptiveLayout.js'
@@ -72,12 +72,12 @@ const openMobileCommand = () => {
 
 <style scoped lang="scss">
 .layout {
-  position: relative;
-  min-height: 100vh;
-  min-height: 100dvh;
   display: flex;
-  overflow-x: clip;
-  overflow-y: visible;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+  background: transparent;
 }
 
 .shell-grid {
@@ -103,12 +103,12 @@ const openMobileCommand = () => {
   flex: 1;
   flex-direction: column;
   min-width: 0;
-  min-height: 100vh;
-  min-height: 100dvh;
-  height: auto;
-  margin-left: var(--sidebar-width, 260px);
+  height: 100vh;
+  height: 100dvh;
+  margin-left: 0;
   transition: margin-left 0.28s ease;
-  overflow: visible;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .main-content.compact {
@@ -176,27 +176,15 @@ const openMobileCommand = () => {
   position: relative;
   flex: 1 0 auto;
   min-height: 0;
-  padding: 8px 10px 12px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 24px;
   overflow-x: clip;
   overflow-y: visible;
   overscroll-behavior-y: auto;
   -webkit-overflow-scrolling: touch;
   isolation: isolate;
-}
-
-.content::before {
-  content: none;
-  position: absolute;
-  inset: 0 8px 10px;
-  border-radius: 10px;
-  background: var(--shell-surface);
-  border: 1px solid var(--workspace-shell-border);
-  box-shadow: var(--shadow-strong), var(--shell-inset);
-  backdrop-filter: var(--shell-backdrop);
-  pointer-events: none;
 }
 
 .content > * {

@@ -1,10 +1,15 @@
 <template>
   <div class="login-page">
-    <div class="space-background"></div>
-    <div class="glass-login-box">
+    <div class="top-bar">
+      <ThemeSwitcher />
+    </div>
+    <!-- 科技感线条代码雨背景 -->
+    <CyberBackground />
+    
+    <div class="glass-login-box glass-panel">
       <div class="login-header">
-        <h1 class="glow-title">QUANTITATIVE TRADING</h1>
-        <p class="subtitle">& AI ANALYSIS CORE</p>
+        <h1 class="glow-title">长桥量化交易平台</h1>
+        <p class="subtitle">专业级智能量化交易系统</p>
       </div>
 
       <el-form
@@ -87,13 +92,13 @@
             :loading="loading"
             @click="handleLogin"
           >
-            SYSTEM LOGIN
+            系统登录
           </el-button>
         </el-form-item>
       </el-form>
       
       <div class="login-footer">
-        <p>SECURE CONNECTION · NVIDIA AI ACCELERATED</p>
+        <p>安全连接 · 智能引擎驱动</p>
       </div>
     </div>
   </div>
@@ -107,6 +112,8 @@ import { ElMessage } from 'element-plus'
 import { Lock, TrendCharts, User } from '@element-plus/icons-vue'
 import { login, setSession, setToken } from '../utils/auth.js'
 import { getApiBaseUrl, isNativeClient, request, setApiBaseUrl } from '../utils/requestPure.js'
+import ThemeSwitcher from '../components/layout/ThemeSwitcher.vue'
+import CyberBackground from '../components/layout/CyberBackground.vue'
 
 const router = useRouter()
 const loginFormRef = ref(null)
@@ -152,11 +159,7 @@ const loginRules = {
 }
 
 const normalizeHomePath = (value) => {
-  const candidate = String(value || '').trim()
-  if (!candidate || candidate === '/workspace') {
-    return '/portal'
-  }
-  return candidate
+  return '/portal'
 }
 
 const handleLogin = async () => {
@@ -260,60 +263,53 @@ if (savedUsername) {
   align-items: center;
   position: relative;
   overflow: hidden;
-  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  background-color: #0f172a;
+  font-family: 'Inter', 'Orbitron', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: transparent;
 }
 
-.space-background {
+.top-bar {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: radial-gradient(circle at 50% 50%, #1e3a8a 0%, #020617 100%);
-  z-index: 1;
+  top: 24px;
+  right: 24px;
+  z-index: 10;
 }
 
-.space-background::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-                    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-  background-size: 40px 40px;
-  pointer-events: none;
-}
-
+/* Glass Login Box */
 .glass-login-box {
   position: relative;
   z-index: 2;
   width: 100%;
-  max-width: 420px;
-  padding: 40px;
-  background: rgba(15, 23, 42, 0.7);
-  backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 20px 50px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.05);
-  border-radius: 16px;
+  max-width: 440px;
+  padding: 50px 40px;
   display: flex;
   flex-direction: column;
+  transition: transform 0.3s ease;
+}
+
+.glass-login-box:hover {
+  transform: translateY(-5px);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent) !important;
+  box-shadow: 0 10px 50px color-mix(in srgb, var(--accent) 10%, transparent) !important;
 }
 
 .login-header {
   text-align: center;
-  margin-bottom: 30px;
+  margin-bottom: 40px;
 }
 
 .glow-title {
-  font-size: 1.8rem;
-  margin: 0 0 5px 0;
-  color: #fff;
+  font-size: 2.2rem;
+  margin: 0 0 10px 0;
+  font-weight: 800;
+  color: var(--text-emphasis);
   letter-spacing: 2px;
-  font-weight: 700;
-  text-shadow: 0 0 10px rgba(96, 165, 250, 0.8);
 }
 
 .subtitle {
   font-size: 0.85rem;
-  color: #94a3b8;
-  letter-spacing: 4px;
+  color: var(--text-secondary);
+  letter-spacing: 6px;
+  text-transform: uppercase;
   margin: 0;
 }
 
@@ -321,115 +317,135 @@ if (savedUsername) {
   width: 100%;
 }
 
+/* Inputs */
 :deep(.cyber-input .el-input__wrapper) {
-  background-color: rgba(0, 0, 0, 0.3) !important;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset !important;
-  border-radius: 8px;
-  padding: 2px 10px;
+  background-color: var(--surface-soft) !important;
+  box-shadow: none !important;
+  border-bottom: 2px solid var(--border-soft) !important;
+  border-radius: 6px 6px 0 0;
+  padding: 6px 12px;
+  transition: all 0.3s ease;
 }
 
 :deep(.cyber-input .el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px #3b82f6 inset !important;
-  background-color: rgba(59, 130, 246, 0.05) !important;
+  border-bottom: 2px solid var(--accent) !important;
+  background-color: color-mix(in srgb, var(--accent) 5%, var(--surface-soft)) !important;
 }
 
 :deep(.cyber-input .el-input__inner) {
-  color: #e2e8f0;
-  font-family: monospace;
+  color: var(--text-primary);
+  font-size: 1rem;
+  letter-spacing: 1px;
 }
 
 .form-tools {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
-  font-size: 0.85rem;
+  margin-bottom: 30px;
+  font-size: 0.9rem;
 }
 
 :deep(.el-checkbox__label) {
-  color: #94a3b8;
+  color: var(--text-secondary);
+  transition: color 0.3s ease;
+}
+
+:deep(.el-checkbox__input.is-checked + .el-checkbox__label) {
+  color: var(--accent);
+}
+
+:deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
+  background-color: var(--accent);
+  border-color: var(--accent);
 }
 
 .endpoint-toggle {
   background: none;
   border: none;
-  color: #60a5fa;
+  color: var(--accent);
   cursor: pointer;
   padding: 0;
   font-size: 0.85rem;
-  transition: color 0.3s;
+  transition: all 0.3s ease;
 }
 
 .endpoint-toggle:hover {
-  color: #93c5fd;
-  text-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+  color: var(--accent-strong);
 }
 
 .endpoint-panel {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 8px;
+  background: var(--surface-soft);
+  border-radius: 12px;
   padding: 15px;
-  margin-bottom: 20px;
-  border: 1px solid rgba(255,255,255,0.05);
+  margin-bottom: 25px;
+  border: 1px solid var(--border-soft);
 }
 
 .endpoint-input-row {
   display: flex;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 15px;
 }
 
 .preset-button {
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: #cbd5e1;
-  padding: 4px 8px;
-  border-radius: 4px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border-soft);
+  color: var(--text-primary);
+  padding: 6px 12px;
+  border-radius: 6px;
   font-size: 0.75rem;
   cursor: pointer;
   margin-right: 8px;
-  transition: all 0.2s;
+  transition: all 0.3s ease;
 }
 
 .preset-button:hover {
-  background: rgba(59,130,246,0.2);
-  border-color: #3b82f6;
-  color: #fff;
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-soft));
+  border-color: var(--accent);
+  color: var(--text-emphasis);
 }
 
+/* Submit Button */
 .login-button.cyber-btn {
   width: 100%;
-  background: linear-gradient(90deg, #059669, #10b981);
+  background: var(--accent);
   border: none;
-  height: 44px;
-  font-weight: 600;
-  letter-spacing: 2px;
-  font-family: monospace;
-  transition: all 0.3s;
-  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+  height: 50px;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 4px;
+  color: #fff;
+  border-radius: 25px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .login-button.cyber-btn:hover {
-  background: linear-gradient(90deg, #10b981, #34d399);
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.6);
-  transform: translateY(-1px);
+  background: var(--accent-strong);
+  transform: translateY(-2px);
 }
 
+.login-button.cyber-btn:active {
+  transform: translateY(1px);
+}
+
+/* Footer */
 .login-footer {
-  margin-top: 25px;
+  margin-top: 30px;
   text-align: center;
   font-size: 0.7rem;
-  color: #475569;
-  letter-spacing: 1px;
+  color: var(--text-muted);
+  letter-spacing: 2px;
 }
 
 .fade-slide-enter-active,
 .fade-slide-leave-active {
-  transition: all 0.3s ease;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .fade-slide-enter-from,
 .fade-slide-leave-to {
   opacity: 0;
-  transform: translateY(-10px);
+  transform: translateY(-15px);
 }
 </style>

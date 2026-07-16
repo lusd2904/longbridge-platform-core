@@ -4,53 +4,18 @@ const STORAGE_KEY = 'longbridge-active-theme'
 
 const themeOptions = [
   {
-    id: 'liquid-night',
+    id: 'glass-dark',
     mode: 'dark',
-    label: '默认',
-    description: '深色交易界面',
-    preview: 'linear-gradient(135deg, #7af1ff 0%, #4f9bff 48%, #102a60 100%)'
+    label: '幻彩琉璃 (深色)',
+    description: '深邃高透的暗色毛玻璃质感，顶级金融终端体验',
+    preview: '#08101d'
   },
   {
-    id: 'neon-grid',
-    mode: 'dark',
-    label: '霓虹',
-    description: '高对比行情界面',
-    preview: 'linear-gradient(135deg, #93ff5c 0%, #15d1ff 54%, #0b1121 100%)'
-  },
-  {
-    id: 'vulcan-forge',
-    mode: 'dark',
-    label: '熔岩',
-    description: '暖色风险界面',
-    preview: 'linear-gradient(135deg, #ffcc6b 0%, #ff5b4d 48%, #1a1210 100%)'
-  },
-  {
-    id: 'emerald-core',
-    mode: 'dark',
-    label: '翡翠',
-    description: '绿色资金界面',
-    preview: 'linear-gradient(135deg, #38f0b3 0%, #0fa77e 52%, #081b17 100%)'
-  },
-  {
-    id: 'cobalt-strike',
-    mode: 'dark',
-    label: '钴蓝',
-    description: '蓝色研究界面',
-    preview: 'linear-gradient(135deg, #71b8ff 0%, #1b5cff 52%, #0b1526 100%)'
-  },
-  {
-    id: 'obsidian-crown',
-    mode: 'dark',
-    label: '鎏金',
-    description: '金色管理界面',
-    preview: 'linear-gradient(135deg, #f6d077 0%, #b8882a 48%, #17181c 100%)'
-  },
-  {
-    id: 'solar-tide',
-    mode: 'dark',
-    label: '日潮',
-    description: '暖光复盘界面',
-    preview: 'linear-gradient(135deg, #ffd784 0%, #ff9f6b 44%, #9576ff 100%)'
+    id: 'glass-light',
+    mode: 'light',
+    label: '晨曦白玉 (浅色)',
+    description: '极简通透的浅色毛玻璃，适合日间长时盯盘',
+    preview: '#f8f9fc'
   }
 ]
 
@@ -76,6 +41,12 @@ const applyTheme = (themeId = activeTheme.value) => {
   const nextTheme = currentTheme.id
   document.documentElement.dataset.theme = nextTheme
   document.documentElement.style.colorScheme = currentTheme.mode === 'light' ? 'light' : 'dark'
+  
+  if (currentTheme.mode === 'dark') {
+    document.documentElement.classList.add('dark')
+  } else {
+    document.documentElement.classList.remove('dark')
+  }
 }
 
 const setTheme = (themeId) => {

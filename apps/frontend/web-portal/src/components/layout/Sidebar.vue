@@ -84,7 +84,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getMenus, getSubsystems } from '../../utils/auth.js'
+import { getMenus, getSubsystems, getActiveSubsystem } from '../../utils/auth.js'
 import { getStoredSystemName } from '../../utils/api.js'
 import { prefetchRouteByName, prefetchRoutesOnIdle } from '../../utils/routePrefetch.js'
 import {
@@ -172,7 +172,8 @@ const menuTree = computed(() => {
   sessionVersion.value
   const rawMenus = getMenus()
   const rawSubsystems = getSubsystems()
-  const visibleSubsystemCodes = new Set(rawMenus.map((menu) => String(menu?.subsystemCode || 'workspace')))
+  const activeSubsystemCode = getActiveSubsystem()
+  const visibleSubsystemCodes = new Set([activeSubsystemCode])
   const subsystems = rawSubsystems.length
     ? rawSubsystems.filter((item) => visibleSubsystemCodes.has(String(item?.code || '')))
     : fallbackSubsystems
@@ -347,10 +348,10 @@ onUnmounted(() => {
 
 <style scoped lang="scss">
 .sidebar {
-  position: fixed;
-  inset: 0 auto 0 0;
+  position: relative;
+  z-index: 100;
   width: var(--sidebar-width, 248px);
-  padding: 8px;
+  padding: 0;
   z-index: 1200;
   transition: width 0.28s ease, transform 0.28s ease;
 
@@ -388,14 +389,15 @@ onUnmounted(() => {
 .sidebar-shell {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 16px);
-  height: calc(100dvh - 16px);
-  border-radius: 12px;
-  background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 11%, transparent), transparent 30%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 96%, black 4%), color-mix(in srgb, var(--surface-emphasis) 92%, black 8%));
-  box-shadow: 0 28px 60px rgba(2, 8, 18, 0.42);
+  height: 100vh;
+  height: 100dvh;
+  border-radius: 0;
+  background: var(--panel-surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid var(--border-soft);
   overflow: hidden;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.05);
 }
 
 .logo {
@@ -403,13 +405,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 12px 10px;
+  padding: 16px 20px;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
-  border-bottom: 1px solid color-mix(in srgb, var(--accent-strong) 8%, transparent);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .logo-icon {
@@ -480,8 +482,8 @@ onUnmounted(() => {
 }
 
 .subsystem-icon {
-  width: 28px;
-  height: 28px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
   border-radius: 8px;
@@ -501,8 +503,8 @@ onUnmounted(() => {
 
 .subsystem-title {
   color: var(--text-emphasis);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .subsystem-arrow {
@@ -535,8 +537,8 @@ onUnmounted(() => {
 .submenu-item {
   padding: 7px 8px;
   border-radius: 7px;
-  color: var(--text-muted);
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .subsystem-item:hover,

@@ -130,28 +130,8 @@
 
           <div class="ai-layout">
             <el-form :model="aiSettings" label-width="160px" class="settings-form ai-form">
-            <el-form-item label="服务商">
-              <el-select v-model="aiSettings.provider" style="width: 100%">
-                <el-option label="Sub2API / OpenAI 兼容" value="nvidia" />
-                <el-option label="混合路由" value="hybrid" />
-                <el-option label="本地 Ollama" value="ollama" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="回退服务商">
-              <el-select v-model="aiSettings.fallbackProvider" style="width: 100%">
-                <el-option label="本地 Ollama" value="ollama" />
-                <el-option label="Sub2API / OpenAI 兼容" value="nvidia" />
-                <el-option label="不启用回退" value="" />
-              </el-select>
-            </el-form-item>
             <el-form-item label="API Base URL">
-              <el-input v-model="aiSettings.baseUrl" placeholder="https://lucen.cc/v1" />
-            </el-form-item>
-            <el-form-item v-if="aiSettings.provider === 'ollama' || aiSettings.provider === 'hybrid'" label="本地模型地址">
-              <el-input v-model="aiSettings.localUrl" placeholder="http://127.0.0.1:11434/api/generate" />
-            </el-form-item>
-            <el-form-item v-if="aiSettings.provider === 'ollama' || aiSettings.provider === 'hybrid'" label="本地默认模型">
-              <el-input v-model="aiSettings.localModel" placeholder="gemma3:12b" />
+              <el-input v-model="aiSettings.baseUrl" placeholder="https://integrate.api.nvidia.com/v1" />
             </el-form-item>
             <el-form-item label="默认模型">
               <el-select v-model="aiSettings.model" filterable style="width: 100%">
@@ -209,10 +189,7 @@
             <el-form-item label="API Key">
               <el-input v-model="aiSettings.apiKey" placeholder="使用当前 sub2api / OpenAI 兼容密钥" show-password />
             </el-form-item>
-            <el-form-item v-if="aiSettings.provider === 'ollama' || aiSettings.provider === 'hybrid'" label="本地超时时间">
-              <el-input-number v-model="aiSettings.localTimeout" :min="10" :step="5" style="width: 220px" />
-              <span class="inline-tip">单位：秒，本地模型用于低时延扫描和云端失败兜底</span>
-            </el-form-item>
+
             <el-form-item label="最大输出长度">
               <el-slider v-model="aiSettings.maxTokens" :min="100" :max="2400" :step="100" show-input />
             </el-form-item>
@@ -234,13 +211,7 @@
                 <h3>模型清单</h3>
                 <span>{{ modelCatalogSummary }}</span>
               </div>
-              <div class="provider-plan">
-                <div v-for="(item, key) in providerPlan" :key="key" class="provider-plan-card">
-                  <strong>{{ providerNames[key] || key }}</strong>
-                  <span>主通道：{{ providerText(item.primary) }}</span>
-                  <small>回退：{{ item.fallbacks?.length ? item.fallbacks.map(providerText).join(' / ') : '无' }}</small>
-                </div>
-              </div>
+
               <div class="catalog-grid">
                 <article v-for="model in displayModelOptions" :key="model.id" class="model-card">
                   <div class="model-top">
@@ -265,314 +236,6 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="日志/数据管理" name="operations" lazy>
-        <div class="settings-tab-panel">
-          <section class="settings-section-card">
-            <SectionCardHeader title="系统日志" :badge="`${filteredLogs.length} 条`">
-              <template #actions>
-                <el-button class="settings-secondary-button" @click="refreshLogs">
-                  <el-icon><Refresh /></el-icon> 刷新日志
-                </el-button>
-              </template>
-            </SectionCardHeader>
-            <div class="logs-header">
-              <el-radio-group v-model="logLevel" size="small" @change="refreshLogs(false)">
-                <el-radio-button value="all">全部</el-radio-button>
-                <el-radio-button value="info">信息</el-radio-button>
-                <el-radio-button value="warning">警告</el-radio-button>
-                <el-radio-button value="error">错误</el-radio-button>
-              </el-radio-group>
-            </div>
-            <div class="logs-content">
-              <div v-for="log in filteredLogs" :key="log.id" class="log-item" :class="log.level">
-                <span class="log-time">{{ log.time }}</span>
-                <el-tag :type="getLogType(log.level)" size="small">{{ log.level }}</el-tag>
-                <el-tag size="small" effect="plain">{{ log.module || 'system' }}</el-tag>
-                <span class="log-message">{{ log.message }}</span>
-              </div>
-            </div>
-          </section>
-
-          <section class="settings-section-card">
-            <SectionCardHeader title="数据管理" />
-
-            <div class="data-grid">
-              <section class="data-section">
-                <h4>数据备份</h4>
-                <div class="section-actions">
-                  <el-button type="primary" @click="backupData">
-                    <el-icon><Download /></el-icon> 立即备份
-                  </el-button>
-                  <el-button class="settings-secondary-button" @click="scheduleBackup">设置自动备份</el-button>
-                </div>
-              </section>
-
-              <section class="data-section">
-                <h4>数据恢复</h4>
-                <el-upload
-                  action="/api/upload"
-                  :auto-upload="false"
-                  :on-change="handleBackupFile"
-                  accept=".json,.sql"
-                >
-                  <el-button type="primary">
-                    <el-icon><Upload /></el-icon> 选择备份文件
-                  </el-button>
-                </el-upload>
-              </section>
-
-              <section class="data-section">
-                <h4>数据清理</h4>
-                <el-form :inline="true">
-                  <el-form-item label="清理范围">
-                    <el-select v-model="cleanupRange" placeholder="选择范围">
-                      <el-option label="30天前" value="30" />
-                      <el-option label="90天前" value="90" />
-                      <el-option label="1年前" value="365" />
-                    </el-select>
-                  </el-form-item>
-                  <el-form-item>
-                    <el-button type="danger" @click="cleanupData">清理数据</el-button>
-                  </el-form-item>
-                </el-form>
-              </section>
-            </div>
-
-            <section v-if="showTradeOutboxAdmin" class="outbox-admin-panel">
-              <SectionCardHeader
-                title="Trade Outbox 治理"
-                :badge="tradeOutboxStatusText"
-                :badge-type="tradeOutboxStatusTone === 'success' ? 'success' : 'info'"
-              >
-                <template #actions>
-                  <div class="section-actions">
-                    <el-button class="settings-secondary-button" :loading="tradeOutboxLoading" @click="refreshTradeOutbox()">
-                      <el-icon><Refresh /></el-icon> 刷新
-                    </el-button>
-                    <el-button type="warning" :loading="tradeOutboxActionLoading" @click="runTradeOutboxRepair">
-                      运行修复
-                    </el-button>
-                  </div>
-                </template>
-              </SectionCardHeader>
-
-              <el-alert
-                v-if="tradeOutboxAvailabilityMessage"
-                class="outbox-alert"
-                type="info"
-                :closable="false"
-                show-icon
-                :title="tradeOutboxAvailabilityMessage"
-              />
-
-              <div class="outbox-stats">
-                <article v-for="item in tradeOutboxCards" :key="item.label" class="outbox-stat-card">
-                  <span class="stat-label">{{ item.label }}</span>
-                  <strong>{{ item.value }}</strong>
-                  <small>{{ item.hint }}</small>
-                </article>
-              </div>
-
-              <div class="outbox-toolbar">
-                <div class="outbox-toolbar-group">
-                  <el-select v-model="tradeOutboxFilter.status" :disabled="!tradeOutboxCanOperate" style="width: 160px">
-                    <el-option label="全部状态" value="" />
-                    <el-option label="待投递" value="pending" />
-                    <el-option label="投递失败" value="failed" />
-                    <el-option label="已发布" value="published" />
-                    <el-option label="死信" value="dead_letter" />
-                  </el-select>
-                  <el-input
-                    v-model="tradeOutboxFilter.sagaId"
-                    :disabled="!tradeOutboxSupportsEventData"
-                    clearable
-                    placeholder="按 Saga ID 过滤"
-                    style="width: 260px"
-                  />
-                  <el-input
-                    v-model="tradeOutboxFilter.eventType"
-                    :disabled="!tradeOutboxSupportsEventData"
-                    clearable
-                    placeholder="按事件类型过滤"
-                    style="width: 240px"
-                  />
-                  <el-input-number v-model="tradeOutboxFilter.limit" :disabled="!tradeOutboxCanOperate" :min="10" :max="200" :step="10" style="width: 140px" />
-                  <el-switch v-model="tradeOutboxFilter.includePayload" :disabled="!tradeOutboxSupportsEventData" />
-                  <span class="inline-tip">显示 payload</span>
-                </div>
-                <div class="outbox-toolbar-group">
-                  <el-button type="primary" :disabled="!tradeOutboxCanOperate" :loading="tradeOutboxLoading" @click="refreshTradeOutbox()">
-                    应用筛选
-                  </el-button>
-                </div>
-              </div>
-
-              <div class="outbox-panels">
-                <section class="outbox-panel">
-                  <div class="outbox-panel-head">
-                    <div>
-                      <h5>事件列表</h5>
-                      <p>
-                        {{ tradeOutboxSupportsEventData ? `${tradeOutboxEvents.length} 条记录` : '当前环境未开放事件明细接口' }}
-                      </p>
-                    </div>
-                    <div class="outbox-table-actions">
-                      <el-button
-                        type="warning"
-                        plain
-                        size="small"
-                        :disabled="!tradeOutboxSupportsEventData || !selectedReplayableEventIds.length || tradeOutboxActionLoading"
-                        @click="requeueSelectedTradeOutboxEvents"
-                      >
-                        重放所选事件
-                      </el-button>
-                      <el-button
-                        type="danger"
-                        plain
-                        size="small"
-                        :disabled="!tradeOutboxSupportsEventData || !selectedDeadLetterEventIds.length || tradeOutboxActionLoading"
-                        @click="purgeSelectedTradeDeadLetters"
-                      >
-                        清理所选死信
-                      </el-button>
-                    </div>
-                  </div>
-
-                  <el-table
-                    :data="tradeOutboxEvents"
-                    v-loading="tradeOutboxLoading"
-                    style="width: 100%"
-                    max-height="420"
-                    empty-text="当前环境未返回事件列表"
-                    @selection-change="handleTradeOutboxEventSelectionChange"
-                  >
-                    <el-table-column v-if="tradeOutboxSupportsEventData" type="selection" width="48" />
-                    <el-table-column prop="eventId" label="事件 ID" min-width="180" show-overflow-tooltip />
-                    <el-table-column prop="sagaId" label="Saga ID" min-width="180" show-overflow-tooltip />
-                    <el-table-column prop="eventType" label="事件类型" min-width="180" show-overflow-tooltip />
-                    <el-table-column prop="publishStatus" label="状态" width="110">
-                      <template #default="{ row }">
-                        <el-tag size="small" :type="getOutboxStatusTagType(row.publishStatus)">
-                          {{ getOutboxStatusText(row.publishStatus) }}
-                        </el-tag>
-                      </template>
-                    </el-table-column>
-                    <el-table-column prop="retryCount" label="重试" width="80" />
-                    <el-table-column prop="deadLetterAt" label="死信时间" width="170" />
-                    <el-table-column prop="createdAt" label="创建时间" width="170" />
-                    <el-table-column v-if="tradeOutboxFilter.includePayload" label="Payload" min-width="260">
-                      <template #default="{ row }">
-                        <code class="payload-preview">{{ formatOutboxPayload(row.payload) }}</code>
-                      </template>
-                    </el-table-column>
-                    <el-table-column label="操作" width="180" fixed="right">
-                      <template #default="{ row }">
-                        <el-button
-                          v-if="tradeOutboxSupportsEventData && ['failed', 'dead_letter'].includes(row.publishStatus)"
-                          type="warning"
-                          size="small"
-                          link
-                          @click="requeueTradeOutboxEvent(row)"
-                        >
-                          重放
-                        </el-button>
-                        <el-button
-                          v-if="tradeOutboxSupportsEventData && row.publishStatus === 'dead_letter'"
-                          type="danger"
-                          size="small"
-                          link
-                          @click="purgeTradeDeadLetterRow(row)"
-                        >
-                          清理
-                        </el-button>
-                      </template>
-                    </el-table-column>
-                  </el-table>
-                </section>
-
-                <section class="outbox-panel">
-                  <div class="outbox-panel-head">
-                    <div>
-                      <h5>Saga 聚合</h5>
-                      <p>
-                        {{ tradeOutboxSupportsSagaData ? `${tradeOutboxSagas.length} 条 Saga` : '当前环境未开放 Saga 聚合接口' }}
-                      </p>
-                    </div>
-                    <div class="outbox-table-actions">
-                      <el-button
-                        type="warning"
-                        plain
-                        size="small"
-                        :disabled="!tradeOutboxSupportsSagaData || !selectedTradeOutboxSagaIds.length || tradeOutboxActionLoading"
-                        @click="requeueSelectedTradeOutboxSagas"
-                      >
-                        按 Saga 重放
-                      </el-button>
-                      <el-button
-                        type="danger"
-                        plain
-                        size="small"
-                        :disabled="!tradeOutboxSupportsSagaData || !selectedDeadLetterSagaIds.length || tradeOutboxActionLoading"
-                        @click="purgeSelectedTradeDeadLettersBySaga"
-                      >
-                        按 Saga 清理死信
-                      </el-button>
-                    </div>
-                  </div>
-
-                  <el-table
-                    :data="tradeOutboxSagas"
-                    v-loading="tradeOutboxLoading"
-                    style="width: 100%"
-                    max-height="420"
-                    empty-text="当前环境未返回 Saga 聚合数据"
-                    @selection-change="handleTradeOutboxSagaSelectionChange"
-                  >
-                    <el-table-column v-if="tradeOutboxSupportsSagaData" type="selection" width="48" />
-                    <el-table-column prop="sagaId" label="Saga ID" min-width="220" show-overflow-tooltip />
-                    <el-table-column prop="eventCount" label="事件数" width="90" />
-                    <el-table-column prop="publishedCount" label="已发布" width="90" />
-                    <el-table-column prop="failedCount" label="失败" width="80" />
-                    <el-table-column prop="deadLetterCount" label="死信" width="80" />
-                    <el-table-column prop="lastCreatedAt" label="最近创建" width="170" />
-                    <el-table-column label="操作" width="180" fixed="right">
-                      <template #default="{ row }">
-                        <el-button
-                          v-if="tradeOutboxSupportsEventData"
-                          type="primary"
-                          size="small"
-                          link
-                          @click="inspectSagaEvents(row)"
-                        >
-                          查看事件
-                        </el-button>
-                        <el-button
-                          v-if="tradeOutboxSupportsSagaData && (row.deadLetterCount > 0 || row.failedCount > 0)"
-                          type="warning"
-                          size="small"
-                          link
-                          @click="requeueTradeOutboxSaga(row)"
-                        >
-                          重放
-                        </el-button>
-                        <el-button
-                          v-if="tradeOutboxSupportsSagaData && row.deadLetterCount > 0"
-                          type="danger"
-                          size="small"
-                          link
-                          @click="purgeTradeDeadLettersForSaga(row)"
-                        >
-                          清理
-                        </el-button>
-                      </template>
-                    </el-table-column>
-                  </el-table>
-                </section>
-              </div>
-            </section>
-          </section>
-        </div>
-      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -618,13 +281,9 @@ const basicSettings = ref({
   timezone: 'Asia/Shanghai'
 })
 
-const OPENAI_COMPAT_BASE_URL = 'https://lucen.cc/v1'
+const OPENAI_COMPAT_BASE_URL = 'https://integrate.api.nvidia.com/v1'
 const DEFAULT_AI_SETTINGS = {
-  provider: 'nvidia',
-  fallbackProvider: '',
-  baseUrl: OPENAI_COMPAT_BASE_URL,
-  localUrl: 'http://127.0.0.1:11434/api/generate',
-  localModel: 'gemma3:12b',
+  baseUrl: 'https://integrate.api.nvidia.com/v1',
   model: 'gpt-5.5',
   scanPulseModel: 'gpt-5.4',
   scanRiskModel: 'gpt-5.4',
@@ -635,7 +294,6 @@ const DEFAULT_AI_SETTINGS = {
   recommendSummaryModel: 'gpt-5.5',
   visionModel: 'gpt-5.4',
   apiKey: '',
-  localTimeout: 45,
   maxTokens: 600,
   temperature: 0.2,
   recommendationRefreshInterval: 1800
@@ -1098,7 +756,7 @@ const loadModelCatalog = async () => {
   try {
     const res = await getAIModels()
     modelOptions.value = Array.isArray(res?.data) ? res.data : []
-    providerInfo.value = res?.provider || DEFAULT_AI_SETTINGS.provider
+    providerInfo.value = res?.provider || 'nvidia'
     providerPlan.value = res?.providerPlan || {}
     const defaultPlan = res?.defaultPlan || {}
     defaultModelPlan.value = defaultPlan
@@ -1111,29 +769,30 @@ const loadConfigData = async () => {
   try {
     const res = await getConfig()
     const data = res?.data || {}
+    
+    let localData = {}
+    try {
+      const stored = localStorage.getItem('NEXUS_AI_CONFIG')
+      if (stored) localData = JSON.parse(stored)
+    } catch(e) {}
 
     aiSettings.value = {
       ...DEFAULT_AI_SETTINGS,
       ...aiSettings.value,
-      provider: data.ai_provider || DEFAULT_AI_SETTINGS.provider,
-      fallbackProvider: data.ai_fallback_provider ?? DEFAULT_AI_SETTINGS.fallbackProvider,
-      baseUrl: data.ai_base_url || DEFAULT_AI_SETTINGS.baseUrl,
-      localUrl: data.ai_local_url || DEFAULT_AI_SETTINGS.localUrl,
-      localModel: data.ai_local_model || DEFAULT_AI_SETTINGS.localModel,
-      model: data.ai_model || DEFAULT_AI_SETTINGS.model,
-      scanPulseModel: data.ai_model_scan_pulse || data.ai_model_scan_fast || DEFAULT_AI_SETTINGS.scanPulseModel,
-      scanRiskModel: data.ai_model_scan_risk || DEFAULT_AI_SETTINGS.scanRiskModel,
-      trendBatchModel: data.ai_model_trend_batch || DEFAULT_AI_SETTINGS.trendBatchModel,
-      scanFinalModel: data.ai_model_scan_final || DEFAULT_AI_SETTINGS.scanFinalModel,
-      scanReasoningEffort: data.ai_scan_reasoning_effort || DEFAULT_AI_SETTINGS.scanReasoningEffort,
-      recommendBriefModel: data.ai_model_recommend_brief || DEFAULT_AI_SETTINGS.recommendBriefModel,
-      recommendSummaryModel: data.ai_model_recommend_summary || DEFAULT_AI_SETTINGS.recommendSummaryModel,
-      visionModel: data.ai_model_vision || DEFAULT_AI_SETTINGS.visionModel,
-      apiKey: data.ai_api_key || '',
-      localTimeout: Number(data.ai_local_timeout || DEFAULT_AI_SETTINGS.localTimeout),
-      maxTokens: Number(data.num_predict || DEFAULT_AI_SETTINGS.maxTokens),
-      temperature: Number(data.temperature ?? DEFAULT_AI_SETTINGS.temperature),
-      recommendationRefreshInterval: Number(data.recommendation_refresh_interval || DEFAULT_AI_SETTINGS.recommendationRefreshInterval)
+      baseUrl: data.ai_base_url || localData.ai_base_url || DEFAULT_AI_SETTINGS.baseUrl,
+      model: data.ai_model || localData.ai_model || DEFAULT_AI_SETTINGS.model,
+      scanPulseModel: data.ai_model_scan_pulse || data.ai_model_scan_fast || localData.ai_model_scan_pulse || DEFAULT_AI_SETTINGS.scanPulseModel,
+      scanRiskModel: data.ai_model_scan_risk || localData.ai_model_scan_risk || DEFAULT_AI_SETTINGS.scanRiskModel,
+      trendBatchModel: data.ai_model_trend_batch || localData.ai_model_trend_batch || DEFAULT_AI_SETTINGS.trendBatchModel,
+      scanFinalModel: data.ai_model_scan_final || localData.ai_model_scan_final || DEFAULT_AI_SETTINGS.scanFinalModel,
+      scanReasoningEffort: data.ai_scan_reasoning_effort || localData.ai_scan_reasoning_effort || DEFAULT_AI_SETTINGS.scanReasoningEffort,
+      recommendBriefModel: data.ai_model_recommend_brief || localData.ai_model_recommend_brief || DEFAULT_AI_SETTINGS.recommendBriefModel,
+      recommendSummaryModel: data.ai_model_recommend_summary || localData.ai_model_recommend_summary || DEFAULT_AI_SETTINGS.recommendSummaryModel,
+      visionModel: data.ai_model_vision || localData.ai_model_vision || DEFAULT_AI_SETTINGS.visionModel,
+      apiKey: data.ai_api_key || localData.ai_api_key || '',
+      maxTokens: Number(data.num_predict || localData.num_predict || DEFAULT_AI_SETTINGS.maxTokens),
+      temperature: Number(data.temperature ?? localData.temperature ?? DEFAULT_AI_SETTINGS.temperature),
+      recommendationRefreshInterval: Number(data.recommendation_refresh_interval || localData.recommendation_refresh_interval || DEFAULT_AI_SETTINGS.recommendationRefreshInterval)
     }
     if ((res?.migration?.changedCount || 0) > 0) {
       ElMessage.info(`已自动迁移 ${res.migration.changedCount} 项旧模型配置`)
@@ -1147,36 +806,32 @@ const saveAISettings = async () => {
   try {
     const normalizedBaseUrl = (aiSettings.value.baseUrl || '').replace(/\/$/, '')
     const cloudChatUrl = normalizedBaseUrl ? `${normalizedBaseUrl}/chat/completions` : ''
-    const primaryUrl = aiSettings.value.provider === 'ollama'
-      ? aiSettings.value.localUrl
-      : (cloudChatUrl || aiSettings.value.localUrl)
 
-    await updateConfig({
-      configs: {
-        ai_provider: aiSettings.value.provider,
-        ai_fallback_provider: aiSettings.value.fallbackProvider,
-        ai_base_url: aiSettings.value.baseUrl,
-        ai_url: primaryUrl,
-        ai_api_style: 'openai-chat-completions',
-        ai_local_url: aiSettings.value.localUrl,
-        ai_local_model: aiSettings.value.localModel,
-        ai_model: aiSettings.value.model,
-        ai_model_scan_pulse: aiSettings.value.scanPulseModel,
-        ai_model_scan_fast: aiSettings.value.scanPulseModel,
-        ai_model_scan_risk: aiSettings.value.scanRiskModel,
-        ai_model_trend_batch: aiSettings.value.trendBatchModel,
-        ai_model_scan_final: aiSettings.value.scanFinalModel,
-        ai_scan_reasoning_effort: aiSettings.value.scanReasoningEffort,
-        ai_model_recommend_brief: aiSettings.value.recommendBriefModel,
-        ai_model_recommend_summary: aiSettings.value.recommendSummaryModel,
-        ai_model_vision: aiSettings.value.visionModel,
-        ai_api_key: aiSettings.value.apiKey,
-        num_predict: aiSettings.value.maxTokens,
-        ai_local_timeout: aiSettings.value.localTimeout,
-        temperature: aiSettings.value.temperature,
-        recommendation_refresh_interval: aiSettings.value.recommendationRefreshInterval
-      }
-    })
+    const payload = {
+      ai_base_url: aiSettings.value.baseUrl,
+      ai_url: cloudChatUrl,
+      ai_api_style: 'openai-chat-completions',
+      ai_model: aiSettings.value.model,
+      ai_model_scan_pulse: aiSettings.value.scanPulseModel,
+      ai_model_scan_fast: aiSettings.value.scanPulseModel,
+      ai_model_scan_risk: aiSettings.value.scanRiskModel,
+      ai_model_trend_batch: aiSettings.value.trendBatchModel,
+      ai_model_scan_final: aiSettings.value.scanFinalModel,
+      ai_scan_reasoning_effort: aiSettings.value.scanReasoningEffort,
+      ai_model_recommend_brief: aiSettings.value.recommendBriefModel,
+      ai_model_recommend_summary: aiSettings.value.recommendSummaryModel,
+      ai_model_vision: aiSettings.value.visionModel,
+      ai_api_key: aiSettings.value.apiKey,
+      num_predict: aiSettings.value.maxTokens,
+      temperature: aiSettings.value.temperature,
+      recommendation_refresh_interval: aiSettings.value.recommendationRefreshInterval
+    }
+    
+    try {
+      localStorage.setItem('NEXUS_AI_CONFIG', JSON.stringify(payload))
+    } catch(e) {}
+
+    await updateConfig({ configs: payload })
 
     aiSettings.value = {
       ...aiSettings.value,
@@ -1225,7 +880,8 @@ const validateAIConnectionForm = () => {
 }
 
 const handleTestAIConnection = async () => {
-  if (!validateAIConnectionForm()) {
+  if (!aiSettings.value.baseUrl || !aiSettings.value.apiKey) {
+    ElMessage.warning('请先补全 Base URL 和 API Key')
     return
   }
 
@@ -1233,6 +889,10 @@ const handleTestAIConnection = async () => {
     const res = await testAIConnectionRequest(buildAIConnectionPayload())
     const info = res?.data || {}
     ElMessage.success(`连接成功：${info.model || '模型'} @ ${info.endpoint || 'endpoint'}`)
+    
+    if (info.models && Array.isArray(info.models)) {
+      modelOptions.value = info.models
+    }
   } catch (error) {
     console.error('AI 连接测试失败:', error)
     ElMessage.error(error?.data?.error || error?.data?.message || error?.message || 'AI 连接测试失败')

@@ -1860,8 +1860,8 @@ export const getLatestSymbolAnalysis = async (symbol) => {
   return serviceGet('analysis', `/api/v1/analysis/symbols/${encodeURIComponent(normalizedSymbol)}/latest`)
 }
 
-export const getAIModels = () => serviceGet('analysis', '/api/v1/analysis/models')
-export const testAIConnection = (data = {}) => servicePost('analysis', '/api/v1/analysis/test-connection', data)
+export const getAIModels = () => serviceGet('user', '/api/ai/models')
+export const testAIConnection = (data = {}) => servicePost('user', '/api/ai/test-connection', data)
 export const consultAssistant = (data = {}) => servicePost('analysis', '/api/v1/analysis/assistant/consult', data)
 export const getRecommendations = async (params = {}) => {
   const res = await serviceGet('analysis', '/api/v1/analysis/recommendations', params)

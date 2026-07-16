@@ -4,10 +4,9 @@ import time
 from pathlib import Path
 
 from apps.intelligence.intelligence_shared import boundary as analysis_boundary
+from core.analysis import ai_analyst
 from core.analysis.AiConsultant import AiConsultant
 from core.analysis.RecommendationService import RecommendationService
-from core.analysis import ai_analyst
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -205,7 +204,9 @@ def test_scan_routes_and_trade_engine_stop_using_random_market_fallbacks() -> No
 
 
 def test_recommendation_and_batch_analysis_stop_fabricating_ai_text_or_prices() -> None:
-    recommendation_source = (ROOT / "backend-server/src/core/analysis/RecommendationService.py").read_text(encoding="utf-8")
+    recommendation_source = (ROOT / "backend-server/src/core/analysis/RecommendationService.py").read_text(
+        encoding="utf-8"
+    )
     ai_routes_source = (ROOT / "backend-server/src/api/ai_routes.py").read_text(encoding="utf-8")
     frontend_api_source = (ROOT / "apps/web-portal/src/utils/api.js").read_text(encoding="utf-8")
 
@@ -323,10 +324,7 @@ def test_recommendation_ai_provider_inflight_guard_prevents_concurrent_storm(mon
         "risk_level": 2,
         "confidence": 64,
     }
-    candidates = [
-        {**base_candidate, "symbol": symbol}
-        for symbol in ["AAPL.US", "MSFT.US", "NVDA.US", "TSLA.US"]
-    ]
+    candidates = [{**base_candidate, "symbol": symbol} for symbol in ["AAPL.US", "MSFT.US", "NVDA.US", "TSLA.US"]]
 
     enriched = RecommendationService._enrich_with_ai("growth", candidates, user_id=1)
 
@@ -341,8 +339,8 @@ def test_openai_compatible_scan_timeouts_are_short_and_sanitized(monkeypatch) ->
         "AI_TIMEOUT": 30,
         "AI_PROVIDER": "nvidia",
         "AI_API_KEY": "test-key",
-        "AI_BASE_URL": "https://lucen.cc/v1",
-        "AI_URL": "https://lucen.cc/v1/chat/completions",
+        "AI_BASE_URL": "https://integrate.api.nvidia.com/v1",
+        "AI_URL": "https://integrate.api.nvidia.com/v1/chat/completions",
         "AI_API_STYLE": "openai-chat-completions",
         "AI_MODEL": "gpt-5.5",
         "AI_MODEL_SCAN_PULSE": "gpt-5.4",
@@ -377,10 +375,12 @@ def test_openai_compatible_timeout_caps_by_task(monkeypatch) -> None:
     monkeypatch.setattr(
         ai_analyst.AppConfig,
         "get",
-        staticmethod(lambda key, user_id=1, default=None: {
-            "AI_TIMEOUT": 30,
-            "AI_PROVIDER": "nvidia",
-        }.get(key, default)),
+        staticmethod(
+            lambda key, user_id=1, default=None: {
+                "AI_TIMEOUT": 30,
+                "AI_PROVIDER": "nvidia",
+            }.get(key, default)
+        ),
     )
 
     assert ai_analyst.AIAnalyst._request_timeout_for_task("scan_pulse", provider="nvidia") == 8

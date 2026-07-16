@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 from core.analysis.ai_analyst import AIAnalyst
+from core.analysis.HistoricalMarketDataService import HistoricalMarketDataService
 
 
 def _sample_candle(trade_date: str = "2026-01-02"):
@@ -206,16 +206,21 @@ def test_history_fallback_errors_do_not_escape(monkeypatch) -> None:
     monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_from_akshare", raise_runtime)
     monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_from_yfinance", raise_runtime)
 
-    assert HistoricalMarketDataService._fetch_candles_by_date_range_with_fallback(
-        "000001.SZ",
-        date(2026, 1, 1),
-        date(2026, 1, 10),
-    ) == []
+    assert (
+        HistoricalMarketDataService._fetch_candles_by_date_range_with_fallback(
+            "000001.SZ",
+            date(2026, 1, 1),
+            date(2026, 1, 10),
+        )
+        == []
+    )
 
 
 def test_history_fallback_reports_actual_source(monkeypatch) -> None:
     monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_by_date_range", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_from_akshare", lambda *_args, **_kwargs: [_sample_candle()])
+    monkeypatch.setattr(
+        HistoricalMarketDataService, "_fetch_candles_from_akshare", lambda *_args, **_kwargs: [_sample_candle()]
+    )
     monkeypatch.setattr(HistoricalMarketDataService, "_fetch_candles_from_yfinance", lambda *_args, **_kwargs: [])
 
     candles, source = HistoricalMarketDataService._fetch_candles_by_date_range_with_fallback_source(
@@ -283,8 +288,8 @@ def test_ai_defaults_route_to_sub2api_models(monkeypatch) -> None:
     values = {
         "AI_PROVIDER": "nvidia",
         "AI_FALLBACK_PROVIDER": "",
-        "AI_BASE_URL": "https://lucen.cc/v1",
-        "AI_URL": "https://lucen.cc/v1/chat/completions",
+        "AI_BASE_URL": "https://integrate.api.nvidia.com/v1",
+        "AI_URL": "https://integrate.api.nvidia.com/v1/chat/completions",
         "AI_API_STYLE": "openai-chat-completions",
     }
 
@@ -295,13 +300,16 @@ def test_ai_defaults_route_to_sub2api_models(monkeypatch) -> None:
 
     assert AIAnalyst._provider(user_id=1) == "nvidia"
     assert AIAnalyst._provider_order(task="scan_final", user_id=1) == ["nvidia"]
-    assert AIAnalyst._nvidia_endpoints(user_id=1)[0] == "https://lucen.cc/v1/chat/completions"
+    assert AIAnalyst._nvidia_endpoints(user_id=1)[0] == "https://integrate.api.nvidia.com/v1/chat/completions"
     assert AIAnalyst._resolve_model(task="scan_final", user_id=1, provider="nvidia") == "gpt-5.5"
     assert AIAnalyst._resolve_model(task="scan_pulse", user_id=1, provider="nvidia") == "gpt-5.4"
-    assert AIAnalyst._build_nvidia_payload(
-        "https://lucen.cc/v1/chat/completions",
-        "test",
-        "gpt-5.4",
-        task="scan_pulse",
-        user_id=1,
-    )["reasoning_effort"] == "high"
+    assert (
+        AIAnalyst._build_nvidia_payload(
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            "test",
+            "gpt-5.4",
+            task="scan_pulse",
+            user_id=1,
+        )["reasoning_effort"]
+        == "high"
+    )

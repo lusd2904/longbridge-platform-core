@@ -268,39 +268,6 @@
       </div>
 
       <template v-if="!isPhoneLayout">
-        <el-card class="operations-card">
-        <template #header>
-          <SectionCardHeader title="服务状态墙">
-            <template #actions>
-              <el-button type="primary" link :loading="healthLoading" @click="loadSystemHealth(false)">
-                刷新检查
-              </el-button>
-            </template>
-          </SectionCardHeader>
-        </template>
-        <div class="service-wall-head">
-          <span>{{ serviceHealthSourceLabel }}</span>
-          <span>{{ serviceHealthSnapshot }}</span>
-        </div>
-        <div class="service-health-grid">
-          <div v-for="service in systemHealthCards" :key="service.key" class="service-pill">
-            <span class="service-dot" :class="service.tone"></span>
-            <div class="service-copy">
-              <span class="service-name">{{ service.label }}</span>
-              <strong :class="service.tone">{{ service.value }}</strong>
-            </div>
-            <div class="service-endpoint">
-              <span>{{ service.endpoint }}</span>
-              <small>{{ service.hint }}</small>
-            </div>
-          </div>
-        </div>
-        <div class="service-meta">
-          <span>{{ overallHealthLabel }} · {{ systemHealth.summary?.healthy || 0 }}/{{ systemHealth.summary?.total || systemHealthCards.length }} 正常</span>
-          <span v-if="systemHealth.phase">运行阶段 {{ systemHealth.phase }}</span>
-          <span>{{ healthCheckedAt ? `最近检查 ${formatTime(healthCheckedAt)}` : '尚未执行检查' }}</span>
-        </div>
-      </el-card>
 
       <MetricStrip :items="assetMetricStripItems" />
 
@@ -498,40 +465,6 @@
           <el-empty v-else description="暂无智能推荐" />
         </el-card>
 
-        <el-card class="panel-card">
-          <template #header>
-            <SectionCardHeader title="财经快讯">
-              <template #actions>
-                <el-button type="primary" link @click="$router.push('/finance-news')">
-                  查看全部
-                </el-button>
-              </template>
-            </SectionCardHeader>
-          </template>
-          <ReadModelSourceStrip
-            v-if="financeBriefings.length"
-            label="快讯状态"
-            :detail="financeBriefingSourceSummary.sourceDetail"
-            :status-text="financeBriefingSourceSummary.sourceLabel"
-            :status-type="financeBriefingSourceSummary.statusType"
-            :updated-at="financeBriefingSourceSummary.updatedAt ? formatTime(financeBriefingSourceSummary.updatedAt) : ''"
-            :tags="financeBriefingSourceTags"
-            compact
-          />
-          <div class="briefing-list" v-if="financeBriefings.length">
-            <article v-for="item in financeBriefings" :key="item.id" class="briefing-item">
-              <div class="briefing-head">
-                <div>
-                  <el-tag size="small" :type="getMarketTagType(item.market)">{{ item.market || 'ALL' }}</el-tag>
-                  <strong>{{ item.headline }}</strong>
-                </div>
-                <span>{{ formatTime(item.generatedAt) }}</span>
-              </div>
-              <p>{{ item.summary }}</p>
-            </article>
-          </div>
-          <el-empty v-else description="暂无财经简报" />
-        </el-card>
       </div>
       </template>
     </template>
@@ -1199,7 +1132,7 @@ const positionChartOption = computed(() => {
     },
     series: [{
       type: 'pie',
-      radius: ['40%', '70%'],
+      radius: ['30%', '50%'],
       center: ['40%', '50%'],
       avoidLabelOverlap: false,
       itemStyle: {
@@ -1951,16 +1884,18 @@ onUnmounted(() => {
   }
 
   .service-name {
-    font-size: 12px;
-    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   strong {
-    color: var(--text-primary);
-    font-size: 14px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: normal;
     line-height: 1.2;
 
     &.healthy {
@@ -2244,7 +2179,7 @@ onUnmounted(() => {
 
 .chart-card {
   .chart-container {
-    height: 300px;
+    height: 240px;
   }
 
   .chart {

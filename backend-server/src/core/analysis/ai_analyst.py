@@ -1020,16 +1020,35 @@ class AIAnalyst:
                     "reasoning_effort": "low",
                 }
                 try:
+                    fetched_models = []
+                    try:
+                        models_res = session.get(f"{base_url}/models", headers=headers, timeout=10)
+                        if models_res.status_code == 200:
+                            models_data = models_res.json().get("data", [])
+                            fetched_models = [
+                                {"id": m.get("id"), "alias": m.get("id"), "available": True}
+                                for m in models_data
+                                if m.get("id")
+                            ]
+                    except Exception:
+                        pass
+
                     response = session.post(endpoint, json=payload, headers=headers, timeout=20)
-                    if response.status_code == 200:
-                        content = cls._extract_openai_content(response.json() or {})
+                    is_post_success = response.status_code == 200
+
+                    if is_post_success or fetched_models:
+                        content = ""
+                        if is_post_success:
+                            content = cls._extract_openai_content(response.json() or {})
                         return {
                             "success": True,
                             "provider": "nvidia",
                             "endpoint": endpoint,
                             "model": cloud_model,
                             "message": content or "Sub2API 路由连接成功",
+                            "models": fetched_models,
                         }
+
                     last_error = f"OpenAI-compatible 请求失败: {response.status_code} {response.text[:180]}"
                 except Exception as exc:
                     last_error = cls._build_business_error(str(exc))

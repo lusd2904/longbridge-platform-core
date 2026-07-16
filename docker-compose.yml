@@ -4,10 +4,10 @@ x-backend-env: &backend-env
   REDIS_HOST: ${DOCKER_REDIS_HOST:-redis}
   SKSHARE_BASE_URL: ${DOCKER_SKSHARE_BASE_URL:-http://host.docker.internal:18081}
   REF_SKSHARE_BASE_URL: ${DOCKER_SKSHARE_BASE_URL:-http://host.docker.internal:18081}
-  LONGBRIDGE_AI_PROVIDER: ${LONGBRIDGE_AI_PROVIDER:-gemini}
-  LONGBRIDGE_AI_FALLBACK_PROVIDER: ${LONGBRIDGE_AI_FALLBACK_PROVIDER:-openai}
-  LONGBRIDGE_AI_BASE_URL: ${LONGBRIDGE_AI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
-  LONGBRIDGE_AI_URL: ${LONGBRIDGE_AI_URL:-https://generativelanguage.googleapis.com/v1beta/openai/chat/completions}
+  LONGBRIDGE_AI_PROVIDER: ${LONGBRIDGE_AI_PROVIDER:-nvidia}
+  LONGBRIDGE_AI_FALLBACK_PROVIDER: ${LONGBRIDGE_AI_FALLBACK_PROVIDER:-}
+  LONGBRIDGE_AI_BASE_URL: ${LONGBRIDGE_AI_BASE_URL:-https://integrate.api.nvidia.com/v1}
+  LONGBRIDGE_AI_URL: ${LONGBRIDGE_AI_URL:-https://integrate.api.nvidia.com/v1/chat/completions}
   LONGBRIDGE_AI_API_STYLE: ${LONGBRIDGE_AI_API_STYLE:-openai-chat-completions}
   LONGBRIDGE_AI_API_KEY: ${LONGBRIDGE_AI_API_KEY:-}
   LONGBRIDGE_AI_MODEL: ${LONGBRIDGE_AI_MODEL:-gemini-1.5-pro}
@@ -372,28 +372,28 @@ services:
       retries: 5
       start_period: 10s
 
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: refactor-v2-prometheus
-    restart: unless-stopped
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    networks:
-      - refactor-v2
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: refactor-v2-grafana
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    networks:
-      - refactor-v2
+#  prometheus:
+#    image: prom/prometheus:latest
+#    container_name: refactor-v2-prometheus
+#    restart: unless-stopped
+#    volumes:
+#      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+#    command:
+#      - '--config.file=/etc/prometheus/prometheus.yml'
+#      - '--storage.tsdb.path=/prometheus'
+#    networks:
+#      - refactor-v2
+#
+#  grafana:
+#    image: grafana/grafana:latest
+#    container_name: refactor-v2-grafana
+#    restart: unless-stopped
+#    ports:
+#      - "3000:3000"
+#    environment:
+#      - GF_SECURITY_ADMIN_PASSWORD=admin
+#    networks:
+#      - refactor-v2
 
 networks:
   refactor-v2:

@@ -5,13 +5,12 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-
 
 REFACTOR_ROOT = Path(__file__).resolve().parents[4]
 if str(REFACTOR_ROOT) not in sys.path:
@@ -19,13 +18,14 @@ if str(REFACTOR_ROOT) not in sys.path:
 
 from apps.runtime_shared.health import build_dependency_status, build_health_payload
 
-
 PORT = int(os.getenv("REF_AGNO_SIDECAR_PORT", os.getenv("SERVICE_PORT", "3200")))
-AI_BASE_URL = str(os.getenv("LONGBRIDGE_AI_BASE_URL") or "https://lucen.cc/v1").strip().rstrip("/")
+AI_BASE_URL = str(os.getenv("LONGBRIDGE_AI_BASE_URL") or "https://integrate.api.nvidia.com/v1").strip().rstrip("/")
 AI_CHAT_URL = str(os.getenv("LONGBRIDGE_AI_URL") or f"{AI_BASE_URL}/chat/completions").strip()
 AI_API_KEY = str(os.getenv("LONGBRIDGE_AI_API_KEY") or "").strip()
 AI_MODEL = str(os.getenv("LONGBRIDGE_AI_MODEL_SCAN_FINAL") or os.getenv("LONGBRIDGE_AI_MODEL") or "gpt-5.5").strip()
-AI_REASONING_EFFORT = str(os.getenv("LONGBRIDGE_AI_SCAN_REASONING_EFFORT") or os.getenv("LONGBRIDGE_AI_REASONING_EFFORT") or "high").strip()
+AI_REASONING_EFFORT = str(
+    os.getenv("LONGBRIDGE_AI_SCAN_REASONING_EFFORT") or os.getenv("LONGBRIDGE_AI_REASONING_EFFORT") or "high"
+).strip()
 
 app = FastAPI(
     title="Refactor V2 Agno-compatible Sidecar",
@@ -34,7 +34,7 @@ app = FastAPI(
 )
 
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json(text: str) -> dict[str, Any] | None:
     raw = str(text or "").strip()
     if not raw:
         return None
@@ -56,7 +56,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_review_prompt(message: str, payload: Dict[str, Any]) -> str:
+def _build_review_prompt(message: str, payload: dict[str, Any]) -> str:
     return (
         "你是 review-only 的金融自选股复核智能体。"
         "只能输出观察、风险提示、人工复核建议和证据，不得输出任何下单、撤单、改单、持仓变更或交易执行动作。\n"
@@ -66,7 +66,7 @@ def _build_review_prompt(message: str, payload: Dict[str, Any]) -> str:
     )
 
 
-async def _parse_request_payload(request: Request) -> Dict[str, Any]:
+async def _parse_request_payload(request: Request) -> dict[str, Any]:
     content_type = str(request.headers.get("content-type") or "").lower()
     raw_body = await request.body()
     if not raw_body:
@@ -74,10 +74,7 @@ async def _parse_request_payload(request: Request) -> Dict[str, Any]:
 
     if "application/x-www-form-urlencoded" in content_type:
         parsed_form = urllib_parse.parse_qs(raw_body.decode("utf-8", errors="ignore"), keep_blank_values=True)
-        payload: Dict[str, Any] = {
-            key: values[-1] if values else ""
-            for key, values in parsed_form.items()
-        }
+        payload: dict[str, Any] = {key: values[-1] if values else "" for key, values in parsed_form.items()}
         embedded_payload = payload.get("payload")
         if embedded_payload:
             try:
@@ -106,7 +103,7 @@ async def _parse_request_payload(request: Request) -> Dict[str, Any]:
     return parsed_json
 
 
-def _call_ai(prompt: str) -> Dict[str, Any]:
+def _call_ai(prompt: str) -> dict[str, Any]:
     request_payload = {
         "model": AI_MODEL,
         "messages": [
@@ -148,7 +145,7 @@ def _call_ai(prompt: str) -> Dict[str, Any]:
     }
 
 
-def _fallback_result(payload: Dict[str, Any], error: str) -> Dict[str, Any]:
+def _fallback_result(payload: dict[str, Any], error: str) -> dict[str, Any]:
     targets = payload.get("targets") if isinstance(payload.get("targets"), list) else []
     return {
         "status": "degraded",
@@ -175,14 +172,18 @@ def _fallback_result(payload: Dict[str, Any], error: str) -> Dict[str, Any]:
     }
 
 
-def _normalize_result(result: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_result(result: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": str(result.get("status") or "completed"),
         "summary": str(result.get("summary") or "自选股复核完成。"),
         "signals": result.get("signals") if isinstance(result.get("signals"), list) else [],
         "riskFlags": result.get("riskFlags") if isinstance(result.get("riskFlags"), list) else [],
-        "reviewAdvice": result.get("reviewAdvice") if isinstance(result.get("reviewAdvice"), list) else ["请人工确认后再处理。"],
-        "evidence": result.get("evidence") if isinstance(result.get("evidence"), list) else [{"type": "sub2api", "model": AI_MODEL}],
+        "reviewAdvice": result.get("reviewAdvice")
+        if isinstance(result.get("reviewAdvice"), list)
+        else ["请人工确认后再处理。"],
+        "evidence": result.get("evidence")
+        if isinstance(result.get("evidence"), list)
+        else [{"type": "sub2api", "model": AI_MODEL}],
         "confidence": result.get("confidence", 0),
         "source": "agno-compatible-sidecar",
         "scene": payload.get("scene"),
@@ -192,7 +193,7 @@ def _normalize_result(result: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
 
 
 @app.get("/health")
-async def health() -> Dict[str, Any]:
+async def health() -> dict[str, Any]:
     ai_config = {
         "provider": "sub2api",
         "baseUrl": AI_BASE_URL,
@@ -246,7 +247,7 @@ async def sub2api_team_runs(request: Request) -> JSONResponse:
 @app.post("/api/v1/agent/watchlist-review")
 @app.post("/api/v1/watchlist-review")
 @app.post("/watchlist-review")
-async def watchlist_review(request: Request) -> Dict[str, Any]:
+async def watchlist_review(request: Request) -> dict[str, Any]:
     request_payload = await _parse_request_payload(request)
     prompt = _build_review_prompt("", request_payload)
     try:

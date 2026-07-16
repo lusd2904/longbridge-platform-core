@@ -169,7 +169,7 @@ describe('Settings structure', () => {
     expect(text).toContain('日志/数据管理')
     expect(text).toContain('系统日志')
     expect(text).toContain('数据管理')
-    expect(text).toContain('https://lucen.cc/v1')
+    expect(text).toContain('https://integrate.api.nvidia.com/v1')
     expect(text).toContain('gpt-5.5')
     expect(text).toContain('gpt-5.4')
   })

@@ -9,8 +9,36 @@
         </div>
       </div>
 
-      <ThemeSwitcher />
+      <!-- Return to Portal Button -->
+      <button
+        type="button"
+        class="notification"
+        title="返回导航大厅"
+        @click="router.push('/portal')"
+      >
+        <el-icon size="20"><Menu /></el-icon>
+      </button>
 
+      <!-- Subsystem Switcher -->
+      <el-dropdown class="subsystem-dropdown" trigger="click" @command="(path) => router.push(path)">
+        <button type="button" class="theme-switcher subsystem-switcher-btn" title="切换子系统">
+          <el-icon :size="16"><Grid /></el-icon>
+          <span class="theme-switcher__label">系统</span>
+          <el-icon><ArrowDown /></el-icon>
+        </button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-for="sys in subsystems" :key="sys.path" :command="sys.path">
+              <el-icon :color="sys.color"><component :is="sys.icon" /></el-icon>
+              {{ sys.name }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      
+      <!-- Theme Switcher -->
+      <ThemeSwitcher />
+      
       <button
         type="button"
         class="notification"
@@ -58,12 +86,12 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, Bell } from '@element-plus/icons-vue'
+import { ArrowDown, Bell, Menu, Grid, Cpu, Histogram, TrendCharts, Wallet, DataLine, List, Star, Setting } from '@element-plus/icons-vue'
+import ThemeSwitcher from './ThemeSwitcher.vue'
 import { getMarketStatus } from '../../api/market.js'
 import { getAccess, getCurrentUser, isAdmin, logout } from '../../utils/auth.js'
 import { useWorkbenchTabs } from '../../composables/useWorkbenchTabs.js'
 import { useAdaptiveLayout } from '../../composables/useAdaptiveLayout.js'
-import ThemeSwitcher from './ThemeSwitcher.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -76,6 +104,18 @@ const MARKET_LABELS = {
   CN: 'A股'
 }
 const MARKET_STATUS_ORDER = ['US', 'HK', 'CN']
+
+const subsystems = [
+  { name: 'AI 研判工作台', path: '/ai-analysis', icon: 'Cpu', color: '#60a5fa' },
+  { name: '实时市场行情', path: '/market', icon: 'Histogram', color: '#34d399' },
+  { name: '量化策略中心', path: '/strategy', icon: 'TrendCharts', color: '#a78bfa' },
+  { name: '核心交易台', path: '/trading', icon: 'Wallet', color: '#fbbf24' },
+  { name: '全局股票池', path: '/stock-pool', icon: 'DataLine', color: '#60a5fa' },
+  { name: '风控与资产', path: '/positions', icon: 'List', color: '#34d399' },
+  { name: '智能推荐系统', path: '/recommendations', icon: 'Star', color: '#a78bfa' },
+  { name: '平台系统设置', path: '/settings', icon: 'Setting', color: '#fbbf24' }
+]
+
 function createPendingMarketStatus() {
   return {
     status: 'closed',
@@ -221,13 +261,15 @@ const toggleTabsMode = () => {
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  margin: 8px 12px 0;
-  padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--border-soft);
-  background: var(--chrome-surface);
-  box-shadow: var(--chrome-shadow), var(--chrome-inset);
-  backdrop-filter: var(--chrome-backdrop);
+  margin: 0;
+  padding: 12px 20px;
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--panel-surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05);
 }
 
 .header-right,
